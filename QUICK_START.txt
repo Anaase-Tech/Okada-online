@@ -1,0 +1,49 @@
+
+╔═══════════════════════════════════════════════════════════════════╗
+║              OKADA ONLINE - QUICK START GUIDE                     ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+📁 YOUR FILES ARE IN GOOGLE DRIVE:
+/content/drive/MyDrive/OkadaOnline-Production/
+
+📂 FOLDER STRUCTURE:
+
+mobile-app/          → Your working Expo app
+backend/             → Firebase Functions (15% commission!)
+legal-docs/          → Partnership & Investor Agreements
+docs/                → Whitepaper and guides
+
+🎯 TO BUILD APK (Share with drivers):
+
+1. Open terminal/Colab
+2. cd /content/drive/MyDrive/OkadaOnline-Production/mobile-app
+3. eas build --profile preview --platform android
+4. Wait 15-20 minutes
+5. Download APK and share!
+
+🔥 TO DEPLOY BACKEND:
+
+1. Update backend/index.js with your Twilio credentials
+2. cd backend
+3. firebase deploy --only functions
+4. Your API will be live!
+
+💰 FUNDING:
+
+- Seed: ₵50,000 for 15-20% equity
+- Use whitepaper in docs/ folder
+- Show working app to investors
+- Highlight 15% commission advantage
+
+📞 PITCH TO DRIVERS:
+
+"Join Okada Online - Ghana's first ride app that pays YOU 85%!
+ Uber takes 30%, we take only 15%
+ You earn ₵1.80 MORE per ₵12 ride
+ Starting in Eastern Region - be a founding driver!"
+
+🎊 YOU'RE READY TO LAUNCH!
+
+Questions? Check the docs folder!
+
+FOR AFRICA! 🇬🇭🏍️💚

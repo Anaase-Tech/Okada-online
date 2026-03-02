@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "builds": [{ "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "build" } }],
+  "routes": [{ "src": "/(.*)", "dest": "/" }],
+  "env": {
+    "REACT_APP_API_URL": "https://us-central1-okada-online-ghana.cloudfunctions.net/api"
+  }
+}

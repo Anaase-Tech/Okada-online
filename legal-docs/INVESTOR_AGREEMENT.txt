@@ -1,0 +1,127 @@
+
+╔═══════════════════════════════════════════════════════════════════╗
+║           OKADA ONLINE INVESTMENT AGREEMENT                       ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+INVESTMENT AGREEMENT
+
+Date: [DATE]
+
+BETWEEN:
+
+OKADA ONLINE
+Represented by: [YOUR NAME], Founder
+("The Company")
+
+AND:
+
+[INVESTOR NAME]
+Address: [INVESTOR ADDRESS]
+("The Investor")
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 1: INVESTMENT TERMS
+
+1.1 Investment Amount: GHS [AMOUNT]
+
+1.2 Equity Offered: [XX]% of company shares
+
+1.3 Valuation: Company valued at GHS [VALUATION]
+
+1.4 Investment Type: [Equity / Convertible Note / SAFE]
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 2: USE OF FUNDS
+
+Funds will be used for:
+- Platform Development: [XX]%
+- Driver Recruitment: [XX]%
+- Marketing & User Acquisition: [XX]%
+- Operations (3 months): [XX]%
+- Legal & Licenses: [XX]%
+- Reserve Fund: [XX]%
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 3: MILESTONES AND TARGETS
+
+Phase 1 (Months 1-3): Eastern Region Launch
+- Target: 50 drivers, 500 users, 100 daily rides
+
+Phase 2 (Months 4-6): Regional Expansion
+- Target: 150 drivers, 2,000 users, 300 daily rides
+
+Phase 3 (Months 7-12): Accra Launch
+- Target: 500 drivers, 20,000 users, 1,500 daily rides
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 4: INVESTOR RIGHTS
+
+4.1 Board Seat: [Yes/No - if investment over GHS 100,000]
+
+4.2 Information Rights:
+    - Quarterly financial statements
+    - Annual audited accounts
+    - Monthly operational updates
+
+4.3 Pro-Rata Rights: Right to participate in future rounds
+
+4.4 Anti-Dilution Protection: [Full Ratchet / Weighted Average]
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 5: FOUNDER COMMITMENTS
+
+5.1 The Founder commits to:
+    - Full-time dedication to the business
+    - Not competing in ride-hailing for 2 years
+    - Maintaining 15% commission (competitive advantage)
+
+5.2 Vesting Schedule: Founder shares vest over 4 years
+    (1-year cliff, monthly thereafter)
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 6: EXIT PROVISIONS
+
+6.1 Preferred Return: Investor receives [1.5x-2x] return before
+    common shareholders in acquisition
+
+6.2 Tag-Along Rights: Investor can participate in founder sale
+
+6.3 Drag-Along Rights: If 75% agree to sell, all must sell
+
+═══════════════════════════════════════════════════════════════════
+
+ARTICLE 7: REPRESENTATIONS AND WARRANTIES
+
+The Company represents that:
+- It is duly organized under Ghana law
+- Financial statements are accurate
+- No material litigation pending
+- All intellectual property is owned/licensed
+
+═══════════════════════════════════════════════════════════════════
+
+SIGNATURES:
+
+For the Company:
+_______________________    Date: ___________
+[YOUR NAME], Founder
+
+
+Investor:
+_______________________    Date: ___________
+[INVESTOR NAME]
+
+
+Witnessed by:
+_______________________    Date: ___________
+
+═══════════════════════════════════════════════════════════════════
+
+NOTE: Consult with a lawyer specializing in startup investments
+before finalizing this agreement.

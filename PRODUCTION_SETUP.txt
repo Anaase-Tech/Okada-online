@@ -1,0 +1,78 @@
+
+╔═══════════════════════════════════════════════════════════════════╗
+║         OKADA ONLINE - PRODUCTION SETUP GUIDE                     ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+🎯 STEP 1: GET API KEYS (FREE!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A) Twilio (SMS) - You already have SID & Token! ✅
+   Just need to set them up in Firebase
+
+B) Paystack (Payment) - BETTER than Hubtel!
+   1. Go to: https://paystack.com/
+   2. Sign up (FREE for Ghana)
+   3. Go to Settings → API Keys
+   4. Copy your SECRET KEY
+   
+   Why Paystack?
+   - Used by 80%+ Ghana businesses
+   - Mobile Money (MTN, Vodafone, Airtel)
+   - Lower fees than Hubtel
+   - Better docs
+   - Instant activation!
+
+🔥 STEP 2: DEPLOY BACKEND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+cd backend
+npm install
+
+# Login to Firebase
+firebase login
+
+# Set environment variables
+firebase functions:config:set \
+  twilio.sid="YOUR_TWILIO_SID" \
+  twilio.token="YOUR_TWILIO_TOKEN" \
+  twilio.phone="+233XXXXXXXXX" \
+  paystack.secret="YOUR_PAYSTACK_SECRET_KEY"
+
+# Deploy!
+firebase deploy --only functions
+
+Your API will be live at:
+https://us-central1-okada-online-ghana.cloudfunctions.net/api
+
+📱 STEP 3: UPDATE MOBILE APP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Update .env file:
+EXPO_PUBLIC_API_URL=https://us-central1-okada-online-ghana.cloudfunctions.net/api
+
+Rebuild app:
+cd mobile-app
+npx expo start
+
+🏗️  STEP 4: BUILD APK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+eas build --profile preview --platform android
+
+Wait 15-20 minutes, download APK, share with drivers!
+
+🎊 YOU'RE LIVE!!!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ Real SMS verification
+✅ Real payment processing
+✅ Real-time GPS tracking
+✅ 15% commission (vs 30%!)
+✅ Ready for Eastern Region launch!
+
+💰 PAYSTACK PRICING:
+- Mobile Money: 1.95% + ₵0.10
+- Card: 1.95%
+- Much better than Hubtel!
+
+FOR AFRICA! 🇬🇭🏍️💚
