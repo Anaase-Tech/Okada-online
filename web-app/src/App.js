@@ -495,6 +495,8 @@ function DriverApp({ user, onLogout, dark, setDark }) {
   const [activeRide,setActiveRide]=useState(null);
   const [earnings,setEarnings]=useState({today:0,week:0,total:0,rides:0});
   const [toast,setToast]   = useState(null);
+  const [showFuelCode,setShowFuelCode] = useState(false);
+  const [fuelCode] = useState("FUEL-" + Math.random().toString(36).substr(2,4).toUpperCase() + "-" + Math.random().toString(36).substr(2,4).toUpperCase());
   const toast$ = (msg,type="success")=>setToast({msg,type});
 
   useEffect(()=>{
@@ -607,6 +609,49 @@ function DriverApp({ user, onLogout, dark, setDark }) {
                 </div>
               </div>
             )}
+            {/* ─── FUEL POOL ─────────────────────────────────── */}
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-yellow-500`}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:22}}>⛽</span>
+                  <span className={`font-black ${t.text}`}>Your Fuel Pool</span>
+                </div>
+                <span style={{fontSize:24,fontWeight:900,color:"#ca8a04"}}>GH₵{(earnings.total*0.03).toFixed(2)}</span>
+              </div>
+              <p className={`text-xs ${t.sub} mb-3`}>3% of every ride is auto-collected here. Use it only at registered fuel stations.</p>
+              <div className={`rounded-xl p-3 mb-3 ${dark?"bg-gray-700":"bg-yellow-50"}`}>
+                <p className={`text-xs font-bold mb-1`} style={{color:"#ca8a04"}}>⛽ How to use your fuel pool:</p>
+                <p className={`text-xs ${t.text}`}>1. Ride to any registered Okada Online fuel station</p>
+                <p className={`text-xs ${t.text}`}>2. Open app → tap <strong>Show Fuel Code</strong> below</p>
+                <p className={`text-xs ${t.text}`}>3. Show code to station attendant</p>
+                <p className={`text-xs ${t.text}`}>4. Pool balance deducted automatically — zero cash needed</p>
+              </div>
+              <button
+                onClick={()=>{ setShowFuelCode(!showFuelCode); }}
+                style={{width:"100%",padding:"12px",background:"#ca8a04",color:"#fff",borderRadius:12,fontWeight:900,fontSize:14}}>
+                {showFuelCode ? "Hide Code" : "⛽ Show Fuel Code"}
+              </button>
+              {showFuelCode && (
+                <div style={{marginTop:12,textAlign:"center",padding:"16px",background:dark?"#374151":"#fefce8",borderRadius:12,border:"2px dashed #ca8a04"}}>
+                  <p className={`text-xs ${t.sub} mb-2`}>Your fuel station code</p>
+                  <p style={{fontFamily:"monospace",fontSize:28,fontWeight:900,color:"#ca8a04",letterSpacing:"0.15em"}}>{fuelCode}</p>
+                  <p className={`text-xs ${t.sub} mt-2`}>Valid for 10 minutes · Balance: GH₵{(earnings.total*0.03).toFixed(2)}</p>
+                </div>
+              )}
+            </div>
+
+            {/* ─── MAINTENANCE POOL ──────────────────────────── */}
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-orange-500`}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:22}}>🔧</span>
+                  <span className={`font-black ${t.text}`}>Maintenance Pool</span>
+                </div>
+                <span style={{fontSize:24,fontWeight:900,color:"#ea580c"}}>GH₵{(earnings.total*0.02).toFixed(2)}</span>
+              </div>
+              <p className={`text-xs ${t.sub}`}>2% auto-collected. Your owner approves mechanic payments from this. No more "vehicle broken, no money" problems.</p>
+            </div>
+
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
               <h3 className={`font-bold text-sm mb-2 ${t.text}`}>💡 Your Earnings Breakdown</h3>
               <div style={{display:"flex",flexDirection:"column",gap:6,fontSize:12}}>
