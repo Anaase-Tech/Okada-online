@@ -6,6 +6,7 @@ import { MapPin, Navigation, Phone, Star, Bike, User, X, Moon, Sun,
 
 // ── API ────────────────────────────────────────────────
 const API = "https://okada-online-backend.vercel.app/api";
+const PAYSTACK_PUBLIC_KEY = "pk_live_7ed3389d3a6ed4146b73485bb0cba4ec55e82c5b";
 class Api {
   constructor() { this.token = null; }
   async req(method, path, body) {
