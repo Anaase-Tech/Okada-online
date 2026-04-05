@@ -1,8 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 
-// TODO: Replace with your actual Firebase config
-// Get from: Firebase Console → Project Settings → Your Apps → Web app
 const firebaseConfig = {
   apiKey:            process.env.REACT_APP_FIREBASE_API_KEY            || "YOUR_API_KEY",
   authDomain:        process.env.REACT_APP_FIREBASE_AUTH_DOMAIN        || "okada-online-ghana.firebaseapp.com",
