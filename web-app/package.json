@@ -6,7 +6,10 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-scripts": "5.0.1",
-    "lucide-react": "^latest"
+    "lucide-react": "0.263.1",
+    "firebase": "^10.7.0",
+    "@react-google-maps/api": "^2.19.3",
+    "@googlemaps/js-api-loader": "^1.16.6"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -25,5 +28,8 @@
       "last 1 safari version"
     ]
   },
-  "homepage": "."
+  "homepage": ".",
+  "engines": {
+    "node": "18.x"
+  }
 }
