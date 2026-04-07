@@ -5,14 +5,13 @@
 import { useState, useEffect } from "react";
 import { auth } from "./firebase";
 import { RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
-import { getFirestore, collection, query, where, onSnapshot, orderBy, limit, doc } from "firebase/firestore";
+import { collection, query, where, onSnapshot, orderBy, limit, doc } from "firebase/firestore";
+import { db } from "./firebase";
 import { MapPin, Navigation, Star, X, Moon, Sun,
          AlertCircle, CheckCircle, Loader, LogOut,
          Building2, Fuel, Wrench, Eye, EyeOff, Copy, Download,
          Shield, Clock, ArrowDownCircle, TrendingUp,
          PiggyBank, Landmark, HeartPulse, ChevronRight } from "lucide-react";
-
-const db = getFirestore();
 
 // ── API ────────────────────────────────────────────────
 const API = process.env.REACT_APP_API_URL || "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
