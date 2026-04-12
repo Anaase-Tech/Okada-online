@@ -3,15 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "firebase": "^10.14.1",
+    "lucide-react": "^0.469.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-scripts": "5.0.1",
-    "lucide-react": "^0.469.0",
-    "firebase": "^10.14.1"
+    "react-scripts": "4.0.3",
+    "ajv": "8.12.0"
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
+    "build": "cross-env NODE_OPTIONS=--openssl-legacy-provider react-scripts build",
     "test": "react-scripts test"
   },
   "browserslist": {
@@ -28,6 +29,12 @@
   },
   "homepage": ".",
   "engines": {
-    "node": "18.x"
+    "node": "20.x"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  },
+  "resolutions": {
+    "ajv": "8.12.0"
   }
 }
