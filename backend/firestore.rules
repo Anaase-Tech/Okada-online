@@ -1,0 +1,206 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ──────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isVerifiedDriver() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data.isVerified == true;
+    }
+
+    function notTampered(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ── Users (passengers) ────────────────────────────────────────
+    match /users/{userId} {
+      allow read:  if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isSignedIn() && isOwner(userId) &&
+        // Prevent users from tampering with earnings/wallet directly
+        notTampered(['wallet.available','wallet.pending','earnings','kycStatus','role']);
+      allow delete: if isAdmin();
+    }
+
+    // ── Drivers ───────────────────────────────────────────────────
+    match /drivers/{driverId} {
+      allow read:  if isSignedIn();
+      allow create: if isSignedIn() && isOwner(driverId);
+      allow update: if isSignedIn() && (isOwner(driverId) || isAdmin()) &&
+        notTampered(['isVerified','kycStatus','licenseStatus','vehicleStatus','earnings.total','wallet.available']);
+      allow delete: if isAdmin();
+    }
+
+    // ── Owners ────────────────────────────────────────────────────
+    match /owners/{ownerId} {
+      allow read:  if isSignedIn() && (isOwner(ownerId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(ownerId);
+      allow update: if isSignedIn() && (isOwner(ownerId) || isAdmin()) &&
+        notTampered(['kycStatus','earnings.total','wallet.available','ownerCode']);
+      allow delete: if isAdmin();
+    }
+
+    // ── Admins ────────────────────────────────────────────────────
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── Rides ─────────────────────────────────────────────────────
+    match /rides/{rideId} {
+      allow read:  if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() &&
+        // Only backend (via Admin SDK) can mark completed / set earnings
+        notTampered(['fare','earningsReleased','netDriverEarnings','dtoDeduction']);
+      allow delete: if false; // Never delete ride records
+    }
+
+    // ── Notifications ─────────────────────────────────────────────
+    match /notifications/{notifId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.driverId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if false; // Backend only
+    }
+
+    // ── KYC / License / Vehicle submissions ──────────────────────
+    match /kyc_submissions/{subId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    match /license_submissions/{subId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    match /vehicle_submissions/{subId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ── Admin queue ───────────────────────────────────────────────
+    match /admin_queue/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── Drive to Own ──────────────────────────────────────────────
+    match /dto_applications/{appId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    match /dto_repayments/{repId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.driverId == request.auth.uid || isAdmin());
+      allow write: if false; // Backend only
+    }
+    match /fuel_codes/{code} {
+      allow read:  if isSignedIn();
+      allow write: if false; // Backend only
+    }
+    match /fuel_transactions/{txId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.driverId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── Fintech — Savings ─────────────────────────────────────────
+    match /savings_transactions/{txId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false; // Backend only
+    }
+
+    // ── Fintech — Loans ───────────────────────────────────────────
+    match /loans/{loanId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false; // Backend only
+    }
+    match /loan_repayments/{repId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── Fintech — Insurance ───────────────────────────────────────
+    match /insurance_policies/{polId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+    match /insurance_claims/{claimId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    match /insurance_payments/{payId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── Fintech — Pay Later ───────────────────────────────────────
+    match /pay_later/{txId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── Payments ──────────────────────────────────────────────────
+    match /payments/{payId} {
+      allow read:  if isSignedIn() && isAdmin();
+      allow write: if false;
+    }
+    match /withdrawal_requests/{reqId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── Referrals ─────────────────────────────────────────────────
+    match /referrals/{refId} {
+      allow read:  if isSignedIn() &&
+        (resource.data.referrerId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ── OTPs — never readable by client ──────────────────────────
+    match /otps/{phone} {
+      allow read, write: if false; // Backend Admin SDK only
+    }
+
+    // ── Catch-all — deny everything else ─────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
