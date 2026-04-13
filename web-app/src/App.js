@@ -411,8 +411,6 @@ function KycVerify({role, onVerified, dark}) {
         )}
       </div>
     </div>
-    </div>
-    </div>
   );
 }
 // ── WITHDRAW SHEET ─────────────────────────────────────
