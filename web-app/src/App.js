@@ -500,8 +500,6 @@ function WithdrawSheet({available,pending,userId,onClose,dark}) {
           </div>
         )}
       </div>
-    </div>
-    </div>
   );
 }
 
