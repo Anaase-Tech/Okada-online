@@ -14,7 +14,7 @@ import { MapPin, Navigation, Star, X, Moon, Sun,
          PiggyBank, Landmark, HeartPulse, ChevronRight } from "lucide-react";
 
 // ── API ────────────────────────────────────────────────
-const API = "https://okada-online-backend.vercel.app/api";
+const API = "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
 
 class Api {
   constructor() { this.token = null; }
@@ -2668,7 +2668,7 @@ export default function App() {
   const [apiStatus,setApiStatus] = useState("checking");
 
   useEffect(()=>{
-    fetch("https://okada-online-backend.vercel.app/api/health")
+    fetch("https://us-central1-okada-online-ghana.cloudfunctions.net/api/health")
       .then(r=>r.json()).then(d=>setApiStatus(d.success?"ok":"error")).catch(()=>setApiStatus("error"));
   },[]);
 
