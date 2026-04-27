@@ -14,7 +14,7 @@ import { MapPin, Navigation, Star, X, Moon, Sun,
          PiggyBank, Landmark, HeartPulse, ChevronRight } from "lucide-react";
 
 // ── API ────────────────────────────────────────────────
-const API = "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
+const API = process.env.REACT_APP_API_URL || "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
 
 class Api {
   constructor() { this.token = null; }
