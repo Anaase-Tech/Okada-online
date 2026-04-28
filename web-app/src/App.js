@@ -14,7 +14,7 @@ import { MapPin, Navigation, Star, X, Moon, Sun,
          PiggyBank, Landmark, HeartPulse, ChevronRight } from "lucide-react";
 
 // ── API ────────────────────────────────────────────────
-const API = process.env.REACT_APP_API_URL || "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
+const API = "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
 
 class Api {
   constructor() { this.token = null; }
@@ -2681,4 +2681,4 @@ export default function App() {
   if(role==="driver")    return <DriverApp    {...props}/>;
   if(role==="owner")     return <OwnerApp     {...props}/>;
   if(role==="admin")     return <AdminApp     {...props}/>;
-    }
+}
