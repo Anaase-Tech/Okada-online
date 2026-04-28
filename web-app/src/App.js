@@ -2669,7 +2669,7 @@ export default function App() {
 
   useEffect(()=>{
     fetch("https://us-central1-okada-online-ghana.cloudfunctions.net/api/health")
-      .then(r=>r.json()).then(d=>setApiStatus(d.success?"ok":"error")).catch(()=>setApiStatus("error"));
+      .then(r=>r.json()).then(d=>setApiStatus((d.success||d.status==="healthy")?"ok":"error")).catch(()=>setApiStatus("error"));
   },[]);
 
   const login  = (u,token,r) => { api.token=token; setUser(u); setRole(r); };
