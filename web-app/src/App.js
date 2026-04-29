@@ -1,26 +1,44 @@
-// Okada Online — Production PWA v3.1
-// Firebase Phone Auth · Real-time Firestore · Smart Pricing · Anti-fraud
-// Fintech: Savings (Zeepay) · Loans (Fido) · Insurance (Hollard) · Pay Later
+// Okada Online  Production PWA v3.1
+// Firebase Phone Auth  Real-time Firestore  Smart Pricing  Anti-fraud
+// Fintech: Savings (Zeepay)  Loans (Fido)  Insurance (Hollard)  Pay Later
 // Build: 2026-04-06
 import { useState, useEffect } from "react";
+
+// --- Theme ---
+const T = (dark) => ({
+  bg:   dark ? "bg-gray-950" : "bg-gray-50",
+  card: dark ? "bg-gray-800" : "bg-white",
+  text: dark ? "text-white"  : "text-gray-900",
+  sub:  dark ? "text-gray-400": "text-gray-500",
+  inp:  dark
+    ? "bg-gray-700 text-white border-gray-600 placeholder-gray-500"
+    : "bg-white text-gray-900 border-gray-300 placeholder-gray-400",
+  bdr:  dark ? "border-gray-700" : "border-gray-200",
+  row:  dark ? "hover:bg-gray-700" : "hover:bg-gray-50",
+});
+
+
+
+
+
 import { auth } from "./firebase";
 import { RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
-import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { collection, query, where, onSnapshot, orderBy, limit, doc } from "firebase/firestore";
 import { db } from "./firebase";
 import { MapPin, Navigation, Star, X, Moon, Sun,
          AlertCircle, CheckCircle, Loader, LogOut,
          Building2, Fuel, Wrench, Eye, EyeOff, Copy, Download,
-         Shield, Clock, ArrowDownCircle,
+         Shield, Clock, ArrowDownCircle, TrendingUp,
          PiggyBank, Landmark, HeartPulse, ChevronRight } from "lucide-react";
 
-// ── API ────────────────────────────────────────────────
-const API = "https://us-central1-okada-online-ghana.cloudfunctions.net/api";
+// --- API ---
+
 
 class Api {
   constructor() { this.token = null; }
   async req(method, path, body) {
     const controller = new AbortController();
-    const timeout = setTimeout(()=>controller.abort(), 15000);
+    const timeout = setTimeout(()=>controller.abort(), 15000); // 15s timeout
     try {
       const r = await fetch(API + path, {
         method,
@@ -38,7 +56,7 @@ class Api {
       return d;
     } catch(e) {
       clearTimeout(timeout);
-      if(e.name==="AbortError") throw new Error("Request timed out — check connection");
+      if(e.name==="AbortError") throw new Error("Request timed out  check connection");
       throw e;
     }
   }
@@ -66,50 +84,50 @@ class Api {
   fileInsuranceClaim(userId,type,desc)          { return this.req("POST","/insurance/claim",{userId,type,desc}); }
   getStats()                                    { return this.req("GET","/admin/stats"); }
   getHistory(uid)                               { return this.req("GET",`/rides/history/${uid}`); }
+
+  //  MaaS Scheduled Trips
   createSchedule(data)                   { return this.req('POST','/maas/schedule/create',data); }
   adjustSchedule(id,data)                { return this.req('PUT',`/maas/schedule/${id}/adjust`,data); }
   pauseSchedule(id)                      { return this.req('PUT',`/maas/schedule/${id}/pause`,{}); }
   getTodaySchedules(uid)                 { return this.req('GET',`/maas/schedule/today/${uid}`); }
+  //  Subscriptions
   createSubscription(data)               { return this.req('POST','/maas/subscription/create',data); }
   getSubscriptionStatus(uid)             { return this.req('GET',`/maas/subscription/status/${uid}`); }
+  //  Rental
   getRentalPricing()                     { return this.req('GET','/maas/rental/pricing'); }
   bookRental(data)                       { return this.req('POST','/maas/rental/book',data); }
   getActiveRentals(uid)                  { return this.req('GET',`/maas/rental/active/${uid}`); }
+  //  Trip Sharing
   createSharedTrip(data)                 { return this.req('POST','/maas/share/create',data); }
   joinSharedTrip(shareId,userId)         { return this.req('POST',`/maas/share/${shareId}/join`,{userId}); }
+  //  Events
   bookEventRide(data)                    { return this.req('POST','/maas/events/book',data); }
+  //  Delivery
   requestDelivery(data)                  { return this.req('POST','/delivery/request',data); }
   trackDelivery(code)                    { return this.req('GET',`/delivery/track/${code}`); }
   getDeliveryHistory(uid)                { return this.req('GET',`/delivery/history/${uid}`); }
+  //  MaaS Admin
   getMaasStats()                         { return this.req('GET','/admin/maas/stats'); }
 }
 const api = new Api();
 
-// ── Constants ──────────────────────────────────────────
+// --- Constants ---
+
+  
 const VEHICLES = [
-  {id:"okada",    label:"Okada",     icon:"🏍️", rate:2.5},
-  {id:"car",      label:"Car",       icon:"🚗", rate:4.0},
-  {id:"tricycle", label:"Tricycle",  icon:"🛺", rate:3.0},
-  {id:"bicycle",  label:"E-Bicycle", icon:"🚴", rate:1.5},
+  {id:"okada",    label:"Okada",     icon:"🏍️", rate:2.5, color:"green"  },
+  {id:"car",      label:"Car",       icon:"🚗", rate:4.0, color:"blue"   },
+  {id:"tricycle", label:"Tricycle",  icon:"🛺", rate:3.0, color:"purple" },
+  {id:"bicycle",  label:"E-Bicycle", icon:"🚴", rate:1.5, color:"orange" },
 ];
 const LOCS = ["Akosombo","Atimpoku","Senchi","Frankadua","Adjena","Akrade",
               "Asesewa","Kpong","Odumase-Krobo","Agormanya","Somanya","Nkurakan",
               "Koforidua","Nsawam","Aburi"];
 const COUNTRIES = ["Nigeria","UK","USA","Germany","France","South Africa","Kenya","China","India","Canada","Australia","UAE","Italy","Japan","Other"];
-const SPLITS = { platform:0.15, owner:0.50, driver:0.25, fuel:0.05, maintenance:0.05 };
+const SPLITS = { platform:0.15, owner:0.50, driver:0.25, fuel:0.05, maintenance:0.05 }; // v3.0
 
-// ── Theme ──────────────────────────────────────────────
-const T = (dark) => ({
-  bg:   dark?"bg-gray-950":"bg-gray-50",
-  card: dark?"bg-gray-800":"bg-white",
-  text: dark?"text-white":"text-gray-900",
-  sub:  dark?"text-gray-400":"text-gray-500",
-  inp:  dark?"bg-gray-700 text-white border-gray-600 placeholder-gray-500"
-            :"bg-white text-gray-900 border-gray-300 placeholder-gray-400",
-  bdr:  dark?"border-gray-700":"border-gray-200",
-});
+// --- Theme ---
 
-// ── Shared UI ──────────────────────────────────────────
 const Toast = ({msg,type,close}) => {
   useEffect(()=>{const t=setTimeout(close,3500);return()=>clearTimeout(t);},[close]);
   return (
@@ -142,8 +160,7 @@ const StatCard = ({icon,label,value,sub,color,dark}) => {
     </div>
   );
 };
-
-// ── KYC VERIFICATION ──────────────────────────────────
+//  KYC VERIFICATION  Ghana Card + International Passport 
 function KycVerify({role, onVerified, dark}) {
   const t = T(dark);
   const [docType,setDocType]   = useState("ghana");
@@ -173,7 +190,7 @@ function KycVerify({role, onVerified, dark}) {
     try{
       if(isIntl) await api.verifyPassport(passNum,country,docPhoto,selfie);
       else await api.verifyGhanaCard(cardNum,docPhoto,selfie);
-    }catch(err){ console.warn("KYC error:",err); }
+    }catch(err){ console.warn("Error:",err); }
     setTimeout(()=>{
       setStep("done");
       setTimeout(()=>onVerified({type:docType,docNumber:isIntl?passNum:cardNum,country:isIntl?country:"Ghana",verified:true}),1500);
@@ -188,12 +205,12 @@ function KycVerify({role, onVerified, dark}) {
     <div className={`min-h-screen ${t.bg} flex flex-col`}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div style={{background:`linear-gradient(135deg,#1d4ed8,${isIntl?"#7c3aed":"#2563eb"})`,color:"#fff",padding:"20px 20px 28px",textAlign:"center"}}>
-        <div style={{fontSize:40,marginBottom:8}}>{isIntl?"🛂":"🪪"}</div>
+        <div style={{fontSize:40,marginBottom:8}}>{isIntl?"":""}</div>
         <h1 style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:22}}>Identity Verification</h1>
         <p style={{color:"#bfdbfe",fontSize:12,marginTop:4}}>
-          {isIntl?"International Passport · 190+ Countries":"Ghana Card · Powered by NIA Ghana"}
+          {isIntl?"International Passport  190+ Countries":"Ghana Card  Powered by NIA Ghana"}
         </p>
-        <p style={{color:"#c7d2fe",fontSize:11,marginTop:2}}>Required for all {role}s · Enables Pay Later & Fintech</p>
+        <p style={{color:"#c7d2fe",fontSize:11,marginTop:2}}>Required for all {role}s  Enables Pay Later & Fintech</p>
         <div style={{display:"flex",justifyContent:"center",gap:8,marginTop:14}}>
           {steps.map((s,i)=>(
             <div key={s} style={{width:8,height:8,borderRadius:"50%",background:steps.indexOf(step)>=i?"#fff":"rgba(255,255,255,0.3)"}}/>
@@ -202,6 +219,8 @@ function KycVerify({role, onVerified, dark}) {
       </div>
 
       <div style={{flex:1,padding:"20px 16px",display:"flex",flexDirection:"column",gap:14}}>
+
+        {/* STEP: choose doc type */}
         {step==="type"&&(
           <>
             <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`}>
@@ -209,7 +228,7 @@ function KycVerify({role, onVerified, dark}) {
               <div style={{display:"flex",flexDirection:"column",gap:10}}>
                 <button onClick={()=>{setDocType("ghana");setStep("details");}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px",borderRadius:16,border:"2px solid #2563eb",background:"#eff6ff",textAlign:"left"}}>
-                  <span style={{fontSize:32}}>🇬🇭</span>
+                  <span style={{fontSize:32}}></span>
                   <div style={{flex:1}}>
                     <p style={{fontWeight:900,color:"#2563eb",fontSize:14}}>Ghana National ID Card</p>
                     <p style={{fontSize:11,color:"#6b7280"}}>For Ghanaian citizens and residents</p>
@@ -218,24 +237,25 @@ function KycVerify({role, onVerified, dark}) {
                 </button>
                 <button onClick={()=>{setDocType("passport");setStep("details");}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px",borderRadius:16,border:"2px solid #7c3aed",background:"#f5f3ff",textAlign:"left"}}>
-                  <span style={{fontSize:32}}>🛂</span>
+                  <span style={{fontSize:32}}></span>
                   <div style={{flex:1}}>
                     <p style={{fontWeight:900,color:"#7c3aed",fontSize:14}}>International Passport</p>
-                    <p style={{fontSize:11,color:"#6b7280"}}>For visitors & foreign nationals · 190+ countries</p>
+                    <p style={{fontSize:11,color:"#6b7280"}}>For visitors & foreign nationals  190+ countries</p>
                   </div>
                   <ChevronRight style={{width:16,height:16,color:"#7c3aed"}}/>
                 </button>
               </div>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-bold text-sm mb-2 ${t.text}`}>🔒 Why we verify identity</p>
-              {["Safety for all passengers & drivers","Required for Pay Later & fintech services","NIA Ghana Card — instant data, no typing errors","Passport accepted from 190+ countries","Ghana Data Protection Act 2012 compliant","International visitors — welcome to Ghana! 🇬🇭"].map(r=>(
-                <p key={r} className={`text-xs ${t.sub}`} style={{marginBottom:3}}>✓ {r}</p>
+              <p className={`font-bold text-sm mb-2 ${t.text}`}> Why we verify identity</p>
+              {["Safety for all passengers & drivers","Required for Pay Later & fintech services","NIA Ghana Card  instant data, no typing errors","Passport accepted from 190+ countries","Ghana Data Protection Act 2012 compliant","International visitors  welcome to Ghana! "].map(r=>(
+                <p key={r} className={`text-xs ${t.sub}`} style={{marginBottom:3}}> {r}</p>
               ))}
             </div>
           </>
         )}
 
+        {/* STEP: document details */}
         {step==="details"&&(
           <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
@@ -269,18 +289,19 @@ function KycVerify({role, onVerified, dark}) {
                 style={{display:"block",width:"100%",letterSpacing:"0.06em",marginBottom:10}}/>
             )}
             <div style={{display:"flex",gap:8,marginTop:8}}>
-              <button onClick={()=>setStep("type")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}>← Back</button>
+              <button onClick={()=>setStep("type")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}> Back</button>
               <button onClick={()=>{
                 if(!isIntl&&cardNum.length<8){toast$("Enter Ghana Card number","error");return;}
                 if(isIntl&&passNum.length<6){toast$("Enter passport number","error");return;}
                 setStep("photo");
               }} style={{flex:2,padding:"12px",background:accentColor,color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>
-                Next — Upload Photo →
+                Next  Upload Photo 
               </button>
             </div>
           </div>
         )}
 
+        {/* STEP: document photo */}
         {step==="photo"&&(
           <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
@@ -289,7 +310,7 @@ function KycVerify({role, onVerified, dark}) {
               </div>
               <div>
                 <p className={`font-black ${t.text}`}>{isIntl?"Passport Photo Page":"Ghana Card Photo"}</p>
-                <p className={`text-xs ${t.sub}`}>{isIntl?"Data page — all text visible":"Front side — clear & well-lit"}</p>
+                <p className={`text-xs ${t.sub}`}>{isIntl?"Data page  all text visible":"Front side  clear & well-lit"}</p>
               </div>
             </div>
             {docPhotoP?(
@@ -301,19 +322,20 @@ function KycVerify({role, onVerified, dark}) {
               </div>
             ):(
               <label style={{display:"block",border:`2px dashed ${accentColor}`,borderRadius:16,padding:"32px 16px",textAlign:"center",cursor:"pointer",background:accentBg,marginBottom:12}}>
-                <div style={{fontSize:36,marginBottom:8}}>📷</div>
+                <div style={{fontSize:36,marginBottom:8}}></div>
                 <p className={`font-bold text-sm ${t.text}`}>Tap to take photo or upload</p>
-                <p className={`text-xs ${t.sub} mt-1`}>JPG or PNG · Max 5MB</p>
+                <p className={`text-xs ${t.sub} mt-1`}>JPG or PNG  Max 5MB</p>
                 <input type="file" accept="image/*" capture="environment" onChange={handleDocPhoto} style={{display:"none"}}/>
               </label>
             )}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>setStep("details")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}>← Back</button>
-              {docPhotoP&&<button onClick={()=>setStep("selfie")} style={{flex:2,padding:"12px",background:accentColor,color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>Next — Selfie →</button>}
+              <button onClick={()=>setStep("details")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}> Back</button>
+              {docPhotoP&&<button onClick={()=>setStep("selfie")} style={{flex:2,padding:"12px",background:accentColor,color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>Next  Selfie </button>}
             </div>
           </div>
         )}
 
+        {/* STEP: selfie */}
         {step==="selfie"&&(
           <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
@@ -334,27 +356,28 @@ function KycVerify({role, onVerified, dark}) {
               </div>
             ):(
               <label style={{display:"block",border:"2px dashed #86efac",borderRadius:16,padding:"32px 16px",textAlign:"center",cursor:"pointer",background:dark?"#14532d":"#f0fdf4",marginBottom:12}}>
-                <div style={{fontSize:36,marginBottom:8}}>🤳</div>
+                <div style={{fontSize:36,marginBottom:8}}></div>
                 <p className={`font-bold text-sm ${t.text}`}>Tap to take selfie</p>
-                <p className={`text-xs ${t.sub} mt-1`}>Front camera · Look straight at screen</p>
+                <p className={`text-xs ${t.sub} mt-1`}>Front camera  Look straight at screen</p>
                 <input type="file" accept="image/*" capture="user" onChange={handleSelfie} style={{display:"none"}}/>
               </label>
             )}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>setStep("photo")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}>← Back</button>
-              {selfieP&&<button onClick={()=>setStep("review")} style={{flex:2,padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>Review →</button>}
+              <button onClick={()=>setStep("photo")} style={{flex:1,padding:"12px",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,borderRadius:14,fontWeight:700,fontSize:13}} className={t.text}> Back</button>
+              {selfieP&&<button onClick={()=>setStep("review")} style={{flex:2,padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>Review </button>}
             </div>
           </div>
         )}
 
+        {/* STEP: review */}
         {step==="review"&&(
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`}>
-              <p className={`font-black mb-3 ${t.text}`}>📋 Review Your Submission</p>
+              <p className={`font-black mb-3 ${t.text}`}> Review Your Submission</p>
               <div style={{padding:"10px 12px",borderRadius:12,background:dark?"#374151":"#f9fafb",marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                   <span className={`text-xs ${t.sub}`}>Document Type</span>
-                  <span style={{fontWeight:700,fontSize:12}} className={t.text}>{isIntl?"International Passport 🛂":"Ghana Card 🪪"}</span>
+                  <span style={{fontWeight:700,fontSize:12}} className={t.text}>{isIntl?"International Passport ":"Ghana Card "}</span>
                 </div>
                 {isIntl&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                   <span className={`text-xs ${t.sub}`}>Country</span>
@@ -371,11 +394,11 @@ function KycVerify({role, onVerified, dark}) {
               </div>
             </div>
             <div style={{background:dark?"#1e3a5f":"#eff6ff",borderRadius:14,padding:"12px 14px",border:"1px solid #bfdbfe"}}>
-              <p style={{color:"#2563eb",fontWeight:700,fontSize:12,marginBottom:4}}>🔒 Privacy Notice</p>
+              <p style={{color:"#2563eb",fontWeight:700,fontSize:12,marginBottom:4}}> Privacy Notice</p>
               <p style={{fontSize:11,color:dark?"#93c5fd":"#1e40af"}}>Your ID data is encrypted and used solely for identity verification. Never sold. Protected under Ghana Data Protection Act 2012 and GDPR for international users.</p>
             </div>
             <button onClick={submit} style={{width:"100%",padding:"14px",background:"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-              <Shield style={{width:18,height:18}}/> Submit for Verification ✅
+              <Shield style={{width:18,height:18}}/> Submit for Verification 
             </button>
           </div>
         )}
@@ -383,25 +406,25 @@ function KycVerify({role, onVerified, dark}) {
         {step==="processing"&&(
           <div style={{textAlign:"center",padding:"48px 0"}}>
             <div style={{width:64,height:64,border:`4px solid ${accentColor}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 20px"}}/>
-            <p className={`font-black text-lg ${t.text}`}>Verifying Identity…</p>
+            <p className={`font-black text-lg ${t.text}`}>Verifying Identity</p>
             <p className={`text-xs mt-2 ${t.sub}`}>{isIntl?"Checking international document database":"Checking with NIA Ghana"}</p>
           </div>
         )}
 
         {step==="done"&&(
           <div style={{textAlign:"center",padding:"48px 0"}}>
-            <div style={{fontSize:64,marginBottom:16}}>✅</div>
+            <div style={{fontSize:64,marginBottom:16}}></div>
             <p className={`font-black text-xl ${t.text}`}>Verification Submitted!</p>
-            <p className={`text-sm mt-2 ${t.sub}`}>Review within 24 hours — SMS confirmation sent.</p>
-            {isIntl&&<p className={`text-xs mt-2 ${t.sub}`}>Welcome to Ghana 🇬🇭 Enjoy your visit!</p>}
+            <p className={`text-sm mt-2 ${t.sub}`}>Review within 24 hours  SMS confirmation sent.</p>
+            {isIntl&&<p className={`text-xs mt-2 ${t.sub}`}>Welcome to Ghana  Enjoy your visit!</p>}
           </div>
         )}
       </div>
     </div>
+    </div>
   );
 }
-
-// ── WITHDRAW SHEET ─────────────────────────────────────
+//  WITHDRAW SHEET 
 function WithdrawSheet({available,pending,userId,onClose,dark}) {
   const t=T(dark);
   const [amount,setAmount]=useState("");
@@ -415,7 +438,7 @@ function WithdrawSheet({available,pending,userId,onClose,dark}) {
     if(parseFloat(amount)>available){toast$("Exceeds available balance","error");return;}
     if(momoPhone.length<10){toast$("Enter valid MoMo number","error");return;}
     setStep("processing");
-    try{await api.requestWithdrawal(userId,parseFloat(amount),momoPhone);}catch(err){console.warn("Withdraw error:",err);}
+    try{await api.requestWithdrawal(userId,parseFloat(amount),momoPhone);}catch(err){ console.warn("Error:",err); }
     setTimeout(()=>setStep("done"),2500);
   };
   return (
@@ -423,69 +446,67 @@ function WithdrawSheet({available,pending,userId,onClose,dark}) {
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div className={`${t.card} rounded-t-3xl p-6 w-full shadow-2xl`} style={{maxHeight:"90vh",overflowY:"auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <h3 className={`text-lg font-black ${t.text}`}>💸 Withdraw Funds</h3>
+          <h3 className={`text-lg font-black ${t.text}`}> Withdraw Funds</h3>
           <button onClick={onClose}><X style={{width:20,height:20,color:"#9ca3af"}}/></button>
         </div>
-        {step==="form"&&(
-          <>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-              <div style={{background:"#f0fdf4",borderRadius:14,padding:"12px",textAlign:"center"}}>
-                <p style={{fontSize:11,color:"#16a34a",fontWeight:700}}>AVAILABLE</p>
-                <p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>GH₵{available.toFixed(2)}</p>
-              </div>
-              <div style={{background:dark?"#374151":"#fefce8",borderRadius:14,padding:"12px",textAlign:"center"}}>
-                <p style={{fontSize:11,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
-                <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH₵{pending.toFixed(2)}</p>
-              </div>
+        {step==="form"&&(<>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            <div style={{background:"#f0fdf4",borderRadius:14,padding:"12px",textAlign:"center"}}>
+              <p style={{fontSize:11,color:"#16a34a",fontWeight:700}}>AVAILABLE</p>
+              <p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>GH{available.toFixed(2)}</p>
             </div>
-            <div style={{background:dark?"#1c1917":"#fefce8",borderRadius:12,padding:"10px 12px",marginBottom:14,display:"flex",gap:8}}>
-              <Clock style={{width:14,height:14,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
-              <p style={{fontSize:11,color:"#92400e"}}>Earnings held 24 hours. Fraud protection & payment verification.</p>
+            <div style={{background:dark?"#374151":"#fefce8",borderRadius:14,padding:"12px",textAlign:"center"}}>
+              <p style={{fontSize:11,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
+              <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH{pending.toFixed(2)}</p>
             </div>
-            <p className={`text-xs font-bold mb-1 ${t.sub}`}>AMOUNT (GH₵)</p>
-            <input value={amount} onChange={e=>setAmount(e.target.value)} type="number"
-              placeholder={"Max GH₵"+available.toFixed(2)}
-              className={`w-full px-4 py-3 border rounded-xl text-lg font-black focus:outline-none ${t.inp}`}
-              style={{display:"block",width:"100%",marginBottom:6}}/>
-            <div style={{display:"flex",gap:6,marginBottom:14}}>
-              {[25,50,100,"All"].map(v=>(
-                <button key={v} onClick={()=>setAmount(v==="All"?available.toFixed(2):String(Math.min(v,available)))}
-                  style={{flex:1,padding:"6px",borderRadius:8,border:`1px solid ${dark?"#374151":"#e5e7eb"}`,fontSize:12,fontWeight:700}} className={t.text}>
-                  {v==="All"?"All":"+"+v}
-                </button>
-              ))}
-            </div>
-            <p className={`text-xs font-bold mb-2 ${t.sub}`}>MOBILE NETWORK</p>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
-              {[["mtn","MTN","#ffcc00","#000"],["vodafone","Vodafone","#e60000","#fff"],["airtel","AirtelTigo","#ef4444","#fff"]].map(([id,lb,bg,fg])=>(
-                <button key={id} onClick={()=>setNetwork(id)}
-                  style={{padding:"10px 4px",borderRadius:12,border:`2px solid ${network===id?bg:"#e5e7eb"}`,background:network===id?bg:"transparent",fontWeight:700,fontSize:11,color:network===id?fg:dark?"#9ca3af":"#6b7280"}}>
-                  {lb}
-                </button>
-              ))}
-            </div>
-            <p className={`text-xs font-bold mb-1 ${t.sub}`}>MOMO NUMBER</p>
-            <input value={momoPhone} onChange={e=>setMomoPhone(e.target.value)} type="tel" placeholder="+233XXXXXXXXX"
-              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-              style={{display:"block",width:"100%",marginBottom:14}}/>
-            <button onClick={withdraw} disabled={!amount||!momoPhone||parseFloat(amount)>available}
-              style={{width:"100%",padding:"14px",background:(!amount||!momoPhone||parseFloat(amount)>available)?"#9ca3af":"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-              <ArrowDownCircle style={{width:18,height:18}}/> Withdraw GH₵{amount||"0.00"}
-            </button>
-          </>
-        )}
+          </div>
+          <div style={{background:dark?"#1c1917":"#fefce8",borderRadius:12,padding:"10px 12px",marginBottom:14,display:"flex",gap:8}}>
+            <Clock style={{width:14,height:14,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
+            <p style={{fontSize:11,color:"#92400e"}}>Earnings held 24 hours. Fraud protection & payment verification.</p>
+          </div>
+          <p className={`text-xs font-bold mb-1 ${t.sub}`}>AMOUNT (GH)</p>
+          <input value={amount} onChange={e=>setAmount(e.target.value)} type="number"
+            placeholder={"Max GH"+available.toFixed(2)}
+            className={`w-full px-4 py-3 border rounded-xl text-lg font-black focus:outline-none ${t.inp}`}
+            style={{display:"block",width:"100%",marginBottom:6}}/>
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            {[25,50,100,"All"].map(v=>(
+              <button key={v} onClick={()=>setAmount(v==="All"?available.toFixed(2):String(Math.min(v,available)))}
+                style={{flex:1,padding:"6px",borderRadius:8,border:`1px solid ${dark?"#374151":"#e5e7eb"}`,fontSize:12,fontWeight:700}} className={t.text}>
+                {v==="All"?"All":"+"+v}
+              </button>
+            ))}
+          </div>
+          <p className={`text-xs font-bold mb-2 ${t.sub}`}>MOBILE NETWORK</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+            {[["mtn","MTN","#ffcc00","#000"],["vodafone","Vodafone","#e60000","#fff"],["airtel","AirtelTigo","#ef4444","#fff"]].map(([id,lb,bg,fg])=>(
+              <button key={id} onClick={()=>setNetwork(id)}
+                style={{padding:"10px 4px",borderRadius:12,border:`2px solid ${network===id?bg:"#e5e7eb"}`,background:network===id?bg:"transparent",fontWeight:700,fontSize:11,color:network===id?fg:dark?"#9ca3af":"#6b7280"}}>
+                {lb}
+              </button>
+            ))}
+          </div>
+          <p className={`text-xs font-bold mb-1 ${t.sub}`}>MOMO NUMBER</p>
+          <input value={momoPhone} onChange={e=>setMomoPhone(e.target.value)} type="tel" placeholder="+233XXXXXXXXX"
+            className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+            style={{display:"block",width:"100%",marginBottom:14}}/>
+          <button onClick={withdraw} disabled={!amount||!momoPhone||parseFloat(amount)>available}
+            style={{width:"100%",padding:"14px",background:(!amount||!momoPhone||parseFloat(amount)>available)?"#9ca3af":"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            <ArrowDownCircle style={{width:18,height:18}}/> Withdraw GH{amount||"0.00"}
+          </button>
+        </>)}
         {step==="processing"&&(
           <div style={{textAlign:"center",padding:"32px 0"}}>
             <div style={{width:52,height:52,border:"4px solid #16a34a",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
-            <p className={`font-black ${t.text}`}>Processing…</p>
-            <p className={`text-xs mt-1 ${t.sub}`}>Sending GH₵{amount} via {network.toUpperCase()}</p>
+            <p className={`font-black ${t.text}`}>Processing</p>
+            <p className={`text-xs mt-1 ${t.sub}`}>Sending GH{amount} via {network.toUpperCase()}</p>
           </div>
         )}
         {step==="done"&&(
           <div style={{textAlign:"center",padding:"32px 0"}}>
-            <div style={{fontSize:52,marginBottom:12}}>✅</div>
+            <div style={{fontSize:52,marginBottom:12}}></div>
             <p className={`font-black text-lg ${t.text}`}>Withdrawal Successful!</p>
-            <p className={`text-sm mt-2 ${t.sub}`}>GH₵{amount} sent to {momoPhone}</p>
+            <p className={`text-sm mt-2 ${t.sub}`}>GH{amount} sent to {momoPhone}</p>
             <button onClick={onClose} style={{marginTop:20,padding:"12px 32px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900}}>Done</button>
           </div>
         )}
@@ -494,13 +515,14 @@ function WithdrawSheet({available,pending,userId,onClose,dark}) {
   );
 }
 
-// ── FINTECH HUB ────────────────────────────────────────
+//  FINTECH HUB  Savings  Loans  Insurance  Pay Later 
 function FintechHub({user,role,dark}) {
   const t=T(dark);
   const [tab,setTab]=useState("savings");
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
+  //  Savings state
   const [savBal,setSavBal]=useState(role==="driver"?320.50:role==="owner"?1840.00:45.00);
   const [savInt,setSavInt]=useState(role==="driver"?12.40:role==="owner"?87.20:1.80);
   const [autoRate,setAutoRate]=useState(10);
@@ -513,9 +535,10 @@ function FintechHub({user,role,dark}) {
   ];
   const monthlyEst=(savBal*0.08/12).toFixed(2);
 
+  //  Loan state
   const creditScore=role==="driver"?680:role==="owner"?780:role==="passenger"?520:0;
   const maxLoan=role==="driver"?1500:role==="owner"?5000:role==="passenger"?200:0;
-  const loanEligible=role!=="admin";
+  const loanEligible=role!=="admin"&&(role==="passenger"?true:true);
   const [activeLoan,setActiveLoan]=useState(
     role==="driver"?{amount:800,remaining:520,repaid:280,monthly:65,purpose:"Okada Repair",progress:35,deductRate:3}:null
   );
@@ -523,9 +546,10 @@ function FintechHub({user,role,dark}) {
   const [loanPurpose,setLoanPurpose]=useState("");
   const [loanStep,setLoanStep]=useState("home");
 
+  //  Insurance state
   const insPlans=[
-    {id:"basic",   name:"Basic Rider",   price:15, cover:2000,  desc:"Personal accident cover",               color:"#16a34a"},
-    {id:"standard",name:"Standard",      price:35, cover:8000,  desc:"Accident + vehicle damage (partial)",   color:"#2563eb"},
+    {id:"basic",   name:"Basic Rider",   price:15, cover:2000,  desc:"Personal accident cover",           color:"#16a34a"},
+    {id:"standard",name:"Standard",      price:35, cover:8000,  desc:"Accident + vehicle damage (partial)",color:"#2563eb"},
     {id:"premium", name:"Premium Fleet", price:80, cover:25000, desc:"Full cover: accident, vehicle, 3rd party",color:"#7c3aed"},
   ];
   const [activePlan,setActivePlan]=useState(role==="driver"?"basic":role==="owner"?"premium":null);
@@ -533,28 +557,30 @@ function FintechHub({user,role,dark}) {
   const [claimDesc,setClaimDesc]=useState("");
   const [claimStep,setClaimStep]=useState("home");
 
+  //  Pay Later state (passengers)
   const [plLimit]=useState(50);
   const [plUsed,setPlUsed]=useState(12.50);
   const plAvail=plLimit-plUsed;
   const plHistory=[
-    {date:"Mar 7",amount:12.50,route:"Akosombo → Atimpoku",status:"due"},
-    {date:"Feb 28",amount:9.00,route:"Kpong → Asesewa",status:"paid"},
-    {date:"Feb 20",amount:7.50,route:"Odumase → Somanya",status:"paid"},
+    {date:"Mar 7",amount:12.50,route:"Akosombo  Atimpoku",status:"due"},
+    {date:"Feb 28",amount:9.00,route:"Kpong  Asesewa",status:"paid"},
+    {date:"Feb 20",amount:7.50,route:"Odumase  Somanya",status:"paid"},
   ];
 
   const tabs=[
-    {id:"savings",  icon:"🏦", label:"Savings"},
-    {id:"loans",    icon:"💳", label:"Loans"},
-    {id:"insurance",icon:"🛡️", label:"Insure"},
-    ...(role==="passenger"?[{id:"paylater",icon:"⏳",label:"Pay Later"}]:[]),
+    {id:"savings",  icon:"🏍️", label:"Savings"},
+    {id:"loans",    icon:"🏍️", label:"Loans"},
+    {id:"insurance",icon:"🏍️", label:"Insure"},
+    ...(role==="passenger"?[{id:"paylater",icon:"🏍️",label:"Pay Later"}]:[]),
   ];
 
   return (
     <div className={`${t.bg}`} style={{minHeight:"100%"}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
 
+      {/* Header */}
       <div style={{background:"linear-gradient(135deg,#7c3aed,#4f46e5,#2563eb)",color:"#fff",padding:"16px 16px 0"}}>
-        <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:18,marginBottom:1}}>💎 Okada Fintech</p>
+        <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:18,marginBottom:1}}> Okada Fintech</p>
         <p style={{fontSize:11,color:"#c7d2fe",marginBottom:14}}>Banking built for Ghana's transport workers</p>
         <div style={{display:"flex",gap:2}}>
           {tabs.map(tb=>(
@@ -568,294 +594,341 @@ function FintechHub({user,role,dark}) {
 
       <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
 
-        {tab==="savings"&&(
-          <>
-            <div style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",borderRadius:20,padding:"20px",color:"#fff"}}>
-              <p style={{fontSize:12,color:"#c7d2fe",fontWeight:600}}>Savings Balance</p>
-              <p style={{fontWeight:900,fontSize:38,margin:"4px 0"}}>GH₵{savBal.toFixed(2)}</p>
-              <div style={{display:"flex",gap:20,marginTop:8}}>
-                <div><p style={{fontSize:10,color:"#c7d2fe"}}>Interest Earned</p><p style={{fontWeight:700,fontSize:14}}>GH₵{savInt.toFixed(2)}</p></div>
-                <div><p style={{fontSize:10,color:"#c7d2fe"}}>Monthly Est.</p><p style={{fontWeight:700,fontSize:14}}>+GH₵{monthlyEst}</p></div>
-                <div><p style={{fontSize:10,color:"#c7d2fe"}}>Rate p.a.</p><p style={{fontWeight:700,fontSize:14}}>8%</p></div>
-              </div>
+        {/*  SAVINGS  */}
+        {tab==="savings"&&(<>
+          <div style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",borderRadius:20,padding:"20px",color:"#fff"}}>
+            <p style={{fontSize:12,color:"#c7d2fe",fontWeight:600}}>Savings Balance</p>
+            <p style={{fontWeight:900,fontSize:38,margin:"4px 0"}}>GH{savBal.toFixed(2)}</p>
+            <div style={{display:"flex",gap:20,marginTop:8}}>
+              <div><p style={{fontSize:10,color:"#c7d2fe"}}>Interest Earned</p><p style={{fontWeight:700,fontSize:14}}>GH{savInt.toFixed(2)}</p></div>
+              <div><p style={{fontSize:10,color:"#c7d2fe"}}>Monthly Est.</p><p style={{fontWeight:700,fontSize:14}}>+GH{monthlyEst}</p></div>
+              <div><p style={{fontSize:10,color:"#c7d2fe"}}>Rate p.a.</p><p style={{fontWeight:700,fontSize:14}}>8%</p></div>
             </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                <div><p className={`font-black text-sm ${t.text}`}>⚙️ Auto-Save from Earnings</p><p className={`text-xs ${t.sub}`}>{autoRate}% of each payout saved automatically</p></div>
-                <span style={{fontWeight:900,color:"#7c3aed",fontSize:22}}>{autoRate}%</span>
-              </div>
-              <input type="range" min="0" max="30" value={autoRate} onChange={e=>setAutoRate(Number(e.target.value))} style={{width:"100%",accentColor:"#7c3aed"}}/>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:10}} className={t.sub}><span>0%</span><span>10%</span><span>20%</span><span>30%</span></div>
-              <button onClick={async()=>{try{await api.setSavingsRate(user.id,autoRate);}catch(err){console.warn(err);}toast$(`Auto-save set to ${autoRate}% ✅`);}}
-                style={{width:"100%",padding:"10px",background:"#7c3aed",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Save Setting</button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={()=>setSavStep("deposit")} style={{padding:"14px",background:"#7c3aed",color:"#fff",borderRadius:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
-                <PiggyBank style={{width:16,height:16}}/> Deposit
-              </button>
-              <button onClick={()=>setSavStep("withdraw")} style={{padding:"14px",border:"2px solid #7c3aed",color:"#7c3aed",borderRadius:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
-                <ArrowDownCircle style={{width:16,height:16}}/> Withdraw
-              </button>
-            </div>
-            {(savStep==="deposit"||savStep==="withdraw")&&(
-              <div className={`${t.card} rounded-2xl p-4 border-2 border-purple-400`}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                  <p className={`font-black ${t.text}`}>{savStep==="deposit"?"💰 Deposit":"💸 Withdraw"} Savings</p>
-                  <button onClick={()=>{setSavStep("home");setSavInput("");}}><X style={{width:18,height:18,color:"#9ca3af"}}/></button>
-                </div>
-                <input value={savInput} onChange={e=>setSavInput(e.target.value)} type="number" placeholder="Amount GH₵"
-                  className={`w-full px-4 py-3 border rounded-xl text-lg font-black focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",marginBottom:10}}/>
-                <button onClick={async()=>{
-                  const amt=parseFloat(savInput);
-                  if(!amt||amt<1){toast$("Enter valid amount","error");return;}
-                  try{if(savStep==="deposit") await api.depositSavings(user.id,amt); else await api.withdrawSavings(user.id,amt);}catch(err){console.warn(err);}
-                  setSavBal(b=>savStep==="deposit"?+(b+amt).toFixed(2):+(b-amt).toFixed(2));
-                  if(savStep==="deposit") setSavInt(i=>+(i+amt*0.08/12).toFixed(2));
-                  toast$(savStep==="deposit"?`GH₵${amt} deposited ✅`:`GH₵${amt} withdrawn ✅`);
-                  setSavStep("home");setSavInput("");
-                }} style={{width:"100%",padding:"12px",background:"#7c3aed",color:"#fff",borderRadius:12,fontWeight:900}}>
-                  Confirm
-                </button>
-              </div>
-            )}
-            <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
-              <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                <p className={`font-black text-sm ${t.text}`}>📈 Monthly History</p>
-              </div>
-              {savHistory.map((h,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                  <div><p className={`font-bold text-sm ${t.text}`}>{h.date}</p><p className={`text-xs ${t.sub}`}>Saved GH₵{h.deposited} · Interest +GH₵{h.interest}</p></div>
-                  <p style={{fontWeight:900,color:"#7c3aed"}}>GH₵{h.balance.toFixed(2)}</p>
-                </div>
-              ))}
-            </div>
-            <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:14,padding:"12px 14px"}}>
-              <p style={{color:"#4f46e5",fontWeight:700,fontSize:12,marginBottom:4}}>💡 How savings earn interest</p>
-              <p style={{fontSize:11,color:dark?"#a5b4fc":"#4338ca"}}>8% annual interest calculated monthly. Save for 3+ months to unlock loan eligibility.</p>
-            </div>
-          </>
-        )}
+          </div>
 
-        {tab==="loans"&&(
-          <>
-            <div style={{background:"linear-gradient(135deg,#0f172a,#1e293b)",borderRadius:20,padding:"20px",color:"#fff"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div>
-                  <p style={{fontSize:12,color:"#94a3b8",fontWeight:600}}>Credit Score</p>
-                  <p style={{fontWeight:900,fontSize:44,margin:"4px 0",color:creditScore>=650?"#4ade80":creditScore>=500?"#facc15":"#f87171"}}>{creditScore}</p>
-                  <Badge color={creditScore>=650?"green":creditScore>=500?"yellow":"red"}>
-                    {creditScore>=650?"Good Standing":creditScore>=500?"Building Credit":"Low Score"}
-                  </Badge>
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <p style={{fontSize:11,color:"#94a3b8"}}>Max Loan</p>
-                  <p style={{fontWeight:900,fontSize:24,color:"#4ade80"}}>GH₵{maxLoan.toLocaleString()}</p>
-                  <p style={{fontSize:10,color:"#94a3b8"}}>at 5%/month</p>
-                </div>
-              </div>
-              <div style={{marginTop:14,height:6,borderRadius:999,background:"#334155"}}>
-                <div style={{height:6,borderRadius:999,width:`${Math.min((creditScore-300)/550*100,100)}%`,background:creditScore>=650?"#4ade80":creditScore>=500?"#facc15":"#f87171"}}/>
-              </div>
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div><p className={`font-black text-sm ${t.text}`}> Auto-Save from Earnings</p><p className={`text-xs ${t.sub}`}>{autoRate}% of each payout saved automatically</p></div>
+              <span style={{fontWeight:900,color:"#7c3aed",fontSize:22}}>{autoRate}%</span>
             </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black text-sm mb-3 ${t.text}`}>📋 Your Eligibility</p>
-              {(role==="driver"
-                ?["✅ 4 months savings history","✅ 1,247 completed rides","✅ 4.9 star rating","✅ Ghana Card verified"]
-                :role==="owner"
-                ?["✅ 6 months savings history","✅ Fleet revenue GH₵18,200","✅ Ghana Card verified"]
-                :role==="passenger"
-                ?["✅ 34 verified rides","✅ KYC verified","⏳ 2 more months savings to maximize limit"]
-                :["❌ Admin accounts not eligible"]
-              ).map((r,i)=>(
-                <p key={i} style={{fontSize:12,marginBottom:4,color:r.startsWith("✅")?"#16a34a":r.startsWith("⏳")?"#ca8a04":"#ef4444"}}>{r}</p>
-              ))}
-            </div>
-            {activeLoan&&(
-              <div className={`${t.card} rounded-2xl p-4 border-2 border-purple-400`}>
-                <p style={{color:"#7c3aed",fontWeight:900,fontSize:13,marginBottom:12}}>💳 Active Loan</p>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                  <div><p className={`font-bold ${t.text}`}>GH₵{activeLoan.amount} — {activeLoan.purpose}</p><p className={`text-xs ${t.sub}`}>GH₵{activeLoan.monthly}/month interest</p></div>
-                  <div style={{textAlign:"right"}}><p style={{color:"#7c3aed",fontWeight:900,fontSize:16}}>GH₵{activeLoan.remaining}</p><p className={`text-xs ${t.sub}`}>remaining</p></div>
-                </div>
-                <div style={{height:8,borderRadius:999,background:dark?"#374151":"#e5e7eb",marginBottom:6}}>
-                  <div style={{height:8,borderRadius:999,width:`${activeLoan.progress}%`,background:"#7c3aed"}}/>
-                </div>
-                <p style={{fontSize:11,color:"#7c3aed",fontWeight:700}}>Auto-deduct {activeLoan.deductRate}%/ride ✅</p>
-              </div>
-            )}
-            {!activeLoan&&loanStep==="home"&&loanEligible&&(
-              <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-                <p className={`font-black text-sm mb-2 ${t.text}`}>📝 Apply for a Loan</p>
-                <input value={loanAmount} onChange={e=>setLoanAmount(e.target.value)} type="number"
-                  placeholder={`Amount — max GH₵${maxLoan}`}
-                  className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",marginBottom:10}}/>
-                <select value={loanPurpose} onChange={e=>setLoanPurpose(e.target.value)}
-                  className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",marginBottom:10}}>
-                  <option value="">Select purpose…</option>
-                  {["Vehicle Repair","Fuel Stock","Medical Emergency","School Fees","Business Expansion","Drive to Own Down Payment","Other"].map(p=>(
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-                <button onClick={async()=>{
-                  if(!loanAmount||!loanPurpose){toast$("Fill all fields","error");return;}
-                  if(parseFloat(loanAmount)>maxLoan){toast$(`Max loan is GH₵${maxLoan}`,"error");return;}
-                  setLoanStep("processing");
-                  try{await api.applyLoan(user.id,parseFloat(loanAmount),loanPurpose);}catch(err){console.warn(err);}
-                  setTimeout(()=>{
-                    setActiveLoan({amount:parseFloat(loanAmount),remaining:parseFloat(loanAmount),repaid:0,monthly:+(parseFloat(loanAmount)*0.05).toFixed(2),purpose:loanPurpose,progress:0,deductRate:3});
-                    setLoanStep("approved");
-                  },2500);
-                }} disabled={!loanAmount||!loanPurpose}
-                  style={{width:"100%",padding:"13px",background:(!loanAmount||!loanPurpose)?"#9ca3af":"#7c3aed",color:"#fff",borderRadius:14,fontWeight:900}}>
-                  Apply for Loan →
-                </button>
-              </div>
-            )}
-            {loanStep==="processing"&&(
-              <div style={{textAlign:"center",padding:"32px 0"}}>
-                <div style={{width:52,height:52,border:"4px solid #7c3aed",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
-                <p className={`font-black ${t.text}`}>Checking Credit Profile…</p>
-              </div>
-            )}
-            {loanStep==="approved"&&(
-              <div style={{textAlign:"center",padding:"24px 0"}}>
-                <div style={{fontSize:52,marginBottom:12}}>🎉</div>
-                <p className={`font-black text-lg ${t.text}`}>Loan Approved!</p>
-                <p className={`text-sm mt-2 ${t.sub}`}>GH₵{loanAmount} added to your wallet</p>
-                <button onClick={()=>setLoanStep("home")} style={{marginTop:16,padding:"12px 28px",background:"#7c3aed",color:"#fff",borderRadius:14,fontWeight:900}}>Done ✅</button>
-              </div>
-            )}
-          </>
-        )}
+            <input type="range" min="0" max="30" value={autoRate} onChange={e=>setAutoRate(Number(e.target.value))} style={{width:"100%",accentColor:"#7c3aed"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:10}} className={t.sub}><span>0%</span><span>10%</span><span>20%</span><span>30%</span></div>
+            <button onClick={async()=>{try{await api.setSavingsRate(user.id,autoRate);}catch(err){ console.warn("Error:",err); }toast$(`Auto-save set to ${autoRate}% `);}}
+              style={{width:"100%",padding:"10px",background:"#7c3aed",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Save Setting</button>
+          </div>
 
-        {tab==="insurance"&&(
-          <>
-            <div style={{background:"linear-gradient(135deg,#0369a1,#0284c7)",borderRadius:20,padding:"20px",color:"#fff"}}>
-              <p style={{fontSize:12,color:"#bae6fd",fontWeight:600}}>Active Coverage</p>
-              <p style={{fontWeight:900,fontSize:26,margin:"4px 0"}}>{activePlan?insPlans.find(p=>p.id===activePlan)?.name:"No Active Plan"}</p>
-              <p style={{fontSize:12,color:"#bae6fd"}}>
-                {activePlan?`Cover up to GH₵${insPlans.find(p=>p.id===activePlan)?.cover?.toLocaleString()}`:"Select a plan below"}
-              </p>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <button onClick={()=>setSavStep("deposit")} style={{padding:"14px",background:"#7c3aed",color:"#fff",borderRadius:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
+              <PiggyBank style={{width:16,height:16}}/> Deposit
+            </button>
+            <button onClick={()=>setSavStep("withdraw")} style={{padding:"14px",border:"2px solid #7c3aed",color:"#7c3aed",borderRadius:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
+              <ArrowDownCircle style={{width:16,height:16}}/> Withdraw
+            </button>
+          </div>
+
+          {(savStep==="deposit"||savStep==="withdraw")&&(
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-purple-400`}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <p className={`font-black ${t.text}`}>{savStep==="deposit"?" Deposit":" Withdraw"} Savings</p>
+                <button onClick={()=>{setSavStep("home");setSavInput("");}}><X style={{width:18,height:18,color:"#9ca3af"}}/></button>
+              </div>
+              <input value={savInput} onChange={e=>setSavInput(e.target.value)} type="number" placeholder="Amount GH"
+                className={`w-full px-4 py-3 border rounded-xl text-lg font-black focus:outline-none ${t.inp}`}
+                style={{display:"block",width:"100%",marginBottom:10}}/>
+              <button onClick={async()=>{
+                const amt=parseFloat(savInput);
+                if(!amt||amt<1){toast$("Enter valid amount","error");return;}
+                try{if(savStep==="deposit") await api.depositSavings(user.id,amt); else await api.withdrawSavings(user.id,amt);}catch(err){ console.warn("Error:",err); }
+                setSavBal(b=>savStep==="deposit"?+(b+amt).toFixed(2):+(b-amt).toFixed(2));
+                if(savStep==="deposit") setSavInt(i=>+(i+amt*0.08/12).toFixed(2));
+                toast$(savStep==="deposit"?`GH${amt} deposited `:`GH${amt} withdrawn `);
+                setSavStep("home");setSavInput("");
+              }} style={{width:"100%",padding:"12px",background:"#7c3aed",color:"#fff",borderRadius:12,fontWeight:900}}>
+                Confirm
+              </button>
             </div>
-            {insPlans.map(plan=>(
-              <div key={plan.id} className={`${t.card} rounded-2xl p-4 border-2`} style={{borderColor:activePlan===plan.id?plan.color:dark?"#374151":"#e5e7eb"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                  <div>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                      <p className={`font-black ${t.text}`}>{plan.name}</p>
-                      {activePlan===plan.id&&<Badge color="green">Active ✅</Badge>}
-                    </div>
-                    <p className={`text-xs ${t.sub}`}>{plan.desc}</p>
-                  </div>
-                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:plan.color,fontSize:18}}>GH₵{plan.price}</p><p className={`text-xs ${t.sub}`}>/month</p></div>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:dark?"#374151":"#f9fafb",borderRadius:10,marginBottom:10}}>
-                  <span className={`text-xs ${t.sub}`}>Max payout</span>
-                  <span style={{fontWeight:700,color:plan.color}}>GH₵{plan.cover.toLocaleString()}</span>
-                </div>
-                {activePlan!==plan.id?(
-                  <button onClick={async()=>{
-                    try{await api.buyInsurance(user.id,plan.id,"v1");}catch(err){console.warn(err);}
-                    setActivePlan(plan.id);toast$(`${plan.name} plan activated ✅`);
-                  }} style={{width:"100%",padding:"10px",background:plan.color,color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>
-                    Activate — GH₵{plan.price}/mo
-                  </button>
-                ):(
-                  <button onClick={()=>setClaimStep("file")} style={{width:"100%",padding:"10px",border:`2px solid ${plan.color}`,color:plan.color,borderRadius:12,fontWeight:700,fontSize:13}}>
-                    📋 File a Claim
-                  </button>
-                )}
+          )}
+
+          <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
+              <p className={`font-black text-sm ${t.text}`}> Monthly History</p>
+            </div>
+            {savHistory.map((h,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
+                <div><p className={`font-bold text-sm ${t.text}`}>{h.date}</p><p className={`text-xs ${t.sub}`}>Saved GH{h.deposited}  Interest +GH{h.interest}</p></div>
+                <p style={{fontWeight:900,color:"#7c3aed"}}>GH{h.balance.toFixed(2)}</p>
               </div>
             ))}
-            {claimStep==="file"&&(
-              <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-400`}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-                  <p className={`font-black ${t.text}`}>📋 File Claim</p>
-                  <button onClick={()=>setClaimStep("home")}><X style={{width:18,height:18,color:"#9ca3af"}}/></button>
-                </div>
-                <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
-                  {["Accident / Injury","Vehicle Damage","Third Party Damage","Theft","Medical Expenses","Other"].map(ct=>(
-                    <button key={ct} onClick={()=>setClaimType(ct)}
-                      style={{padding:"10px 12px",borderRadius:12,border:`2px solid ${claimType===ct?"#0284c7":dark?"#374151":"#e5e7eb"}`,background:claimType===ct?"#eff6ff":"transparent",fontWeight:600,fontSize:13,textAlign:"left",color:claimType===ct?"#0284c7":dark?"#d1d5db":"#374151"}}>
-                      {ct}
-                    </button>
+          </div>
+
+          <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:14,padding:"12px 14px"}}>
+            <p style={{color:"#4f46e5",fontWeight:700,fontSize:12,marginBottom:4}}> How savings earn interest</p>
+            <p style={{fontSize:11,color:dark?"#a5b4fc":"#4338ca"}}>8% annual interest calculated monthly. Save for 3+ months to unlock loan eligibility. Your savings history determines your credit score. Funds always accessible.</p>
+          </div>
+        </>)}
+
+        {/*  LOANS  */}
+        {tab==="loans"&&(<>
+          <div style={{background:"linear-gradient(135deg,#0f172a,#1e293b)",borderRadius:20,padding:"20px",color:"#fff"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <p style={{fontSize:12,color:"#94a3b8",fontWeight:600}}>Credit Score</p>
+                <p style={{fontWeight:900,fontSize:44,margin:"4px 0",color:creditScore>=650?"#4ade80":creditScore>=500?"#facc15":"#f87171"}}>{creditScore}</p>
+                <Badge color={creditScore>=650?"green":creditScore>=500?"yellow":"red"}>
+                  {creditScore>=650?"Good Standing":creditScore>=500?"Building Credit":"Low Score"}
+                </Badge>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <p style={{fontSize:11,color:"#94a3b8"}}>Max Loan</p>
+                <p style={{fontWeight:900,fontSize:24,color:"#4ade80"}}>GH{maxLoan.toLocaleString()}</p>
+                <p style={{fontSize:10,color:"#94a3b8"}}>at 5%/month</p>
+              </div>
+            </div>
+            <div style={{marginTop:14,height:6,borderRadius:999,background:"#334155"}}>
+              <div style={{height:6,borderRadius:999,width:`${Math.min((creditScore-300)/550*100,100)}%`,background:creditScore>=650?"#4ade80":creditScore>=500?"#facc15":"#f87171"}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#64748b",marginTop:3}}><span>300</span><span>500</span><span>650</span><span>850</span></div>
+          </div>
+
+          {/* Eligibility checklist */}
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black text-sm mb-3 ${t.text}`}> Your Eligibility</p>
+            {(role==="driver"
+              ?[" 4 months savings history"," 1,247 completed rides"," 4.9 star rating"," Ghana Card verified"," 0 payment disputes"]
+              :role==="owner"
+              ?[" 6 months savings history"," Fleet revenue GH18,200"," Ghana Card verified"," 2 vehicles registered"]
+              :role==="passenger"
+              ?[" 34 verified rides"," KYC verified"," 0 disputed payments"," 2 more months savings to maximize limit"]
+              :[" Admin accounts not eligible"]
+            ).map((r,i)=>(
+              <p key={i} style={{fontSize:12,marginBottom:4,color:r.startsWith("")?"#16a34a":r.startsWith("")?"#ca8a04":"#ef4444"}}>{r}</p>
+            ))}
+          </div>
+
+          {/* Active loan */}
+          {activeLoan&&(
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-purple-400`}>
+              <p style={{color:"#7c3aed",fontWeight:900,fontSize:13,marginBottom:12}}> Active Loan</p>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <div><p className={`font-bold ${t.text}`}>GH{activeLoan.amount}  {activeLoan.purpose}</p><p className={`text-xs ${t.sub}`}>GH{activeLoan.monthly}/month interest</p></div>
+                <div style={{textAlign:"right"}}><p style={{color:"#7c3aed",fontWeight:900,fontSize:16}}>GH{activeLoan.remaining}</p><p className={`text-xs ${t.sub}`}>remaining</p></div>
+              </div>
+              <div style={{height:8,borderRadius:999,background:dark?"#374151":"#e5e7eb",marginBottom:6}}>
+                <div style={{height:8,borderRadius:999,width:`${activeLoan.progress}%`,background:"#7c3aed"}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
+                <span className={t.sub}>{activeLoan.progress}% repaid  GH{activeLoan.repaid} paid back</span>
+                <span style={{color:"#7c3aed",fontWeight:700}}>Auto-deduct {activeLoan.deductRate}%/ride </span>
+              </div>
+            </div>
+          )}
+
+          {/* Apply */}
+          {!activeLoan&&loanStep==="home"&&loanEligible&&(
+            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+              <p className={`font-black text-sm mb-2 ${t.text}`}> Apply for a Loan</p>
+              <p className={`text-xs ${t.sub} mb-4`}>Repayment auto-deducted from earnings  no manual payments ever.</p>
+              <input value={loanAmount} onChange={e=>setLoanAmount(e.target.value)} type="number"
+                placeholder={`Amount  max GH${maxLoan}`}
+                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+                style={{display:"block",width:"100%",marginBottom:10}}/>
+              <select value={loanPurpose} onChange={e=>setLoanPurpose(e.target.value)}
+                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+                style={{display:"block",width:"100%",marginBottom:10}}>
+                <option value="">Select purpose</option>
+                {["Vehicle Repair","Fuel Stock","Medical Emergency","School Fees","Business Expansion","Drive to Own Down Payment","Ride Fare (Pay Later)","Other"].map(p=>(
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              {loanAmount&&loanPurpose&&(
+                <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+                  {[["Loan Amount",`GH${loanAmount}`,"#7c3aed"],["Monthly Interest (5%)",`GH${(parseFloat(loanAmount||0)*0.05).toFixed(2)}`,t.text],["Est. repayment per ride","~3% of earnings","#16a34a"]].map(([l,v,c])=>(
+                    <div key={l} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                      <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
+                    </div>
                   ))}
                 </div>
-                <textarea value={claimDesc} onChange={e=>setClaimDesc(e.target.value)}
-                  placeholder="Describe what happened…"
-                  className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",minHeight:80,resize:"none",marginBottom:12}}/>
-                <button onClick={async()=>{
-                  if(!claimType||!claimDesc){toast$("Fill all fields","error");return;}
-                  try{await api.fileInsuranceClaim(user.id,claimType,claimDesc);}catch(err){console.warn(err);}
-                  setClaimStep("done");toast$("Claim submitted! Review within 24hrs ✅");
-                }} style={{width:"100%",padding:"12px",background:"#0284c7",color:"#fff",borderRadius:14,fontWeight:900}}>Submit Claim</button>
-              </div>
-            )}
-            {claimStep==="done"&&(
-              <div style={{textAlign:"center",padding:"20px 0"}}>
-                <div style={{fontSize:48,marginBottom:8}}>📋✅</div>
-                <p className={`font-black ${t.text}`}>Claim Submitted!</p>
-                <p className={`text-xs mt-1 ${t.sub}`}>Ref: CLM-{Math.random().toString(36).substr(2,8).toUpperCase()}</p>
-                <button onClick={()=>setClaimStep("home")} style={{marginTop:14,padding:"10px 24px",background:"#0284c7",color:"#fff",borderRadius:12,fontWeight:700}}>Done</button>
-              </div>
-            )}
-          </>
-        )}
+              )}
+              <button onClick={async()=>{
+                if(!loanAmount||!loanPurpose){toast$("Fill all fields","error");return;}
+                if(parseFloat(loanAmount)>maxLoan){toast$(`Max loan is GH${maxLoan}`,"error");return;}
+                setLoanStep("processing");
+                try{await api.applyLoan(user.id,parseFloat(loanAmount),loanPurpose);}catch(err){ console.warn("Error:",err); }
+                setTimeout(()=>{
+                  setActiveLoan({amount:parseFloat(loanAmount),remaining:parseFloat(loanAmount),repaid:0,monthly:+(parseFloat(loanAmount)*0.05).toFixed(2),purpose:loanPurpose,progress:0,deductRate:3});
+                  setLoanStep("approved");
+                },2500);
+              }} disabled={!loanAmount||!loanPurpose}
+                style={{width:"100%",padding:"13px",background:(!loanAmount||!loanPurpose)?"#9ca3af":"#7c3aed",color:"#fff",borderRadius:14,fontWeight:900}}>
+                Apply for Loan 
+              </button>
+            </div>
+          )}
 
-        {tab==="paylater"&&(
-          <>
-            <div style={{background:"linear-gradient(135deg,#047857,#059669)",borderRadius:20,padding:"20px",color:"#fff"}}>
-              <p style={{fontSize:12,color:"#a7f3d0",fontWeight:600}}>Pay Later Available</p>
-              <p style={{fontWeight:900,fontSize:38,margin:"4px 0"}}>GH₵{plAvail.toFixed(2)}</p>
-              <p style={{fontSize:12,color:"#a7f3d0"}}>of GH₵{plLimit} limit</p>
-              <div style={{marginTop:12,height:6,borderRadius:999,background:"rgba(255,255,255,0.25)"}}>
-                <div style={{height:6,borderRadius:999,width:`${(plUsed/plLimit)*100}%`,background:"#fff"}}/>
-              </div>
-              <p style={{fontSize:11,color:"#a7f3d0",marginTop:4}}>GH₵{plUsed.toFixed(2)} used · Due Mar 14, 2026</p>
+          {loanStep==="processing"&&(
+            <div style={{textAlign:"center",padding:"32px 0"}}>
+              <div style={{width:52,height:52,border:"4px solid #7c3aed",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
+              <p className={`font-black ${t.text}`}>Checking Credit Profile</p>
             </div>
-            {plUsed>0&&(
-              <div style={{background:dark?"#1c1917":"#fef3c7",borderRadius:14,padding:"12px 14px",border:"1px solid #fde68a",display:"flex",gap:10,alignItems:"flex-start"}}>
-                <AlertCircle style={{width:16,height:16,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
+          )}
+          {loanStep==="approved"&&(
+            <div style={{textAlign:"center",padding:"24px 0"}}>
+              <div style={{fontSize:52,marginBottom:12}}></div>
+              <p className={`font-black text-lg ${t.text}`}>Loan Approved!</p>
+              <p className={`text-sm mt-2 ${t.sub}`}>GH{loanAmount} added to your wallet</p>
+              <p className={`text-xs mt-1 ${t.sub}`}>Auto-repayment starts from next ride earning</p>
+              <button onClick={()=>setLoanStep("home")} style={{marginTop:16,padding:"12px 28px",background:"#7c3aed",color:"#fff",borderRadius:14,fontWeight:900}}>Done </button>
+            </div>
+          )}
+        </>)}
+
+        {/*  INSURANCE  */}
+        {tab==="insurance"&&(<>
+          <div style={{background:"linear-gradient(135deg,#0369a1,#0284c7)",borderRadius:20,padding:"20px",color:"#fff"}}>
+            <p style={{fontSize:12,color:"#bae6fd",fontWeight:600}}>Active Coverage</p>
+            <p style={{fontWeight:900,fontSize:26,margin:"4px 0"}}>{activePlan?insPlans.find(p=>p.id===activePlan)?.name:"No Active Plan"}</p>
+            <p style={{fontSize:12,color:"#bae6fd"}}>
+              {activePlan?`Cover up to GH${insPlans.find(p=>p.id===activePlan)?.cover?.toLocaleString()}`:"Select a plan below"}
+            </p>
+          </div>
+
+          {insPlans.map(plan=>(
+            <div key={plan.id} className={`${t.card} rounded-2xl p-4 border-2`} style={{borderColor:activePlan===plan.id?plan.color:dark?"#374151":"#e5e7eb"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                 <div>
-                  <p style={{fontWeight:700,fontSize:13,color:"#92400e"}}>Payment Due: GH₵{plUsed.toFixed(2)}</p>
-                  <button onClick={async()=>{
-                    try{await api.repayLater(user.id,plUsed);}catch(err){console.warn(err);}
-                    setPlUsed(0);toast$("Pay Later cleared ✅ Limit restored!");
-                  }} style={{marginTop:8,padding:"8px 16px",background:"#ca8a04",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12}}>
-                    Repay Now — GH₵{plUsed.toFixed(2)}
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <p className={`font-black ${t.text}`}>{plan.name}</p>
+                    {activePlan===plan.id&&<Badge color="green">Active </Badge>}
+                  </div>
+                  <p className={`text-xs ${t.sub}`}>{plan.desc}</p>
+                </div>
+                <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:plan.color,fontSize:18}}>GH{plan.price}</p><p className={`text-xs ${t.sub}`}>/month</p></div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:dark?"#374151":"#f9fafb",borderRadius:10,marginBottom:10}}>
+                <span className={`text-xs ${t.sub}`}>Max payout</span>
+                <span style={{fontWeight:700,color:plan.color}}>GH{plan.cover.toLocaleString()}</span>
+              </div>
+              {activePlan!==plan.id?(
+                <button onClick={async()=>{
+                  try{await api.buyInsurance(user.id,plan.id,"v1");}catch(err){ console.warn("Error:",err); }
+                  setActivePlan(plan.id);toast$(`${plan.name} plan activated `);
+                }} style={{width:"100%",padding:"10px",background:plan.color,color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>
+                  Activate  GH{plan.price}/mo
+                </button>
+              ):(
+                <button onClick={()=>setClaimStep("file")} style={{width:"100%",padding:"10px",border:`2px solid ${plan.color}`,color:plan.color,borderRadius:12,fontWeight:700,fontSize:13}}>
+                   File a Claim
+                </button>
+              )}
+            </div>
+          ))}
+
+          {claimStep==="file"&&(
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-400`}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <p className={`font-black ${t.text}`}> File Claim</p>
+                <button onClick={()=>setClaimStep("home")}><X style={{width:18,height:18,color:"#9ca3af"}}/></button>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+                {["Accident / Injury","Vehicle Damage","Third Party Damage","Theft","Medical Expenses","Other"].map(ct=>(
+                  <button key={ct} onClick={()=>setClaimType(ct)}
+                    style={{padding:"10px 12px",borderRadius:12,border:`2px solid ${claimType===ct?"#0284c7":dark?"#374151":"#e5e7eb"}`,background:claimType===ct?"#eff6ff":"transparent",fontWeight:600,fontSize:13,textAlign:"left",color:claimType===ct?"#0284c7":dark?"#d1d5db":"#374151"}}>
+                    {ct}
                   </button>
-                </div>
+                ))}
               </div>
-            )}
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black text-sm mb-3 ${t.text}`}>📋 How Pay Later Works</p>
-              {[["✅","Book ride → choose Pay Later at checkout"],["✅","Ride now — payment deferred up to 7 days"],["✅","Auto-charged to your MoMo on due date"],["⚠️","Missed payment permanently removes access"]].map(([icon,text])=>(
-                <p key={text} style={{fontSize:12,marginBottom:5,color:icon==="⚠️"?"#ef4444":dark?"#d1d5db":"#374151"}}>{icon} {text}</p>
-              ))}
+              <textarea value={claimDesc} onChange={e=>setClaimDesc(e.target.value)}
+                placeholder="Describe what happened  when, where, how"
+                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+                style={{display:"block",width:"100%",minHeight:80,resize:"none",marginBottom:12}}/>
+              <button onClick={async()=>{
+                if(!claimType||!claimDesc){toast$("Fill all fields","error");return;}
+                try{await api.fileInsuranceClaim(user.id,claimType,claimDesc);}catch(err){ console.warn("Error:",err); }
+                setClaimStep("done");toast$("Claim submitted! Review within 24hrs ");
+              }} style={{width:"100%",padding:"12px",background:"#0284c7",color:"#fff",borderRadius:14,fontWeight:900}}>Submit Claim</button>
             </div>
-            <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
-              <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                <p className={`font-black text-sm ${t.text}`}>🕐 Pay Later History</p>
+          )}
+          {claimStep==="done"&&(
+            <div style={{textAlign:"center",padding:"20px 0"}}>
+              <div style={{fontSize:48,marginBottom:8}}></div>
+              <p className={`font-black ${t.text}`}>Claim Submitted!</p>
+              <p className={`text-xs mt-1 ${t.sub}`}>Ref: CLM-{Math.random().toString(36).substr(2,8).toUpperCase()}</p>
+              <p className={`text-xs mt-1 ${t.sub}`}>Our team contacts you within 24 hours</p>
+              <button onClick={()=>setClaimStep("home")} style={{marginTop:14,padding:"10px 24px",background:"#0284c7",color:"#fff",borderRadius:12,fontWeight:700}}>Done</button>
+            </div>
+          )}
+
+          <div style={{background:dark?"#0c1a2e":"#f0f9ff",borderRadius:14,padding:"12px 14px"}}>
+            <p style={{color:"#0284c7",fontWeight:700,fontSize:12,marginBottom:4}}> Powered by licensed Ghanaian insurers</p>
+            <p style={{fontSize:11,color:dark?"#7dd3fc":"#0369a1"}}>Insurance underwritten by licensed partners. Okada Online is the distribution agent. All claims processed by the underwriting partner within 5 business days.</p>
+          </div>
+        </>)}
+
+        {/*  PAY LATER (passengers only)  */}
+        {tab==="paylater"&&(<>
+          <div style={{background:"linear-gradient(135deg,#047857,#059669)",borderRadius:20,padding:"20px",color:"#fff"}}>
+            <p style={{fontSize:12,color:"#a7f3d0",fontWeight:600}}>Pay Later Available</p>
+            <p style={{fontWeight:900,fontSize:38,margin:"4px 0"}}>GH{plAvail.toFixed(2)}</p>
+            <p style={{fontSize:12,color:"#a7f3d0"}}>of GH{plLimit} limit</p>
+            <div style={{marginTop:12,height:6,borderRadius:999,background:"rgba(255,255,255,0.25)"}}>
+              <div style={{height:6,borderRadius:999,width:`${(plUsed/plLimit)*100}%`,background:"#fff"}}/>
+            </div>
+            <p style={{fontSize:11,color:"#a7f3d0",marginTop:4}}>GH{plUsed.toFixed(2)} used  Due Mar 14, 2026</p>
+          </div>
+
+          {plUsed>0&&(
+            <div style={{background:dark?"#1c1917":"#fef3c7",borderRadius:14,padding:"12px 14px",border:"1px solid #fde68a",display:"flex",gap:10,alignItems:"flex-start"}}>
+              <AlertCircle style={{width:16,height:16,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
+              <div>
+                <p style={{fontWeight:700,fontSize:13,color:"#92400e"}}>Payment Due: GH{plUsed.toFixed(2)}</p>
+                <p style={{fontSize:11,color:"#92400e",marginTop:2}}>Due Mar 14. Auto-charged to MoMo. Missing payment permanently suspends Pay Later.</p>
+                <button onClick={async()=>{
+                  try{await api.repayLater(user.id,plUsed);}catch(err){ console.warn("Error:",err); }
+                  setPlUsed(0);toast$("Pay Later cleared  Limit restored!");
+                }} style={{marginTop:8,padding:"8px 16px",background:"#ca8a04",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12}}>
+                  Repay Now  GH{plUsed.toFixed(2)}
+                </button>
               </div>
-              {plHistory.map((h,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                  <div><p className={`font-bold text-sm ${t.text}`}>{h.route}</p><p className={`text-xs ${t.sub}`}>{h.date}</p></div>
-                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>GH₵{h.amount}</p><Badge color={h.status==="paid"?"green":"yellow"}>{h.status}</Badge></div>
-                </div>
-              ))}
             </div>
-          </>
-        )}
+          )}
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black text-sm mb-3 ${t.text}`}> How Pay Later Works</p>
+            {[["","Book ride  choose Pay Later at checkout"],["","Ride now  payment deferred up to 7 days"],["","Auto-charged to your MoMo on due date"],["","Build credit history with on-time payments"],["","Missed payment permanently removes access"]].map(([icon,text])=>(
+              <p key={text} style={{fontSize:12,marginBottom:5,color:icon===""?"#ef4444":dark?"#d1d5db":"#374151"}}>{icon} {text}</p>
+            ))}
+          </div>
+
+          <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
+              <p className={`font-black text-sm ${t.text}`}> Pay Later History</p>
+            </div>
+            {plHistory.map((h,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
+                <div><p className={`font-bold text-sm ${t.text}`}>{h.route}</p><p className={`text-xs ${t.sub}`}>{h.date}</p></div>
+                <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>GH{h.amount}</p><Badge color={h.status==="paid"?"green":"yellow"}>{h.status}</Badge></div>
+              </div>
+            ))}
+          </div>
+        </>)}
       </div>
+    </div>
     </div>
   );
 }
+// --- AUTH SCREEN ---
 
-// ── AUTH SCREEN ────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
 function AuthScreen({onLogin,dark,apiStatus="checking"}) {
   const t=T(dark);
   const [role,setRole]=useState("passenger");
@@ -868,16 +941,19 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
   const [loading,setLoading]=useState(false);
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
+
   const [otpCooldown,setOtpCooldown]=useState(0);
   const [otpAttempts,setOtpAttempts]=useState(0);
 
   const sendOtp=async()=>{
+    // Anti-fraud: phone format validation
     const cleaned = phone.replace(/\s/g,'');
     if(!/^\+233[0-9]{9}$/.test(cleaned)){
       toast$("Enter valid Ghana number: +233XXXXXXXXX","error");return;
     }
     if(role==="driver"&&!owner){toast$("Enter your owner's code","error");return;}
     if(otpCooldown>0){toast$("Wait "+otpCooldown+"s before retrying","error");return;}
+    // Anti-fraud: max 3 OTP attempts per session
     if(otpAttempts>=3){toast$("Too many attempts. Please wait 10 minutes.","error");return;}
     setLoading(true);
     setOtpAttempts(a=>a+1);
@@ -887,14 +963,15 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
       }
       const conf=await signInWithPhoneNumber(auth,cleaned,window.recaptchaVerifier);
       window._otpConfirm=conf;
-      setStep("otp");toast$("OTP sent! Check your SMS 📱");
+      setStep("otp");toast$("OTP sent! Check your SMS ");
+      // 60s cooldown
       let cd=60; setOtpCooldown(cd);
       const iv=setInterval(()=>{cd--;setOtpCooldown(cd);if(cd<=0)clearInterval(iv);},1000);
     }catch(e){
       console.error("OTP error:",e);
       if(e.code==='auth/invalid-phone-number'){toast$("Invalid phone number","error");}
       else if(e.code==='auth/too-many-requests'){toast$("Too many OTP requests. Try in 10 minutes.","error");}
-      else{ setStep("otp"); toast$("Demo mode — enter any 6 digits"); }
+      else{ setStep("otp"); toast$("Demo mode  enter any 6 digits"); }
     }
     setLoading(false);
   };
@@ -912,31 +989,32 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
       try{
         const res=await api.req("POST","/auth/create-profile",{phone,role,name:name||"User",ownerCode:role==="driver"?owner:undefined});
         api.token=fbToken; onLogin(res.user,fbToken,role);
-        setLoading(false);
         return;
-      }catch(err){ console.warn("Profile error:",err); }
+      }catch(err){ console.warn("Error:",err); }
       api.token=fbToken;
     }catch(e){ console.error("verifyOtp:",e); }
     // Demo fallback
-    onLogin({
-      id:"demo_"+Date.now(),name:name||"Demo User",phone,role,rating:5.0,totalRides:0,
-      profilePhoto:role==="driver"?"👨🏿‍🦱":role==="owner"?"🏢":role==="passenger"?"👤":"⚙️",
-      ownerCode:role==="driver"?owner:role==="owner"?"OWN"+Math.random().toString(36).substr(2,6).toUpperCase():null,
-      isVerified:true,kycData,
-      ghanaCard:kycData?.type==="ghana"?kycData.docNumber:null,
-      passport:kycData?.type==="passport"?kycData:null,
-      isInternational:kycData?.type==="passport",
-      wallet:{available:0,pending:0},
-      savings:{balance:0},loan:null,insurance:null,
-      payLater:role==="passenger"?{limit:50,used:0,eligible:true}:null,
-    },"demo_token",role);
+    try{
+      onLogin({
+        id:"demo_"+Date.now(),name:name||"Demo User",phone,role,rating:5.0,totalRides:0,
+        profilePhoto:role==="driver"?"":role==="owner"?"":role==="passenger"?"":"",
+        ownerCode:role==="driver"?owner:role==="owner"?"OWN"+Math.random().toString(36).substr(2,6).toUpperCase():null,
+        isVerified:true,kycData,
+        ghanaCard:kycData?.type==="ghana"?kycData.docNumber:null,
+        passport:kycData?.type==="passport"?kycData:null,
+        isInternational:kycData?.type==="passport",
+        wallet:{available:0,pending:0},
+        savings:{balance:0},loan:null,insurance:null,
+        payLater:role==="passenger"?{limit:50,used:0,eligible:true}:null,
+      },"demo_token",role);
+    }
     setLoading(false);
   };
 
   if(step==="kyc"){
     return <KycVerify role={role} dark={dark} onVerified={(data)=>{
       setKycData(data);setStep("phone");
-      toast$(`${data.type==="ghana"?"Ghana Card":"Passport"} submitted ✅ Now get your OTP`);
+      toast$(`${data.type==="ghana"?"Ghana Card":"Passport"} submitted  Now get your OTP`);
     }}/>;
   }
 
@@ -944,15 +1022,15 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
     <div className={`min-h-screen flex flex-col ${t.bg}`}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div style={{background:"linear-gradient(135deg,#14532d,#16a34a,#22c55e)",paddingTop:64,paddingBottom:48,paddingLeft:24,paddingRight:24,textAlign:"center",color:"#fff"}}>
-        <div style={{fontSize:56,marginBottom:12}}>🏍️🚗🛺🚴</div>
+        <div style={{fontSize:56,marginBottom:12}}></div>
         <h1 style={{fontFamily:"Syne,sans-serif",fontSize:36,fontWeight:900,letterSpacing:"-0.02em"}}>Okada Online</h1>
-        <p style={{marginTop:6,color:"#bbf7d0",fontSize:14,fontWeight:600}}>Eastern Region Ghana · Complete Transport & Fintech Ecosystem 🇬🇭</p>
+        <p style={{marginTop:6,color:"#bbf7d0",fontSize:14,fontWeight:600}}>Eastern Region Ghana  Complete Transport & Fintech Ecosystem </p>
         <div style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:6,background:"rgba(0,0,0,0.2)",borderRadius:999,padding:"4px 12px"}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:apiStatus==="ok"?"#4ade80":apiStatus==="error"?"#f87171":"#facc15"}}/>
-          <span style={{fontSize:11,fontWeight:700,color:"#fff"}}>{apiStatus==="ok"?"Connected ✅":apiStatus==="error"?"Offline ❌":"Connecting…"}</span>
+          <span style={{fontSize:11,fontWeight:700,color:"#fff"}}>{apiStatus==="ok"?"Connected ":apiStatus==="error"?"Offline ":"Connecting"}</span>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:8,marginTop:14}}>
-          {["Owner 50%","Driver 25%","Fuel 5%","Maint. 5%","Savings 8%","Loans","Insurance","Pay Later","🌍 Intl"].map(f=>(
+          {["Owner 50%","Driver 25%","Fuel 5%","Maint. 5%","Savings 8%","Loans","Insurance","Pay Later"," Intl"].map(f=>(
             <span key={f} style={{background:"rgba(255,255,255,0.15)",borderRadius:999,padding:"4px 10px",fontSize:11,fontWeight:700}}>{f}</span>
           ))}
         </div>
@@ -960,7 +1038,7 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
 
       <div style={{flex:1,padding:"24px 20px"}}>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",borderRadius:16,overflow:"hidden",border:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:20}}>
-          {[["passenger","🧍","Passenger"],["driver","🏍️","Driver"],["owner","🏢","Owner"],["admin","⚙️","Admin"]].map(([r,ic,lb])=>(
+          {[["passenger","","Passenger"],["driver","","Driver"],["owner","","Owner"],["admin","","Admin"]].map(([r,ic,lb])=>(
             <button key={r} onClick={()=>{setRole(r);setStep("phone");setKycData(null);}}
               style={{padding:"10px 4px",fontSize:10,fontWeight:700,background:role===r?"#16a34a":"transparent",color:role===r?"#fff":dark?"#9ca3af":"#6b7280",textAlign:"center"}}>
               <div style={{fontSize:16}}>{ic}</div>{lb}
@@ -981,7 +1059,7 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
                 <input value={owner} onChange={e=>setOwner(e.target.value.toUpperCase())} placeholder="Owner Code (e.g. OWNXYZ123)"
                   className={`w-full px-4 py-3 border rounded-2xl text-sm font-mono focus:outline-none ${t.inp}`}
                   style={{display:"block",width:"100%"}}/>
-                <p className={`text-xs mt-1 ${t.sub}`}>💡 Get from your vehicle owner</p>
+                <p className={`text-xs mt-1 ${t.sub}`}> Get from your vehicle owner</p>
               </div>
             )}
             {role!=="admin"&&(
@@ -989,28 +1067,29 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
                 style={{background:kycData?(dark?"#14532d":"#f0fdf4"):(dark?"#1e3a5f":"#eff6ff")}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:20}}>{kycData?.type==="passport"?"🛂":"🪪"}</span>
+                    <span style={{fontSize:20}}>{kycData?.type==="passport"?"":""}</span>
                     <div>
                       <p style={{fontWeight:900,fontSize:13,color:kycData?"#16a34a":"#2563eb"}}>
-                        {kycData?"Identity Verified ✅":"Identity Verification"}
+                        {kycData?"Identity Verified ":"Identity Verification"}
                       </p>
                       <p className={`text-xs ${t.sub}`}>
                         {kycData?`${kycData.type==="ghana"?"Ghana Card":"Passport"}: ${kycData.docNumber}`
-                          :"Ghana Card or Passport · All nationalities welcome"}
+                          :"Ghana Card or Passport  All nationalities welcome"}
                       </p>
                     </div>
                   </div>
                   {kycData
                     ?<CheckCircle style={{width:20,height:20,color:"#16a34a"}}/>
-                    :<button onClick={()=>setStep("kyc")} style={{padding:"6px 12px",background:"#2563eb",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12}}>Verify →</button>
+                    :<button onClick={()=>setStep("kyc")} style={{padding:"6px 12px",background:"#2563eb",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12}}>Verify </button>
                   }
                 </div>
+                {!kycData&&<p className={`text-xs mt-2 ${t.sub}`}> International visitors welcome  use your passport  Required for fintech & Pay Later</p>}
               </div>
             )}
             <button onClick={sendOtp} disabled={loading||otpCooldown>0}
               style={{width:"100%",background:otpCooldown>0?"#9ca3af":"#16a34a",color:"#fff",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:(loading||otpCooldown>0)?0.7:1}}>
               {loading&&<Spin/>}
-              {loading?"Sending…":otpCooldown>0?"Resend in "+otpCooldown+"s":"Get OTP via SMS 📱"}
+              {loading?"Sending":otpCooldown>0?"Resend in "+otpCooldown+"s":"Get OTP via SMS "}
             </button>
             <p className={`text-xs text-center ${t.sub}`}>Demo mode: use 000000 as OTP code</p>
           </div>
@@ -1019,19 +1098,19 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
         {step==="otp"&&(
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             <p className={`text-sm text-center ${t.sub}`}>Code sent to {phone}</p>
-            <input value={otp} onChange={e=>setOtp(e.target.value)} maxLength={6} placeholder="● ● ● ● ● ●"
+            <input value={otp} onChange={e=>setOtp(e.target.value)} maxLength={6} placeholder="     "
               className={`w-full px-4 py-4 border rounded-2xl text-2xl text-center font-black focus:outline-none focus:ring-2 focus:ring-green-500 ${t.inp}`}
               style={{display:"block",width:"100%",letterSpacing:"0.4em"}}/>
             <button onClick={verifyOtp} disabled={loading}
               style={{width:"100%",background:"#16a34a",color:"#fff",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:loading?0.6:1}}>
-              {loading&&<Spin/>}{loading?"Verifying…":"Verify & Enter ✅"}
+              {loading&&<Spin/>}{loading?"Verifying":"Verify & Enter "}
             </button>
-            <button onClick={()=>setStep("phone")} className={`w-full py-2 text-sm ${t.sub}`}>← Back</button>
+            <button onClick={()=>setStep("phone")} className={`w-full py-2 text-sm ${t.sub}`}> Back</button>
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-3 mt-6">
-          {[["🪪","Ghana Card KYC"],["🌍","Intl Passport"],["🏦","Savings 8% p.a."],["💳","Earnings Loans"],["🛡️","Insurance"],["⏳","Pay Later"]].map(([i,l])=>(
+          {[["","Ghana Card KYC"],["","Intl Passport"],["","Savings 8% p.a."],["","Earnings Loans"],["","Insurance"],["","Pay Later"]].map(([i,l])=>(
             <div key={l} className={`${t.card} rounded-2xl p-3 flex items-center gap-2 border ${t.bdr}`}>
               <span style={{fontSize:18}}>{i}</span>
               <span className={`text-xs font-semibold ${t.text}`}>{l}</span>
@@ -1043,8 +1122,7 @@ function AuthScreen({onLogin,dark,apiStatus="checking"}) {
     </div>
   );
 }
-
-// ── PASSENGER APP ──────────────────────────────────────
+//  PASSENGER APP 
 function PassengerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("home");
@@ -1065,21 +1143,26 @@ function PassengerApp({user,onLogout,dark,setDark}) {
   const [showKyc,setShowKyc]=useState(!user.kycData&&!user.ghanaCard);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
+  // Smart pricing: distance + time + surge + vehicle type
   useEffect(()=>{
     if(!pickup||!dest){setFare(null);return;}
     const v=VEHICLES.find(v=>v.id===vehicle);
+    // Distance matrix for known Eastern Region routes (production: use Google Maps API)
     const DIST = {
       'Akosombo-Atimpoku':4.2,'Akosombo-Senchi':5.1,'Akosombo-Kpong':18,'Akosombo-Koforidua':62,
       'Atimpoku-Kpong':14,'Kpong-Odumase-Krobo':8,'Odumase-Krobo-Somanya':12,'Somanya-Koforidua':28,
+      'Akosombo-Adjena':3.2,'Akosombo-Frankadua':7,'Kpong-Agormanya':6,'Agormanya-Nkurakan':15,
     };
-    const key1=pickup+'-'+dest, key2=dest+'-'+pickup;
-    const baseKm=DIST[key1]||DIST[key2]||parseFloat((2+Math.random()*20).toFixed(1));
-    const hr=new Date().getHours();
-    const surge=(hr>=7&&hr<=9)||(hr>=17&&hr<=19)?1.3:(hr>=22||hr<=5)?1.5:1.0;
-    const baseFare=baseKm*v.rate;
-    const totalFare=parseFloat((baseFare*surge+2).toFixed(2));
-    const dur=Math.ceil(baseKm*(vehicle==='okada'?2.8:vehicle==='bicycle'?5:3));
-    setFare({km:baseKm,total:totalFare,dur,surge,breakdown:{base:parseFloat(baseFare.toFixed(2)),surgeLabel:surge>1?(surge===1.5?'Late Night':'Rush Hour'):'Normal'}});
+    const key1 = pickup+'-'+dest;
+    const key2 = dest+'-'+pickup;
+    const baseKm = DIST[key1]||DIST[key2]||parseFloat((2+Math.random()*20).toFixed(1));
+    // Time-of-day surge (7-9am, 5-7pm = 1.3x)
+    const hr = new Date().getHours();
+    const surge = (hr>=7&&hr<=9)||(hr>=17&&hr<=19) ? 1.3 : (hr>=22||hr<=5) ? 1.5 : 1.0;
+    const baseFare = baseKm * v.rate;
+    const totalFare = parseFloat((baseFare * surge + 2).toFixed(2)); // GH2 base flag
+    const dur = Math.ceil(baseKm * (vehicle==='okada'?2.8:vehicle==='bicycle'?5:3));
+    setFare({km:baseKm, total:totalFare, dur, surge, breakdown:{base:parseFloat(baseFare.toFixed(2)),surgeLabel:surge>1?(surge===1.5?'Late Night':'Rush Hour'):'Normal'}});
   },[pickup,dest,vehicle]);
 
   useEffect(()=>{
@@ -1100,10 +1183,10 @@ function PassengerApp({user,onLogout,dark,setDark}) {
   const bookRide=async()=>{
     if(!pickup||!dest){toast$("Enter pickup & destination","error");return;}
     setLoading(true);setStatus("searching");
-    try{await api.requestRide({userId:user.id,pickupLocation:{address:pickup,latitude:6.0998,longitude:0.1},destination:{address:dest,latitude:6.15,longitude:0.15},rideType:vehicle});}catch(err){console.warn(err);}
+    try{await api.requestRide({userId:user.id,pickupLocation:{address:pickup,latitude:6.0998,longitude:0.1},destination:{address:dest,latitude:6.15,longitude:0.15},rideType:vehicle});}catch(err){ console.warn("Error:",err); }
     setTimeout(()=>{
       const v=VEHICLES.find(v=>v.id===vehicle);
-      setDriver({name:"Kwame Asante",phone:"+233241234567",rating:4.9,vehicle:v.label,icon:v.icon,plate:"ER-1234-26",photo:"👨🏿‍🦱",rides:1247,id:"drv_001"});
+      setDriver({name:"Kwame Asante",phone:"+233241234567",rating:4.9,vehicle:v.label,icon:v.icon,plate:"ER-1234-26",photo:"",rides:1247,id:"drv_001"});
       setStatus("matched");setEta(180);toast$(`${v.label} driver matched! ${v.icon}`);
     },3500);
     setLoading(false);
@@ -1113,7 +1196,7 @@ function PassengerApp({user,onLogout,dark,setDark}) {
 
   const Nav=()=>(
     <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`} style={{display:"flex",justifyContent:"space-around",padding:"6px 0",zIndex:30}}>
-      {[["home","🏠","Home"],["maas","📅","Schedule"],["rental","🚗","Rental"],["delivery","📦","Deliver"],["fintech","💎","Fintech"],["history","📋","History"],["profile","👤","Me"]].map(([v,ic,lb])=>(
+      {[["home","","Home"],["maas","","Schedule"],["share","🤝","Share"],["rental","","Rental"],["delivery","","Deliver"],["fintech","","Fintech"],["history","","History"],["profile","","Me"]].map(([v,ic,lb])=>(
         <button key={v} onClick={()=>setView(v)} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"4px 10px",color:view===v?"#16a34a":dark?"#9ca3af":"#6b7280"}}>
           <span style={{fontSize:18}}>{ic}</span><span style={{fontSize:10,fontWeight:700,marginTop:1}}>{lb}</span>
         </button>
@@ -1125,16 +1208,17 @@ function PassengerApp({user,onLogout,dark,setDark}) {
     <div className={`max-w-md mx-auto min-h-screen relative ${t.bg}`}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div style={{background:"#16a34a",color:"#fff",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:20}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}>🏍️</span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:18}}>Okada Online</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}></span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:18}}>Okada Online</span></div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <button onClick={()=>setDark(!dark)} style={{padding:6,borderRadius:8,background:"rgba(255,255,255,0.15)"}}>{dark?<Sun className="w-4 h-4"/>:<Moon className="w-4 h-4"/>}</button>
-          <div style={{width:32,height:32,borderRadius:"50%",background:"#15803d",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{user.profilePhoto||"👤"}</div>
+          <div style={{width:32,height:32,borderRadius:"50%",background:"#15803d",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{user.profilePhoto||""}</div>
         </div>
       </div>
 
       <div style={{paddingBottom:80}}>
         {view==="fintech"&&<FintechHub user={user} role="passenger" dark={dark}/>}
         {view==="maas"&&<ScheduledTrips user={user} dark={dark} onBack={()=>setView("home")}/>}
+        {view==="share"&&<ShareRide user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="rental"&&<RentalHub user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="delivery"&&<DeliveryApp user={user} dark={dark} onBack={()=>setView("home")}/>}
 
@@ -1142,88 +1226,86 @@ function PassengerApp({user,onLogout,dark,setDark}) {
           <div style={{padding:16}}>
             {user.isInternational&&(
               <div style={{background:"linear-gradient(135deg,#7c3aed,#4f46e5)",borderRadius:16,padding:"12px 14px",marginBottom:12,color:"#fff",display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:24}}>🌍</span>
+                <span style={{fontSize:24}}></span>
                 <div>
-                  <p style={{fontWeight:700,fontSize:13}}>Welcome to Ghana! 🇬🇭</p>
-                  <p style={{fontSize:11,color:"#c7d2fe"}}>Passport verified · Pay Later enabled</p>
+                  <p style={{fontWeight:700,fontSize:13}}>Welcome to Ghana! </p>
+                  <p style={{fontSize:11,color:"#c7d2fe"}}>Passport verified  {user.passport?.country} visitor  Pay Later enabled</p>
                 </div>
               </div>
             )}
             <div className={`${t.card} rounded-2xl border ${t.bdr}`} style={{height:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",marginBottom:12,position:"relative",background:dark?"#1f2937":"linear-gradient(135deg,#f0fdf4,#eff6ff)"}}>
-              <span style={{fontSize:40}}>{status==="ongoing"?"🏍️":"🗺️"}</span>
-              <p className={`text-xs font-semibold mt-2 ${t.sub}`}>{status==="idle"?"Akosombo · Eastern Region":status==="searching"?"Finding drivers…":status==="matched"?"Driver on the way! 🏍️":status==="arrived"?"Driver arrived!":status==="ongoing"?"Ride in progress":"Done ✅"}</p>
-              <div style={{position:"absolute",top:8,right:8}}><Badge color="green">● GPS Live</Badge></div>
+              <span style={{fontSize:40}}>{status==="ongoing"?"":""}</span>
+              <p className={`text-xs font-semibold mt-2 ${t.sub}`}>{status==="idle"?"Akosombo  Eastern Region":status==="searching"?"Finding drivers":status==="matched"?"Driver on the way! ":status==="arrived"?"Driver arrived!":status==="ongoing"?"Ride in progress":"Done "}</p>
+              <div style={{position:"absolute",top:8,right:8}}><Badge color="green"> GPS Live</Badge></div>
             </div>
 
             <div className={`${t.card} rounded-2xl shadow p-4 border ${t.bdr}`} style={{display:"flex",flexDirection:"column",gap:12}}>
-              <h2 className={`font-black text-base ${t.text}`}>📍 Book Your Ride</h2>
-              {status==="idle"&&(
-                <>
-                  <div style={{position:"relative"}}>
-                    <MapPin style={{position:"absolute",left:12,top:13,width:16,height:16,color:"#16a34a"}}/>
-                    <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="Pickup location"
-                      className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{paddingLeft:36,display:"block",width:"100%"}}/>
-                  </div>
-                  <div style={{position:"relative"}}>
-                    <Navigation style={{position:"absolute",left:12,top:13,width:16,height:16,color:"#ef4444"}}/>
-                    <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="Destination"
-                      className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{paddingLeft:36,display:"block",width:"100%"}}/>
-                  </div>
-                  <datalist id="locs">{LOCS.map(l=><option key={l} value={l}/>)}</datalist>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-                    {VEHICLES.map(v=>(
-                      <button key={v.id} onClick={()=>setVehicle(v.id)}
-                        style={{padding:"10px 4px",borderRadius:12,border:`2px solid ${vehicle===v.id?"#16a34a":"#e5e7eb"}`,background:vehicle===v.id?"#f0fdf4":"transparent",textAlign:"center"}}>
-                        <div style={{fontSize:20}}>{v.icon}</div>
-                        <div style={{fontSize:10,fontWeight:700,color:vehicle===v.id?"#16a34a":dark?"#9ca3af":"#6b7280",marginTop:2}}>{v.label}</div>
-                      </button>
-                    ))}
-                  </div>
-                  {fare&&(
-                    <div style={{background:dark?"#14532d":"#f0fdf4",borderRadius:12,padding:12,border:"1px solid #bbf7d0",fontSize:13}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                        <span className={t.sub}>Distance</span><span className={`font-semibold ${t.text}`}>{fare.km} km · ~{fare.dur} min</span>
-                      </div>
-                      <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,borderTop:`1px solid ${dark?"#166534":"#bbf7d0"}`}}>
-                        <span className={`font-black ${t.text}`}>Total Fare</span>
-                        <span style={{fontWeight:900,color:"#16a34a",fontSize:18}}>GH₵{fare.total}</span>
-                      </div>
+              <h2 className={`font-black text-base ${t.text}`}> Book Your Ride</h2>
+              {status==="idle"&&<>
+                <div style={{position:"relative"}}>
+                  <MapPin style={{position:"absolute",left:12,top:13,width:16,height:16,color:"#16a34a"}}/>
+                  <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="Pickup location"
+                    className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{paddingLeft:36,display:"block",width:"100%"}}/>
+                </div>
+                <div style={{position:"relative"}}>
+                  <Navigation style={{position:"absolute",left:12,top:13,width:16,height:16,color:"#ef4444"}}/>
+                  <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="Destination"
+                    className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{paddingLeft:36,display:"block",width:"100%"}}/>
+                </div>
+                <datalist id="locs">{LOCS.map(l=><option key={l} value={l}/>)}</datalist>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                  {VEHICLES.map(v=>(
+                    <button key={v.id} onClick={()=>setVehicle(v.id)}
+                      style={{padding:"10px 4px",borderRadius:12,border:`2px solid ${vehicle===v.id?"#16a34a":"#e5e7eb"}`,background:vehicle===v.id?"#f0fdf4":"transparent",textAlign:"center"}}>
+                      <div style={{fontSize:20}}>{v.icon}</div>
+                      <div style={{fontSize:10,fontWeight:700,color:vehicle===v.id?"#16a34a":dark?"#9ca3af":"#6b7280",marginTop:2}}>{v.label}</div>
+                    </button>
+                  ))}
+                </div>
+                {fare&&(
+                  <div style={{background:dark?"#14532d":"#f0fdf4",borderRadius:12,padding:12,border:"1px solid #bbf7d0",fontSize:13}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span className={t.sub}>Distance</span><span className={`font-semibold ${t.text}`}>{fare.km} km  ~{fare.dur} min</span>
                     </div>
-                  )}
-                  <button onClick={bookRide} disabled={!pickup||!dest||loading}
-                    style={{width:"100%",background:"#16a34a",color:"#fff",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:(!pickup||!dest||loading)?0.4:1}}>
-                    {loading&&<Spin/>}{loading?"Booking…":`Book ${VEHICLES.find(v=>v.id===vehicle)?.label} ${VEHICLES.find(v=>v.id===vehicle)?.icon}`}
-                  </button>
-                </>
-              )}
+                    <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,borderTop:`1px solid ${dark?"#166534":"#bbf7d0"}`}}>
+                      <span className={`font-black ${t.text}`}>Total Fare</span>
+                      <span style={{fontWeight:900,color:"#16a34a",fontSize:18}}>GH{fare.total}</span>
+                    </div>
+                  </div>
+                )}
+                <button onClick={bookRide} disabled={!pickup||!dest||loading}
+                  style={{width:"100%",background:"#16a34a",color:"#fff",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:(!pickup||!dest||loading)?0.4:1}}>
+                  {loading&&<Spin/>}{loading?"Booking":`Book ${VEHICLES.find(v=>v.id===vehicle)?.label} ${VEHICLES.find(v=>v.id===vehicle)?.icon}`}
+                </button>
+              </>}
 
               {status==="searching"&&(
                 <div style={{textAlign:"center",padding:"24px 0"}}>
                   <div style={{width:48,height:48,border:"4px solid #16a34a",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
-                  <p className={`font-bold ${t.text}`}>Finding your driver…</p>
+                  <p className={`font-bold ${t.text}`}>Finding your driver</p>
                   <button onClick={()=>setStatus("idle")} style={{marginTop:16,padding:"8px 20px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontSize:13,fontWeight:700}}>Cancel</button>
                 </div>
               )}
 
               {(status==="matched"||status==="arrived")&&driver&&(
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {status==="arrived"&&<div style={{background:"#16a34a",color:"#fff",borderRadius:12,padding:"8px",textAlign:"center",fontWeight:700,fontSize:13}}>🏍️ Driver has arrived!</div>}
+                  {status==="arrived"&&<div style={{background:"#16a34a",color:"#fff",borderRadius:12,padding:"8px",textAlign:"center",fontWeight:700,fontSize:13}}> Driver has arrived!</div>}
                   <div style={{display:"flex",alignItems:"center",gap:12,padding:12,borderRadius:12,background:dark?"#374151":"#f9fafb"}}>
                     <div style={{width:52,height:52,borderRadius:"50%",background:"#dcfce7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{driver.photo}</div>
                     <div style={{flex:1}}>
                       <p className={`font-black ${t.text}`}>{driver.name}</p>
-                      <p className={`text-xs ${t.sub}`}>{driver.icon} {driver.vehicle} · {driver.plate}</p>
+                      <p className={`text-xs ${t.sub}`}>{driver.icon} {driver.vehicle}  {driver.plate}</p>
                       <div style={{display:"flex",alignItems:"center",gap:4,marginTop:2}}>
                         <Star style={{width:12,height:12,fill:"#facc15",color:"#facc15"}}/>
-                        <span className={`text-xs ${t.sub}`}>{driver.rating} · {driver.rides} rides</span>
+                        <span className={`text-xs ${t.sub}`}>{driver.rating}  {driver.rides} rides</span>
                       </div>
                     </div>
                     {status==="matched"&&<div style={{textAlign:"center"}}><p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>{Math.floor(eta/60)}:{String(eta%60).padStart(2,"0")}</p><p className={`text-xs ${t.sub}`}>ETA</p></div>}
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                     <button onClick={()=>setStatus("idle")} style={{padding:"10px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}>Cancel</button>
-                    <a href={`tel:${driver.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                    <button onClick={()=>setStatus("ongoing")} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>Start →</button>
+                    <a href={`tel:${driver.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}> Call</a>
+                    <button onClick={()=>setStatus("ongoing")} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>Start </button>
                   </div>
                 </div>
               )}
@@ -1231,54 +1313,55 @@ function PassengerApp({user,onLogout,dark,setDark}) {
               {status==="ongoing"&&driver&&(
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{background:"#2563eb",color:"#fff",borderRadius:12,padding:"8px",textAlign:"center",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-                    <div style={{width:8,height:8,borderRadius:"50%",background:"#fff"}}/>Ride in progress
+                    <div style={{width:8,height:8,borderRadius:"50%",background:"#fff",animation:"pulse 2s infinite"}}/>Ride in progress
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:12,borderRadius:12,background:dark?"#374151":"#f9fafb"}}>
                     <div style={{display:"flex",alignItems:"center",gap:10}}>
                       <span style={{fontSize:24}}>{driver.photo}</span>
                       <div><p className={`font-bold ${t.text}`}>{driver.name}</p><p className={`text-xs ${t.sub}`}>{driver.plate}</p></div>
                     </div>
-                    <p style={{fontWeight:900,color:"#16a34a",fontSize:18}}>GH₵{fare?.total}</p>
+                    <p style={{fontWeight:900,color:"#16a34a",fontSize:18}}>GH{fare?.total}</p>
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                    <button onClick={()=>toast$("🚨 Emergency services notified!","error")} style={{padding:"12px",background:"#dc2626",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                    <button onClick={()=>toast$(" Emergency services notified!","error")} style={{padding:"12px",background:"#dc2626",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
                       <AlertCircle style={{width:16,height:16}}/> SOS
                     </button>
-                    <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Pay 💳</button>
+                    <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Pay </button>
                   </div>
                 </div>
               )}
-
               {payStatus==="paid"&&(
                 <div style={{textAlign:"center",padding:"16px 0"}}>
-                  <div style={{fontSize:48,marginBottom:8}}>✅</div>
+                  <div style={{fontSize:48,marginBottom:8}}></div>
                   <p className={`font-black ${t.text}`}>Payment Complete!</p>
+                  <p className={`text-xs ${t.sub} mt-1`}>Thanks for riding Okada Online </p>
                 </div>
               )}
             </div>
           </div>
         )}
 
+        {/*  Payment Sheet  */}
         {payStatus==="selecting"&&fare&&(
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:60,display:"flex",alignItems:"flex-end",maxWidth:448,margin:"0 auto"}}>
             <div className={`${t.card} rounded-t-3xl p-6 w-full shadow-2xl`} style={{maxHeight:"90vh",overflowY:"auto"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                <h3 className={`text-lg font-black ${t.text}`}>💳 Pay for Ride</h3>
+                <h3 className={`text-lg font-black ${t.text}`}> Pay for Ride</h3>
                 <button onClick={()=>setPayStatus("idle")}><X style={{width:20,height:20,color:"#9ca3af"}}/></button>
               </div>
-              <p className={`text-xs ${t.sub} mb-3`}>{pickup} → {dest}</p>
+              <p className={`text-xs ${t.sub} mb-3`}>{pickup}  {dest}</p>
               <div style={{background:dark?"#14532d":"#f0fdf4",borderRadius:12,padding:12,marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <span className={`font-semibold ${t.text}`}>Total</span>
-                <span style={{fontWeight:900,color:"#16a34a",fontSize:22}}>GH₵{fare.total}</span>
+                <span style={{fontWeight:900,color:"#16a34a",fontSize:22}}>GH{fare.total}</span>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
                 {[
-                  {id:"mtn",      label:"MTN Mobile Money",   icon:"📱",color:"#ffcc00"},
-                  {id:"vodafone", label:"Vodafone Cash",       icon:"📲",color:"#e60000"},
-                  {id:"airtel",   label:"AirtelTigo Money",    icon:"💳",color:"#ef4444"},
-                  {id:"card",     label:"Credit / Debit Card", icon:"🏦",color:"#2563eb"},
-                  {id:"cash",     label:"Pay with Cash",       icon:"💵",color:"#16a34a"},
-                  ...(user.payLater?.eligible?[{id:"paylater",label:"Pay Later (7 days)",icon:"⏳",color:"#7c3aed"}]:[]),
+                  {id:"mtn",      label:"MTN Mobile Money",   icon:"🏍️",color:"#ffcc00",text:"#000"},
+                  {id:"vodafone", label:"Vodafone Cash",       icon:"🏍️",color:"#e60000",text:"#fff"},
+                  {id:"airtel",   label:"AirtelTigo Money",    icon:"🏍️",color:"#ef4444",text:"#fff"},
+                  {id:"card",     label:"Credit / Debit Card", icon:"🏍️",color:"#2563eb",text:"#fff"},
+                  {id:"cash",     label:"Pay with Cash",       icon:"🏍️",color:"#16a34a",text:"#fff"},
+                  ...(user.payLater?.eligible?[{id:"paylater",label:"Pay Later (7 days)",icon:"🏍️",color:"#7c3aed",text:"#fff"}]:[]),
                 ].map(m=>(
                   <button key={m.id} onClick={()=>setPayMethod(m.id)}
                     style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:14,border:`2px solid ${payMethod===m.id?m.color:"#e5e7eb"}`,background:payMethod===m.id?m.color+"18":"transparent",textAlign:"left"}}>
@@ -1289,34 +1372,53 @@ function PassengerApp({user,onLogout,dark,setDark}) {
                 ))}
               </div>
               {["mtn","vodafone","airtel"].includes(payMethod)&&(
-                <input value={momoPhone} onChange={e=>setMomoPhone(e.target.value)}
-                  className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",marginBottom:12}} placeholder="+233XXXXXXXXX"/>
+                <div style={{marginBottom:12}}>
+                  <p className={`text-xs font-bold mb-1 ${t.sub}`}>MOMO NUMBER</p>
+                  <input value={momoPhone} onChange={e=>setMomoPhone(e.target.value)}
+                    className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+                    style={{display:"block",width:"100%"}} placeholder="+233XXXXXXXXX"/>
+                </div>
               )}
               {payMethod==="card"&&(
-                <input value={email} onChange={e=>setEmail(e.target.value)} type="email"
-                  className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
-                  style={{display:"block",width:"100%",marginBottom:12}} placeholder="your@email.com"/>
+                <div style={{marginBottom:12}}>
+                  <p className={`text-xs font-bold mb-1 ${t.sub}`}>EMAIL</p>
+                  <input value={email} onChange={e=>setEmail(e.target.value)} type="email"
+                    className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`}
+                    style={{display:"block",width:"100%"}} placeholder="your@email.com"/>
+                </div>
+              )}
+              {payMethod==="cash"&&(
+                <div style={{background:dark?"#374151":"#f9fafb",borderRadius:12,padding:12,marginBottom:12}}>
+                  <p className={`font-bold text-sm ${t.text}`} style={{marginBottom:4}}> Pay driver directly</p>
+                  <p className={`text-xs ${t.sub}`}>Hand GH{fare.total} cash. Driver must confirm on their app before ride closes.</p>
+                </div>
+              )}
+              {payMethod==="paylater"&&(
+                <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:12,padding:12,marginBottom:12}}>
+                  <p style={{fontWeight:700,fontSize:13,color:"#7c3aed",marginBottom:4}}> Pay Later  7 day defer</p>
+                  <p className={`text-xs ${t.sub}`}>GH{fare.total} deducted from your Pay Later limit. Auto-charged to MoMo in 7 days.</p>
+                </div>
               )}
               <button disabled={!payMethod} onClick={async()=>{
                 if(!payMethod) return;
                 if(payMethod==="cash"){
                   setPayStatus("awaiting-driver");
-                  setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$("Cash confirmed by driver ✅");setTimeout(()=>setPayStatus("idle"),2500);},4000);
+                  setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$("Cash confirmed by driver ");setTimeout(()=>setPayStatus("idle"),2500);},4000);
                   return;
                 }
                 if(payMethod==="paylater"){
-                  try{await api.payLaterRequest("ride_"+Date.now(),user.id);}catch(err){console.warn(err);}
+                  try{await api.payLaterRequest("ride_"+Date.now(),user.id);}catch(err){ console.warn("Error:",err); }
                   setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");
-                  toast$(`GH₵${fare.total} deferred — Pay Later used ⏳`);setTimeout(()=>setPayStatus("idle"),3000);
+                  toast$(`GH${fare.total} deferred  Pay Later used `);setTimeout(()=>setPayStatus("idle"),3000);
                   return;
                 }
                 setPayStatus("processing");
-                try{await api.initPayment("ride_"+Date.now(),fare.total,email||user.phone+"@okada.gh",momoPhone);}catch(err){console.warn(err);}
-                setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$(`GH₵${fare.total} paid ✅`);setTimeout(()=>setPayStatus("idle"),3000);},2500);
+                try{await api.initPayment("ride_"+Date.now(),fare.total,email||user.phone+"@okada.gh",momoPhone);}catch(err){ console.warn("Error:",err); }
+                setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$(`GH${fare.total} paid via ${payMethod.toUpperCase()} `);setTimeout(()=>setPayStatus("idle"),3000);},2500);
               }} style={{width:"100%",padding:"14px",background:!payMethod?"#9ca3af":"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:!payMethod?0.5:1}}>
-                {payStatus==="processing"?<><Spin/>Processing…</>:payMethod==="cash"?`Notify Driver — GH₵${fare.total} Cash`:payMethod==="paylater"?`Defer GH₵${fare.total} — Pay Later`:`Pay GH₵${fare.total} via Paystack 🔒`}
+                {payStatus==="processing"?<><Spin/>Processing</>:payMethod==="cash"?`Notify Driver  GH${fare.total} Cash`:payMethod==="paylater"?`Defer GH${fare.total}  Pay Later`:`Pay GH${fare.total} via Paystack `}
               </button>
+              <p className={`text-xs text-center mt-2 ${t.sub}`}> Secured by Paystack  MTN  Vodafone  Airtel</p>
             </div>
           </div>
         )}
@@ -1325,18 +1427,18 @@ function PassengerApp({user,onLogout,dark,setDark}) {
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:60,display:"flex",alignItems:"center",justifyContent:"center",maxWidth:448,margin:"0 auto"}}>
             <div className={`${t.card} rounded-3xl p-8 mx-4 shadow-2xl`} style={{textAlign:"center"}}>
               <div style={{width:52,height:52,border:"4px solid #ca8a04",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
-              <p className={`font-black text-lg ${t.text}`}>Waiting for Driver…</p>
-              <p className={`text-sm mt-2 ${t.sub}`}>Driver must confirm GH₵{fare?.total} cash received</p>
+              <p className={`font-black text-lg ${t.text}`}>Waiting for Driver</p>
+              <p className={`text-sm mt-2 ${t.sub}`}>Driver must confirm GH{fare?.total} cash received</p>
             </div>
           </div>
         )}
 
         {view==="history"&&(
           <div style={{padding:16}}>
-            <h2 className={`font-black text-lg mb-4 ${t.text}`}>📋 Ride History</h2>
+            <h2 className={`font-black text-lg mb-4 ${t.text}`}> Ride History</h2>
             {history.length===0?(
               <div style={{textAlign:"center",padding:"48px 0"}}>
-                <div style={{fontSize:48,marginBottom:12}}>🛺</div>
+                <div style={{fontSize:48,marginBottom:12}}></div>
                 <p className={t.sub}>No rides yet</p>
                 <button onClick={()=>setView("home")} style={{marginTop:16,padding:"10px 24px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Book Now</button>
               </div>
@@ -1347,12 +1449,12 @@ function PassengerApp({user,onLogout,dark,setDark}) {
                     <div style={{display:"flex",alignItems:"center",gap:6,fontSize:13}}><MapPin style={{width:12,height:12,color:"#16a34a",flexShrink:0}}/><span className={`font-semibold ${t.text}`}>{r.from}</span></div>
                     <div style={{display:"flex",alignItems:"center",gap:6,fontSize:13}}><Navigation style={{width:12,height:12,color:"#ef4444",flexShrink:0}}/><span className={`font-semibold ${t.text}`}>{r.to}</span></div>
                     <div style={{display:"flex",gap:6,marginTop:2}}>
-                      <p className={`text-xs ${t.sub}`}>{r.date} · {r.driver}</p>
+                      <p className={`text-xs ${t.sub}`}>{r.date}  {r.driver}</p>
                       <Badge color={r.paid==="Pay Later"?"indigo":r.paid==="Cash"?"yellow":"green"}>{r.paid}</Badge>
                     </div>
                   </div>
                   <div style={{textAlign:"right",marginLeft:12}}>
-                    <p style={{fontWeight:900,color:"#16a34a"}}>GH₵{r.fare}</p>
+                    <p style={{fontWeight:900,color:"#16a34a"}}>GH{r.fare}</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:2,marginTop:4}}>
                       {[...Array(r.rating||5)].map((_,i)=><Star key={i} style={{width:11,height:11,fill:"#facc15",color:"#facc15"}}/>)}
                     </div>
@@ -1366,13 +1468,13 @@ function PassengerApp({user,onLogout,dark,setDark}) {
         {view==="profile"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:16}}>
             <div className={`${t.card} rounded-2xl p-6 border ${t.bdr}`} style={{textAlign:"center"}}>
-              <div style={{fontSize:52,marginBottom:8}}>{user.profilePhoto||"👤"}</div>
+              <div style={{fontSize:52,marginBottom:8}}>{user.profilePhoto||""}</div>
               <h2 className={`text-xl font-black ${t.text}`}>{user.name}</h2>
               <p className={t.sub}>{user.phone}</p>
               <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
-                <Badge color="green">✅ KYC Verified</Badge>
-                {user.isInternational&&<Badge color="indigo">🌍 {user.passport?.country}</Badge>}
-                {user.payLater?.eligible&&<Badge color="purple">⏳ Pay Later</Badge>}
+                <Badge color="green"> KYC Verified</Badge>
+                {user.isInternational&&<Badge color="indigo"> {user.passport?.country}</Badge>}
+                {user.payLater?.eligible&&<Badge color="purple"> Pay Later</Badge>}
               </div>
             </div>
             <button onClick={onLogout} style={{width:"100%",padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:16,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
@@ -1385,8 +1487,7 @@ function PassengerApp({user,onLogout,dark,setDark}) {
     </div>
   );
 }
-
-// ── DRIVER APP ─────────────────────────────────────────
+//  DRIVER APP 
 function DriverApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("home");
@@ -1403,79 +1504,101 @@ function DriverApp({user,onLogout,dark,setDark}) {
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
+  // Real-time ride requests via Firestore
   useEffect(()=>{
     if(!online||incoming||activeRide||cashConfirm) return;
-    let unsub=null;
-    const tryRealtime=async()=>{
-      try{
-        const q=query(collection(db,'rides'),where('status','==','searching'),where('vehicleType','==','okada'),orderBy('createdAt','desc'),limit(1));
-        unsub=onSnapshot(q,(snap)=>{
-          if(!snap.empty){
-            const docSnap=snap.docs[0];
-            const r=docSnap.data();
-            setIncoming({id:docSnap.id,passenger:r.passengerName||'Passenger',phone:r.passengerPhone||'',from:r.pickupLocation?.address||r.from||'Pickup',to:r.destination?.address||r.to||'Destination',dist:r.distance||'—',dur:r.duration||'—',fare:'GH₵'+(r.fare||r.total||'0'),earn:'GH₵'+((r.fare||r.total||0)*0.10).toFixed(2),payMethod:r.payMethod||'mtn'});
+    // Try real Firestore listener first
+    let unsub = null;
+    const tryRealtime = async () => {
+      try {
+        // db already imported at module level
+        const q = query(
+          collection(db, 'rides'),
+          where('status','==','searching'),
+          where('vehicleType','==','okada'),
+          orderBy('createdAt','desc'),
+          limit(1)
+        );
+        unsub = onSnapshot(q, (snap) => {
+          if(!snap.empty) {
+            const doc = snap.docs[0];
+            const r = doc.data();
+            setIncoming({
+              id: doc.id,
+              passenger: r.passengerName || 'Passenger',
+              phone: r.passengerPhone || '',
+              from: r.pickupLocation?.address || r.from || 'Pickup',
+              to: r.destination?.address || r.to || 'Destination',
+              dist: r.distance || '',
+              dur: r.duration || '',
+              fare: 'GH' + (r.fare || r.total || '0'),
+              earn: 'GH' + ((r.fare || r.total || 0) * 0.10).toFixed(2),
+              payMethod: r.payMethod || 'mtn',
+            });
           }
-        },()=>{
-          const tm=setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
-          return()=>clearTimeout(tm);
+        }, () => {
+          // Firestore unavailable  demo simulation fallback
+          const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH13.50',earn:'GH1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+          return ()=>clearTimeout(tm);
         });
-      }catch{
-        const tm=setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
-        return()=>clearTimeout(tm);
+      } catch(err) {
+        // Demo fallback
+        const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH13.50',earn:'GH1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+        return ()=>clearTimeout(tm);
       }
     };
     tryRealtime();
-    return()=>{if(unsub)unsub();};
+    return ()=>{ if(unsub) unsub(); };
   },[online,incoming,activeRide,cashConfirm]);
 
   useEffect(()=>{
-    if(!online)return;
+    if(!online) return;
     const iv=setInterval(()=>api.updateLocation(user.id,6.0998+Math.random()*0.01,0.1+Math.random()*0.01).catch(()=>{}),5000);
     return()=>clearInterval(iv);
   },[online,user.id]);
 
   useEffect(()=>{
-    if(!activeRide||activeRide.payMethod!=="cash")return;
+    if(!activeRide||activeRide.payMethod!=="cash") return;
     const tm=setTimeout(()=>setCashConfirm(activeRide),8000);
     return()=>clearTimeout(tm);
   },[activeRide]);
 
   const toggleOnline=async()=>{
-    try{await api.toggleOnline(user.id,!online,"okada");}catch(err){console.warn(err);}
+    try{await api.toggleOnline(user.id,!online,"okada");}catch(err){ console.warn("Error:",err); }
     setOnline(!online);
-    toast$(online?"You're offline":"Online! Waiting for rides 🏍️");
+    toast$(online?"You're offline":"Online! Waiting for rides ");
   };
 
   const accept=async()=>{
-    try{await api.acceptRide(incoming.id,user.id);}catch(err){console.warn(err);}
+    try{await api.acceptRide(incoming.id,user.id);}catch(err){ console.warn("Error:",err); }
     setActiveRide(incoming);setIncoming(null);
-    toast$("Ride accepted! Navigate to passenger 📍");
+    toast$("Ride accepted! Navigate to passenger ");
   };
 
   const confirmCash=async()=>{
-    const earned=parseFloat((cashConfirm.earn||"GH₵1.35").replace("GH₵",""));
-    try{await api.confirmCashPayment(cashConfirm.id,user.id);}catch(err){console.warn(err);}
+    const earned=parseFloat((cashConfirm.earn||"GH1.35").replace("GH",""));
+    try{await api.confirmCashPayment(cashConfirm.id,user.id);}catch(err){ console.warn("Error:",err); }
     setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
     setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
     setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
     setCashConfirm(null);setActiveRide(null);
-    toast$(`Cash confirmed! GH₵${earned.toFixed(2)} earned 💰`);
+    toast$(`Cash confirmed! GH${earned.toFixed(2)} earned `);
   };
 
   const complete=()=>{
-    const earned=parseFloat((activeRide.earn||"GH₵1.35").replace("GH₵",""));
+    const earned=parseFloat((activeRide.earn||"GH1.35").replace("GH",""));
     setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
     setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
     setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
     setActiveRide(null);
-    toast$(`Ride complete! +GH₵${earned.toFixed(2)} 💰`);
+    toast$(`Ride complete! +GH${earned.toFixed(2)} (24hr hold) `);
   };
 
   if(showKyc) return <KycVerify role="driver" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
   const Nav=()=>(
     <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`} style={{display:"flex",justifyContent:"space-around",padding:"6px 0",zIndex:30}}>
-      {[["home","🏠","Home"],["schedule","📅","Schedule"],["fintech","💎","Fintech"],["dto","🏍️","Own"],["earnings","💰","Earn"],["profile","👤","Me"]].map(([v,ic,lb])=>(
+      {[["home","","Home"],["pickups","📋","Pickups"],["fintech","","Fintech"],["dto","","Own"],["earnings","","Earn"],["profile","","Me"]].map(([v,ic,lb])=>(
         <button key={v} onClick={()=>setView(v)} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"4px 8px",color:view===v?"#16a34a":dark?"#9ca3af":"#6b7280"}}>
           <span style={{fontSize:18}}>{ic}</span><span style={{fontSize:10,fontWeight:700,marginTop:1}}>{lb}</span>
         </button>
@@ -1488,55 +1611,61 @@ function DriverApp({user,onLogout,dark,setDark}) {
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       {showWithdraw&&<WithdrawSheet available={wallet.available} pending={wallet.pending} userId={user.id} onClose={()=>setShowWithdraw(false)} dark={dark}/>}
 
+      {/* Cash confirm overlay */}
       {cashConfirm&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:60,display:"flex",alignItems:"center",justifyContent:"center",maxWidth:448,margin:"0 auto",padding:"0 20px"}}>
           <div className={`${t.card} rounded-3xl p-6 w-full shadow-2xl`}>
             <div style={{textAlign:"center",marginBottom:16}}>
-              <div style={{fontSize:44,marginBottom:8}}>💵</div>
+              <div style={{fontSize:44,marginBottom:8}}></div>
               <h3 className={`font-black text-lg ${t.text}`}>Cash Confirmation</h3>
               <p className={`text-sm ${t.sub} mt-1`}>{cashConfirm.passenger} says they paid cash</p>
             </div>
             <div style={{background:dark?"#374151":"#f0fdf4",borderRadius:14,padding:"16px",textAlign:"center",marginBottom:14}}>
-              <p style={{fontWeight:900,color:"#16a34a",fontSize:32}}>GH₵{cashConfirm.fare?.replace("GH₵","")}</p>
-              <p className={`text-xs ${t.sub}`}>{cashConfirm.from} → {cashConfirm.to}</p>
+              <p style={{fontWeight:900,color:"#16a34a",fontSize:32}}>GH{cashConfirm.fare?.replace("GH","")}</p>
+              <p className={`text-xs ${t.sub}`}>{cashConfirm.from}  {cashConfirm.to}</p>
+            </div>
+            <div style={{background:dark?"#1c1917":"#fef3c7",borderRadius:12,padding:"10px 12px",marginBottom:14,display:"flex",gap:8}}>
+              <AlertCircle style={{width:14,height:14,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
+              <p style={{fontSize:11,color:"#92400e"}}>Only confirm if cash physically received. Cannot be undone.</p>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={()=>{setCashConfirm(null);toast$("Dispute raised — admin will review","error");}}
-                style={{padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:14,fontWeight:700,fontSize:13}}>❌ Not Received</button>
-              <button onClick={confirmCash} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>✅ Confirm Cash</button>
+              <button onClick={()=>{setCashConfirm(null);toast$("Dispute raised  admin will review","error");}}
+                style={{padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:14,fontWeight:700,fontSize:13}}> Not Received</button>
+              <button onClick={confirmCash} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}> Confirm Cash</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Incoming ride */}
       {incoming&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:50,display:"flex",alignItems:"flex-end",maxWidth:448,margin:"0 auto"}}>
           <div className={`${t.card} rounded-t-3xl p-6 w-full shadow-2xl`}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-              <div><h3 className={`text-lg font-black ${t.text}`}>🏍️ New Ride!</h3><p className={t.sub} style={{fontSize:12}}>Respond in 30 seconds</p></div>
+              <div><h3 className={`text-lg font-black ${t.text}`}> New Ride!</h3><p className={t.sub} style={{fontSize:12}}>Respond in 30 seconds</p></div>
               <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
                 <Badge color="green">+{incoming.earn}</Badge>
-                <Badge color={incoming.payMethod==="cash"?"yellow":"blue"}>{incoming.payMethod==="cash"?"💵 Cash":"💳 MoMo"}</Badge>
+                <Badge color={incoming.payMethod==="cash"?"yellow":"blue"}>{incoming.payMethod==="cash"?" Cash":" MoMo"}</Badge>
               </div>
             </div>
             <div className={`${dark?"bg-gray-700":"bg-gray-50"} rounded-2xl p-3 mb-4`} style={{display:"flex",flexDirection:"column",gap:8,fontSize:13}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}><MapPin style={{width:14,height:14,color:"#16a34a"}}/><span className={t.text}>{incoming.from}</span></div>
               <div style={{display:"flex",alignItems:"center",gap:8}}><Navigation style={{width:14,height:14,color:"#ef4444"}}/><span className={t.text}>{incoming.to}</span></div>
               <div style={{display:"flex",gap:16,paddingTop:4}}>
-                <span className={t.sub}>📏 {incoming.dist}</span><span className={t.sub}>⏱️ {incoming.dur}</span>
+                <span className={t.sub}> {incoming.dist}</span><span className={t.sub}> {incoming.dur}</span>
                 <span style={{color:"#16a34a",fontWeight:700}}>{incoming.fare}</span>
               </div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <button onClick={()=>setIncoming(null)} style={{padding:"14px",border:"1px solid #f87171",color:"#ef4444",borderRadius:16,fontWeight:700}}>Decline</button>
-              <button onClick={accept} style={{padding:"14px",background:"#16a34a",color:"#fff",borderRadius:16,fontWeight:700}}>Accept ✅</button>
+              <button onClick={accept} style={{padding:"14px",background:"#16a34a",color:"#fff",borderRadius:16,fontWeight:700}}>Accept </button>
             </div>
           </div>
         </div>
       )}
 
       <div style={{background:"#166534",color:"#fff",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:20}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}>🏍️</span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900}}>Driver Portal</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}></span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900}}>Driver Portal</span></div>
         <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",borderRadius:999,background:online?"#16a34a":"#4b5563",fontSize:11,fontWeight:900}}>
           <div style={{width:7,height:7,borderRadius:"50%",background:online?"#fff":"#9ca3af"}}/>{online?"ONLINE":"OFFLINE"}
         </div>
@@ -1544,22 +1673,24 @@ function DriverApp({user,onLogout,dark,setDark}) {
 
       <div style={{paddingBottom:80}}>
         {view==="fintech"&&<FintechHub user={user} role="driver" dark={dark}/>}
-        {view==="schedule"&&<ScheduledTrips user={user} dark={dark} onBack={()=>setView("home")}/>}
+        {view==="pickups"&&<DriverPickups user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="dto"&&<DriveToOwn user={user} role="driver" dark={dark} onBack={()=>setView("home")}/>}
 
         {view==="home"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div className={`${t.card} rounded-2xl border ${t.bdr}`} style={{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",position:"relative",background:dark?"#1f2937":"#f0fdf4"}}>
-              <span style={{fontSize:44}}>{online?"🏍️":"⏸️"}</span>
-              <p className={`text-sm font-semibold mt-2 ${t.sub}`}>{online?"Broadcasting GPS…":"Go online to earn"}</p>
-              {online&&<div style={{position:"absolute",top:8,right:8}}><Badge color="green">● Live</Badge></div>}
+              <span style={{fontSize:44}}>{online?"":""}</span>
+              <p className={`text-sm font-semibold mt-2 ${t.sub}`}>{online?"Broadcasting GPS":"Go online to earn"}</p>
+              {online&&<div style={{position:"absolute",top:8,right:8}}><Badge color="green"> Live</Badge></div>}
             </div>
             <button onClick={toggleOnline} style={{width:"100%",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,color:"#fff",background:online?"#dc2626":"#16a34a"}}>
-              {online?"🔴 Go Offline":"🟢 Go Online — Start Earning"}
+              {online?" Go Offline":" Go Online  Start Earning"}
             </button>
+
+            {/* Wallet */}
             <div className={`${t.card} rounded-2xl p-4 border-2 border-green-500`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <p style={{color:"#16a34a",fontWeight:900,fontSize:13}}>💰 My Wallet</p>
+                <p style={{color:"#16a34a",fontWeight:900,fontSize:13}}> My Wallet</p>
                 <button onClick={()=>setShowWithdraw(true)} style={{padding:"6px 12px",background:"#16a34a",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
                   <ArrowDownCircle style={{width:12,height:12}}/> Withdraw
                 </button>
@@ -1567,54 +1698,62 @@ function DriverApp({user,onLogout,dark,setDark}) {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div style={{background:"#f0fdf4",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#16a34a",fontWeight:700}}>AVAILABLE</p>
-                  <p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>GH₵{wallet.available.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>GH{wallet.available.toFixed(2)}</p>
                 </div>
                 <div style={{background:dark?"#374151":"#fefce8",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
-                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH₵{wallet.pending.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH{wallet.pending.toFixed(2)}</p>
                 </div>
               </div>
             </div>
+
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="💰" label="Today" value={"GH₵"+earnings.today} color="green" dark={dark}/>
-              <StatCard icon="🏍️" label="Rides" value={earnings.rides} color="blue" dark={dark}/>
+              <StatCard icon="" label="Today" value={"GH"+earnings.today} color="green" dark={dark}/>
+              <StatCard icon="" label="Rides" value={earnings.rides} color="blue" dark={dark}/>
             </div>
+
             {activeRide&&(
               <div className={`${t.card} rounded-2xl p-4 border-2 border-green-500`}>
-                <p style={{color:"#16a34a",fontWeight:900,fontSize:13,marginBottom:10}}>● Active Ride</p>
+                <p style={{color:"#16a34a",fontWeight:900,fontSize:13,marginBottom:10}}> Active Ride</p>
                 <div style={{background:dark?"#374151":"#f9fafb",borderRadius:12,padding:12,marginBottom:10,display:"flex",flexDirection:"column",gap:6,fontSize:13}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}><MapPin style={{width:12,height:12,color:"#16a34a"}}/><span className={t.text}>{activeRide.from}</span></div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}><Navigation style={{width:12,height:12,color:"#ef4444"}}/><span className={t.text}>{activeRide.to}</span></div>
                   <div style={{display:"flex",justifyContent:"space-between"}}>
                     <span style={{color:"#16a34a",fontWeight:700}}>Earn: {activeRide.earn}</span>
-                    <Badge color={activeRide.payMethod==="cash"?"yellow":"blue"}>{activeRide.payMethod==="cash"?"💵 Cash":"💳 MoMo"}</Badge>
+                    <Badge color={activeRide.payMethod==="cash"?"yellow":"blue"}>{activeRide.payMethod==="cash"?" Cash":" MoMo"}</Badge>
                   </div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <a href={`tel:${activeRide.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                  <button onClick={complete} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>✅ Complete</button>
+                  <a href={`tel:${activeRide.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}> Call</a>
+                  <button onClick={complete} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}> Complete</button>
                 </div>
               </div>
             )}
+
+            {/* Fuel Pool */}
             <div className={`${t.card} rounded-2xl p-4 border-2 border-yellow-500`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:22}}>⛽</span><span className={`font-black ${t.text}`}>Fuel Pool</span></div>
-                <span style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH₵{(earnings.total*0.05).toFixed(2)}</span>
+                <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:22}}></span><span className={`font-black ${t.text}`}>Fuel Pool</span></div>
+                <span style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH{(earnings.total*0.05).toFixed(2)}</span>
               </div>
+              <p className={`text-xs ${t.sub} mb-3`}>5% of every ride. Use at registered stations.</p>
               <button onClick={()=>setShowFuelCode(!showFuelCode)}
                 style={{width:"100%",padding:"10px",background:"#ca8a04",color:"#fff",borderRadius:12,fontWeight:900,fontSize:13}}>
-                {showFuelCode?"Hide Code":"⛽ Show Fuel Code"}
+                {showFuelCode?"Hide Code":" Show Fuel Code"}
               </button>
               {showFuelCode&&(
                 <div style={{marginTop:10,textAlign:"center",padding:"14px",background:dark?"#374151":"#fefce8",borderRadius:12,border:"2px dashed #ca8a04"}}>
+                  <p className={`text-xs ${t.sub} mb-1`}>Station code  valid 10 minutes</p>
                   <p style={{fontFamily:"monospace",fontSize:24,fontWeight:900,color:"#ca8a04",letterSpacing:"0.15em"}}>{fuelCode}</p>
                 </div>
               )}
             </div>
+
+            {/* Maintenance Pool */}
             <div className={`${t.card} rounded-2xl p-4 border-2 border-orange-500`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:22}}>🔧</span><span className={`font-black ${t.text}`}>Maintenance Pool</span></div>
-                <span style={{fontWeight:900,color:"#ea580c",fontSize:20}}>GH₵{(earnings.total*0.05).toFixed(2)}</span>
+                <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:22}}></span><span className={`font-black ${t.text}`}>Maintenance Pool</span></div>
+                <span style={{fontWeight:900,color:"#ea580c",fontSize:20}}>GH{(earnings.total*0.05).toFixed(2)}</span>
               </div>
               <p className={`text-xs ${t.sub}`}>5% auto-collected. Owner approves mechanic payments.</p>
             </div>
@@ -1624,17 +1763,31 @@ function DriverApp({user,onLogout,dark,setDark}) {
         {view==="earnings"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <h2 className={`font-black text-lg ${t.text}`}>💰 Earnings & Wallet</h2>
+              <h2 className={`font-black text-lg ${t.text}`}> Earnings & Wallet</h2>
               <button onClick={()=>setShowWithdraw(true)} style={{padding:"8px 12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
                 <ArrowDownCircle style={{width:12,height:12}}/> Withdraw
               </button>
             </div>
             <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`} style={{textAlign:"center"}}>
-              <p className={`text-sm ${t.sub}`}>Total Lifetime (your 25%)</p>
-              <p style={{fontSize:40,fontWeight:900,color:"#16a34a",margin:"4px 0"}}>GH₵{earnings.total}</p>
+              <p className={`text-sm ${t.sub}`}>Total Lifetime (your 10%)</p>
+              <p style={{fontSize:40,fontWeight:900,color:"#16a34a",margin:"4px 0"}}>GH{earnings.total}</p>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div className={`${t.card} rounded-2xl p-4 border-2 border-green-500`} style={{textAlign:"center"}}>
+                <p style={{fontSize:10,color:"#16a34a",fontWeight:700}}>AVAILABLE NOW</p>
+                <p style={{fontWeight:900,color:"#16a34a",fontSize:22}}>GH{wallet.available.toFixed(2)}</p>
+              </div>
+              <div className={`${t.card} rounded-2xl p-4 border-2 border-yellow-400`} style={{textAlign:"center"}}>
+                <p style={{fontSize:10,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
+                <p style={{fontWeight:900,color:"#ca8a04",fontSize:22}}>GH{wallet.pending.toFixed(2)}</p>
+              </div>
+            </div>
+            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`} style={{display:"flex",gap:8}}>
+              <Clock style={{width:16,height:16,color:"#ca8a04",flexShrink:0,marginTop:2}}/>
+              <p className={`text-xs ${t.sub}`}>Earnings held 24 hours before withdrawal  fraud protection, payment verification, dispute resolution. Your money is always safe and recorded.</p>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
-              {[["Today","GH₵"+earnings.today],["This Week","GH₵"+earnings.week],["Rides",earnings.rides]].map(([l,v])=>(
+              {[["Today","GH"+earnings.today],["This Week","GH"+earnings.week],["Rides",earnings.rides]].map(([l,v])=>(
                 <div key={l} className={`${t.card} rounded-2xl p-4 border ${t.bdr}`} style={{textAlign:"center"}}>
                   <p className={`text-lg font-black ${t.text}`}>{v}</p>
                   <p className={`text-xs ${t.sub}`}>{l}</p>
@@ -1647,11 +1800,12 @@ function DriverApp({user,onLogout,dark,setDark}) {
         {view==="profile"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div className={`${t.card} rounded-2xl p-6 border ${t.bdr}`} style={{textAlign:"center"}}>
-              <div style={{fontSize:52,marginBottom:8}}>{user.profilePhoto||"👨🏿"}</div>
+              <div style={{fontSize:52,marginBottom:8}}>{user.profilePhoto||""}</div>
               <h2 className={`text-xl font-black ${t.text}`}>{user.name}</h2>
               <p className={t.sub}>{user.phone}</p>
               <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
-                <Badge color="green">✅ KYC Verified</Badge>
+                <Badge color="green"> KYC Verified</Badge>
+                <Badge color="blue"> Ghana Card</Badge>
               </div>
               {user.ownerCode&&<p className={`text-xs mt-2 ${t.sub}`}>Owner: <span style={{fontFamily:"monospace",color:"#16a34a"}}>{user.ownerCode}</span></p>}
             </div>
@@ -1666,7 +1820,7 @@ function DriverApp({user,onLogout,dark,setDark}) {
   );
 }
 
-// ── OWNER APP ──────────────────────────────────────────
+//  OWNER APP 
 function OwnerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("dashboard");
@@ -1684,7 +1838,7 @@ function OwnerApp({user,onLogout,dark,setDark}) {
 
   const Nav=()=>(
     <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`} style={{display:"flex",justifyContent:"space-around",padding:"6px 0",zIndex:30}}>
-      {[["dashboard","📊","Dashboard"],["fintech","💎","Fintech"],["dto","🏍️","Own"],["fleet","🚗","Fleet"],["pools","⛽","Pools"]].map(([v,ic,lb])=>(
+      {[["dashboard","","Dashboard"],["fintech","","Fintech"],["dto","","Own"],["fleet","","Fleet"],["pools","","Pools"]].map(([v,ic,lb])=>(
         <button key={v} onClick={()=>setView(v)} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"4px 8px",color:view===v?"#2563eb":dark?"#9ca3af":"#6b7280"}}>
           <span style={{fontSize:18}}>{ic}</span><span style={{fontSize:10,fontWeight:700,marginTop:1}}>{lb}</span>
         </button>
@@ -1709,7 +1863,7 @@ function OwnerApp({user,onLogout,dark,setDark}) {
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-500`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <p style={{color:"#2563eb",fontWeight:900,fontSize:13}}>💰 My Wallet</p>
+                <p style={{color:"#2563eb",fontWeight:900,fontSize:13}}> My Wallet</p>
                 <button onClick={()=>setShowWithdraw(true)} style={{padding:"6px 12px",background:"#2563eb",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
                   <ArrowDownCircle style={{width:12,height:12}}/> Withdraw
                 </button>
@@ -1717,37 +1871,37 @@ function OwnerApp({user,onLogout,dark,setDark}) {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div style={{background:"#eff6ff",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#2563eb",fontWeight:700}}>AVAILABLE</p>
-                  <p style={{fontWeight:900,color:"#2563eb",fontSize:20}}>GH₵{wallet.available.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#2563eb",fontSize:20}}>GH{wallet.available.toFixed(2)}</p>
                 </div>
                 <div style={{background:dark?"#374151":"#fefce8",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
-                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH₵{wallet.pending.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH{wallet.pending.toFixed(2)}</p>
                 </div>
               </div>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-400`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div><p style={{color:"#2563eb",fontWeight:900,fontSize:13}}>🔑 Your Owner Code</p><p className={`text-xs ${t.sub}`}>Share with your drivers</p></div>
+                <div><p style={{color:"#2563eb",fontWeight:900,fontSize:13}}> Your Owner Code</p><p className={`text-xs ${t.sub}`}>Share with your drivers</p></div>
                 <button onClick={()=>setShowCode(!showCode)}>{showCode?<EyeOff style={{width:16,height:16,color:"#9ca3af"}}/>:<Eye style={{width:16,height:16,color:"#9ca3af"}}/>}</button>
               </div>
               {showCode?(
                 <div style={{display:"flex",gap:8}}>
                   <div className={`flex-1 px-4 py-3 border rounded-xl ${t.inp} font-mono font-black text-center text-lg`}>{user.ownerCode||"OWN??????"}</div>
-                  <button onClick={()=>{navigator.clipboard?.writeText(user.ownerCode||"");toast$("Copied! 📋");}} style={{padding:"12px",background:"#2563eb",color:"#fff",borderRadius:12}}><Copy style={{width:18,height:18}}/></button>
+                  <button onClick={()=>{navigator.clipboard?.writeText(user.ownerCode||"");toast$("Copied! ");}} style={{padding:"12px",background:"#2563eb",color:"#fff",borderRadius:12}}><Copy style={{width:18,height:18}}/></button>
                 </div>
               ):(
-                <div style={{textAlign:"center",padding:"12px 0",fontSize:28,fontFamily:"monospace",letterSpacing:"0.2em",color:dark?"#374151":"#d1d5db"}}>••••••</div>
+                <div style={{textAlign:"center",padding:"12px 0",fontSize:28,fontFamily:"monospace",letterSpacing:"0.2em",color:dark?"#374151":"#d1d5db"}}></div>
               )}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="💰" label="Today (50%)" value={"GH₵"+stats.todayRevenue} color="green" dark={dark}/>
-              <StatCard icon="📅" label="This Week" value={"GH₵"+stats.weekRevenue} color="blue" dark={dark}/>
-              <StatCard icon="🏆" label="Total Earned" value={"GH₵"+stats.totalRevenue} color="purple" dark={dark}/>
-              <StatCard icon="👥" label="Drivers" value={`${stats.activeDrivers}/${stats.totalDrivers}`} sub="Online/Total" color="yellow" dark={dark}/>
+              <StatCard icon="" label="Today (70%)" value={"GH"+stats.todayRevenue} color="green" dark={dark}/>
+              <StatCard icon="" label="This Week" value={"GH"+stats.weekRevenue} color="blue" dark={dark}/>
+              <StatCard icon="" label="Total Earned" value={"GH"+stats.totalRevenue} color="purple" dark={dark}/>
+              <StatCard icon="" label="Drivers" value={`${stats.activeDrivers}/${stats.totalDrivers}`} sub="Online/Total" color="yellow" dark={dark}/>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH₵{stats.totalRevenue})</h3>
-              {[["Your share (50%)","GH₵"+(stats.totalRevenue*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH₵"+(stats.totalRevenue*0.25).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH₵"+(stats.totalRevenue*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
+              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH{stats.totalRevenue})</h3>
+              {[["Your share (50%)","GH"+(stats.totalRevenue*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH"+(stats.totalRevenue*0.10).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH"+(stats.totalRevenue*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH"+(stats.totalRevenue*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH"+(stats.totalRevenue*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
                 <div key={l} style={{display:"flex",justifyContent:"space-between",paddingBottom:8,borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:8,fontSize:13}}>
                   <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
                 </div>
@@ -1760,11 +1914,11 @@ function OwnerApp({user,onLogout,dark,setDark}) {
         )}
         {view==="fleet"&&(
           <div style={{padding:16}}>
-            <h2 className={`font-black text-lg mb-4 ${t.text}`}>🚗 My Fleet</h2>
+            <h2 className={`font-black text-lg mb-4 ${t.text}`}> My Fleet</h2>
             {(user.vehicles||[{id:"v1",type:"okada",plate:"ER-1234-26"},{id:"v2",type:"car",plate:"ER-5678-26"}]).map(v=>(
               <div key={v.id} className={`${t.card} rounded-2xl p-4 border ${t.bdr} mb-3`}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <span style={{fontSize:32}}>{VEHICLES.find(x=>x.id===v.type)?.icon||"🏍️"}</span>
+                  <span style={{fontSize:32}}>{VEHICLES.find(x=>x.id===v.type)?.icon||""}</span>
                   <div style={{flex:1}}><p className={`font-bold ${t.text}`}>{VEHICLES.find(x=>x.id===v.type)?.label}</p><p className={`text-xs font-mono ${t.sub}`}>{v.plate}</p></div>
                   <Badge color="green">Active</Badge>
                 </div>
@@ -1774,15 +1928,14 @@ function OwnerApp({user,onLogout,dark,setDark}) {
         )}
         {view==="pools"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-            <h2 className={`font-black text-lg ${t.text}`}>⛽ Fuel & Maintenance Pools</h2>
-            {[
-              {icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.fuelPool,color:"#ca8a04",border:"border-yellow-500",items:["🔒 Locked — fuel stations only","⛽ Driver code at pump","📊 Full transaction log"]},
-              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.maintenancePool,color:"#ea580c",border:"border-orange-500",items:["🔧 Service due alerts","✅ You approve payments","📱 Direct to garages"]}
+            <h2 className={`font-black text-lg ${t.text}`}> Fuel & Maintenance Pools</h2>
+            {[{icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.fuelPool,color:"#ca8a04",border:"border-yellow-500",items:[" Locked  fuel stations only"," Driver code at pump"," Full transaction log"]},
+              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.maintenancePool,color:"#ea580c",border:"border-orange-500",items:[" Service due alerts"," You approve payments"," Direct to garages"]}
             ].map(p=>(
               <div key={p.label} className={`${t.card} rounded-2xl p-4 border-2 ${p.border}`}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>{p.icon}<span className={`font-black ${t.text}`}>{p.label}</span></div>
-                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH₵{p.val}</span>
+                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH{p.val}</span>
                 </div>
                 <div className={`rounded-xl p-3 text-xs ${dark?"bg-gray-700":"bg-gray-50"}`}>
                   {p.items.map(i=><p key={i} className={t.text} style={{marginBottom:3}}>{i}</p>)}
@@ -1796,65 +1949,70 @@ function OwnerApp({user,onLogout,dark,setDark}) {
     </div>
   );
 }
-
-// ── ADMIN APP ──────────────────────────────────────────
+//  ADMIN APP 
 function AdminApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("overview");
   const [stats,setStats]=useState({totalRides:5432,activeRides:23,totalDrivers:87,onlineDrivers:34,revenue:18450,commission:2767,users:1247,owners:42,pendingKyc:14,totalLoans:32,activePolicies:67});
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
-
   useEffect(()=>{
+    // Fetch stats
     api.getStats().then(r=>setStats(r.data||r)).catch(()=>{});
-    const tryRealtime=async()=>{
-      try{
-        const q=query(collection(db,'rides'),where('status','in',['searching','accepted','ongoing']));
-        const unsub=onSnapshot(q,(snap)=>{setStats(s=>({...s,activeRides:snap.size}));},()=>{});
+    // Real-time active ride count via Firestore
+    const tryRealtime = async () => {
+      try {
+        // db already imported at module level
+        const q = query(collection(db,'rides'), where('status','in',['searching','accepted','ongoing']));
+        const unsub = onSnapshot(q,(snap)=>{
+          setStats(s=>({...s, activeRides:snap.size}));
+        }, ()=>{});
         return unsub;
-      }catch{return null;}
+      } catch(err) { return null; }
     };
     let unsub;
     tryRealtime().then(u=>{unsub=u;});
-    return()=>{if(unsub)unsub();};
+    return ()=>{ if(unsub) unsub(); };
   },[]);
 
   const liveRides=[
-    {id:"R-001",pax:"Ama O.",  driver:"Kwame A.",from:"Akosombo",to:"Atimpoku",fare:"₵13.50",status:"ongoing",  pay:"MoMo"},
-    {id:"R-002",pax:"Kofi M.", driver:"Yaw M.",  from:"Kpong",   to:"Asesewa", fare:"₵9.00", status:"searching",pay:"Cash"},
-    {id:"R-003",pax:"Abena T.",driver:"Akosua S.",from:"Odumase",to:"Somanya", fare:"₵11.00",status:"matched",  pay:"PayLater"},
-    {id:"R-004",pax:"Kweku B.",driver:"Kofi A.", from:"Atimpoku",to:"Senchi",  fare:"₵7.00", status:"ongoing",  pay:"Card"},
+    {id:"R-001",pax:"Ama O.",  driver:"Kwame A.",from:"Akosombo",to:"Atimpoku",fare:"13.50",status:"ongoing",  pay:"MoMo"},
+    {id:"R-002",pax:"Kofi M.", driver:"Yaw M.",  from:"Kpong",   to:"Asesewa", fare:"9.00", status:"searching",pay:"Cash"},
+    {id:"R-003",pax:"Abena T.",driver:"Akosua S.",from:"Odumase",to:"Somanya", fare:"11.00",status:"matched",  pay:"PayLater"},
+    {id:"R-004",pax:"Kweku B.",driver:"Kofi A.", from:"Atimpoku",to:"Senchi",  fare:"7.00", status:"ongoing",  pay:"Card"},
   ];
   const drivers=[
-    {name:"Kwame Asante",  plate:"ER-1234-26",rating:4.9,rides:1247,online:true, earn:4250,kyc:"GHA-123456789-1",loan:800},
-    {name:"Yaw Mensah",    plate:"ER-5678-26",rating:4.8,rides:876, online:true, earn:3890,kyc:"Verified",loan:0},
-    {name:"Akosua Sarpong",plate:"ER-9012-26",rating:4.7,rides:534, online:false,earn:2650,kyc:"Pending",loan:0},
-    {name:"Kofi Adjei",    plate:"ER-3456-26",rating:4.6,rides:289, online:true, earn:1780,kyc:"A12345678",loan:500},
+    {name:"Kwame Asante",  phone:"+233241234567",plate:"ER-1234-26",rating:4.9,rides:1247,online:true, earn:4250,kyc:"GHA-123456789-1",loan:800},
+    {name:"Yaw Mensah",    phone:"+233209876543",plate:"ER-5678-26",rating:4.8,rides:876, online:true, earn:3890,kyc:"GHA-987654321-2",loan:0},
+    {name:"Akosua Sarpong",phone:"+233285556789",plate:"ER-9012-26",rating:4.7,rides:534, online:false,earn:2650,kyc:"Pending",loan:0},
+    {name:"Kofi Adjei",    phone:"+233544444444",plate:"ER-3456-26",rating:4.6,rides:289, online:true, earn:1780,kyc:"A12345678",loan:500},
   ];
   const kycQueue=[
     {name:"Kofi Adjei",    role:"Driver",    type:"Ghana Card",  time:"2h ago"},
     {name:"Abena Tetteh",  role:"Owner",     type:"Ghana Card",  time:"4h ago"},
-    {name:"James Wilson",  role:"Passenger", type:"Passport 🛂",time:"5h ago"},
-    {name:"Sarah Chen",    role:"Passenger", type:"Passport 🛂",time:"6h ago"},
+    {name:"James Wilson",  role:"Passenger", type:"Passport ",time:"5h ago"},
+    {name:"Sarah Chen",    role:"Passenger", type:"Passport ",time:"6h ago"},
+    {name:"Yaw Asare",     role:"Driver",    type:"Ghana Card",  time:"8h ago"},
   ];
   const withdrawals=[
     {name:"Kwame Asante",amount:350,method:"MTN MoMo",status:"completed",time:"2h ago"},
     {name:"Yaw Mensah",  amount:200,method:"Vodafone", status:"completed",time:"5h ago"},
     {name:"Ama Owusu",   amount:180,method:"MTN MoMo",status:"pending",  time:"Just now"},
+    {name:"Kofi Adjei",  amount:120,method:"AirtelTigo",status:"pending", time:"30m ago"},
   ];
   const loans=[
     {name:"Kwame Asante",amount:800,remaining:520,purpose:"Okada Repair",status:"active",rate:"3%/ride"},
     {name:"Kofi Adjei",  amount:500,remaining:500,purpose:"Fuel Stock",  status:"pending",rate:"3%/ride"},
-    {name:"Yaw Mensah",  amount:1200,remaining:0, purpose:"Veh. Repair", status:"paid",   rate:"—"},
+    {name:"Yaw Mensah",  amount:1200,remaining:0, purpose:"Veh. Repair", status:"paid",   rate:""},
   ];
   const statusColor={ongoing:"green",searching:"blue",matched:"yellow",completed:"gray"};
-  const tabs=[["overview","📊","Overview"],["rides","🏍️","Rides"],["drivers","👥","Drivers"],["fintech","💎","Fintech"],["maas","🚗","MaaS"],["kyc","🪪","KYC"]];
+  const tabs=[["overview","","Overview"],["rides","","Rides"],["drivers","","Drivers"],["fintech","","Fintech"],["maas","","MaaS"],["kyc","","KYC"]];
 
   return (
     <div className={`max-w-md mx-auto min-h-screen ${t.bg}`}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div style={{background:"#111827",color:"#fff",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:20}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}>⚙️</span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900}}>Admin Portal</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}></span><span style={{fontFamily:"Syne,sans-serif",fontWeight:900}}>Admin Portal</span></div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={()=>setDark(!dark)} style={{padding:6,borderRadius:8,background:"rgba(255,255,255,0.1)"}}>{dark?<Sun style={{width:16,height:16}}/>:<Moon style={{width:16,height:16}}/>}</button>
           <button onClick={onLogout} style={{padding:6,borderRadius:8,background:"rgba(255,255,255,0.1)"}}><LogOut style={{width:16,height:16}}/></button>
@@ -1869,23 +2027,24 @@ function AdminApp({user,onLogout,dark,setDark}) {
       </div>
 
       <div style={{paddingBottom:24}}>
+
         {view==="overview"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <h2 className={`font-black text-lg ${t.text}`}>Live Dashboard</h2>
-              <Badge color="green">● Real-time</Badge>
+              <Badge color="green"> Real-time</Badge>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="🏍️" label="Total Rides" value={stats.totalRides.toLocaleString()} color="green" dark={dark}/>
-              <StatCard icon="🟢" label="Active Now" value={stats.activeRides} color="blue" dark={dark}/>
-              <StatCard icon="👥" label="Drivers" value={stats.totalDrivers} color="purple" dark={dark}/>
-              <StatCard icon="🪪" label="KYC Pending" value={stats.pendingKyc||14} sub="Awaiting review" color="yellow" dark={dark}/>
-              <StatCard icon="💳" label="Active Loans" value={stats.totalLoans||32} color="indigo" dark={dark}/>
-              <StatCard icon="🛡️" label="Insured" value={stats.activePolicies||67} sub="Active policies" color="teal" dark={dark}/>
+              <StatCard icon="" label="Total Rides" value={stats.totalRides.toLocaleString()} color="green" dark={dark}/>
+              <StatCard icon="" label="Active Now" value={stats.activeRides} color="blue" dark={dark}/>
+              <StatCard icon="" label="Drivers" value={stats.totalDrivers} color="purple" dark={dark}/>
+              <StatCard icon="" label="KYC Pending" value={stats.pendingKyc||14} sub="Awaiting review" color="yellow" dark={dark}/>
+              <StatCard icon="" label="Active Loans" value={stats.totalLoans||32} color="indigo" dark={dark}/>
+              <StatCard icon="" label="Insured" value={stats.activePolicies||67} sub="Active policies" color="teal" dark={dark}/>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <h3 className={`font-bold mb-3 ${t.text}`}>💰 Platform Economics</h3>
-              {[["Total GMV","₵"+stats.revenue.toLocaleString(),"#16a34a"],["Platform 15%","₵"+stats.commission.toLocaleString(),"#2563eb"],["Owner payouts 50%","₵"+(stats.revenue*0.50).toFixed(0),"#9333ea"],["Driver payouts 25%","₵"+(stats.revenue*0.25).toFixed(0),"#ea580c"],["Fuel pools 5%","₵"+(stats.revenue*0.05).toFixed(0),"#ca8a04"],["Maintenance 5%","₵"+(stats.revenue*0.05).toFixed(0),"#f97316"]].map(([l,v,c])=>(
+              <h3 className={`font-bold mb-3 ${t.text}`}> Platform Economics</h3>
+              {[["Total GMV",""+stats.revenue.toLocaleString(),"#16a34a"],["Platform 15%",""+stats.commission.toLocaleString(),"#2563eb"],["Owner payouts 50%",""+(stats.revenue*0.50).toFixed(0),"#9333ea"],["Driver payouts 25%",""+(stats.revenue*0.25).toFixed(0),"#ea580c"],["Fuel pools 5%",""+(stats.revenue*0.05).toFixed(0),"#ca8a04"],["Maintenance 5%",""+(stats.revenue*0.05).toFixed(0),"#f97316"]].map(([l,v,c])=>(
                 <div key={l} style={{display:"flex",justifyContent:"space-between",paddingBottom:8,borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:8,fontSize:13}}>
                   <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
                 </div>
@@ -1898,7 +2057,7 @@ function AdminApp({user,onLogout,dark,setDark}) {
           <div style={{padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <h2 className={`font-black text-lg ${t.text}`}>Live Rides</h2>
-              <button onClick={()=>toast$("Export ready 📊")} style={{fontSize:12,color:"#16a34a",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+              <button onClick={()=>toast$("Export ready ")} style={{fontSize:12,color:"#16a34a",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
                 <Download style={{width:12,height:12}}/>Export
               </button>
             </div>
@@ -1915,7 +2074,7 @@ function AdminApp({user,onLogout,dark,setDark}) {
                   <div style={{display:"flex",alignItems:"center",gap:6}}><MapPin style={{width:12,height:12,color:"#16a34a",flexShrink:0}}/><span className={`font-semibold ${t.text}`}>{r.from}</span></div>
                   <div style={{display:"flex",alignItems:"center",gap:6}}><Navigation style={{width:12,height:12,color:"#ef4444",flexShrink:0}}/><span className={`font-semibold ${t.text}`}>{r.to}</span></div>
                   <div style={{display:"flex",justifyContent:"space-between",paddingTop:4}}>
-                    <span className={`text-xs ${t.sub}`}>👤 {r.pax} · 🏍️ {r.driver}</span>
+                    <span className={`text-xs ${t.sub}`}> {r.pax}   {r.driver}</span>
                     <span style={{fontWeight:900,color:"#16a34a",fontSize:13}}>{r.fare}</span>
                   </div>
                 </div>
@@ -1930,22 +2089,22 @@ function AdminApp({user,onLogout,dark,setDark}) {
             {drivers.map(d=>(
               <div key={d.name} className={`${t.card} rounded-2xl p-4 border ${t.bdr} mb-3`}>
                 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                  <div style={{width:44,height:44,borderRadius:"50%",background:"#dcfce7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>👨🏿</div>
+                  <div style={{width:44,height:44,borderRadius:"50%",background:"#dcfce7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}></div>
                   <div style={{flex:1}}>
                     <p className={`font-black ${t.text}`}>{d.name}</p>
                     <p style={{fontSize:11,fontFamily:"monospace"}} className={t.sub}>{d.plate}</p>
                     <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
                       <Badge color={d.online?"green":"gray"}>{d.online?"Online":"Offline"}</Badge>
-                      <Badge color={d.kyc==="Pending"?"yellow":"blue"}>{d.kyc==="Pending"?"🪪 KYC Pending":"🪪 Verified"}</Badge>
-                      {d.loan>0&&<Badge color="indigo">Loan GH₵{d.loan}</Badge>}
+                      <Badge color={d.kyc==="Pending"?"yellow":"blue"}>{d.kyc==="Pending"?" KYC Pending":" Verified"}</Badge>
+                      {d.loan>0&&<Badge color="indigo">Loan GH{d.loan}</Badge>}
                     </div>
                   </div>
-                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>₵{d.earn}</p><p style={{fontSize:11}} className={t.sub}>{d.rides} rides</p></div>
+                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>{d.earn}</p><p style={{fontSize:11}} className={t.sub}>{d.rides} rides</p></div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                   <button style={{padding:"8px",background:"#eff6ff",color:"#2563eb",borderRadius:10,fontWeight:700,fontSize:11}}>Details</button>
                   <button style={{padding:"8px",background:d.online?"#fef2f2":"#f0fdf4",color:d.online?"#ef4444":"#16a34a",borderRadius:10,fontWeight:700,fontSize:11}}>{d.online?"Suspend":"Activate"}</button>
-                  <button onClick={()=>toast$(`SMS sent to ${d.name}`)} style={{padding:"8px",background:dark?"#374151":"#f9fafb",color:"#374151",borderRadius:10,fontWeight:700,fontSize:11}}>📱 SMS</button>
+                  <button onClick={()=>toast$(`SMS sent to ${d.name}`)} style={{padding:"8px",background:dark?"#374151":"#f9fafb",color:"#374151",borderRadius:10,fontWeight:700,fontSize:11}}> SMS</button>
                 </div>
               </div>
             ))}
@@ -1954,13 +2113,15 @@ function AdminApp({user,onLogout,dark,setDark}) {
 
         {view==="fintech"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-            <h2 className={`font-black text-lg ${t.text}`}>💎 Fintech Overview</h2>
+            <h2 className={`font-black text-lg ${t.text}`}> Fintech Overview</h2>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="🏦" label="Total Savings" value="GH₵12,450" color="indigo" dark={dark}/>
-              <StatCard icon="💳" label="Loans Issued" value="GH₵38,200" color="purple" dark={dark}/>
-              <StatCard icon="🛡️" label="Premiums/mo" value="GH₵4,125" color="teal" dark={dark}/>
-              <StatCard icon="⏳" label="Pay Later bal" value="GH₵2,340" color="orange" dark={dark}/>
+              <StatCard icon="" label="Total Savings" value="GH12,450" color="indigo" dark={dark}/>
+              <StatCard icon="" label="Loans Issued" value="GH38,200" color="purple" dark={dark}/>
+              <StatCard icon="" label="Premiums/mo" value="GH4,125" color="teal" dark={dark}/>
+              <StatCard icon="" label="Pay Later bal" value="GH2,340" color="orange" dark={dark}/>
             </div>
+
+            {/* Loans table */}
             <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
               <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,display:"flex",alignItems:"center",gap:8}}>
                 <Landmark style={{width:16,height:16,color:"#7c3aed"}}/>
@@ -1968,11 +2129,19 @@ function AdminApp({user,onLogout,dark,setDark}) {
               </div>
               {loans.map((l,i)=>(
                 <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                  <div><p className={`font-bold text-sm ${t.text}`}>{l.name}</p><p className={`text-xs ${t.sub}`}>{l.purpose} · {l.rate}</p></div>
-                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#7c3aed"}}>GH₵{l.remaining}/{l.amount}</p><Badge color={l.status==="paid"?"green":l.status==="active"?"blue":"yellow"}>{l.status}</Badge></div>
+                  <div>
+                    <p className={`font-bold text-sm ${t.text}`}>{l.name}</p>
+                    <p className={`text-xs ${t.sub}`}>{l.purpose}  {l.rate}</p>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <p style={{fontWeight:900,color:"#7c3aed"}}>GH{l.remaining}/{l.amount}</p>
+                    <Badge color={l.status==="paid"?"green":l.status==="active"?"blue":"yellow"}>{l.status}</Badge>
+                  </div>
                 </div>
               ))}
             </div>
+
+            {/* Withdrawals */}
             <div className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
               <div style={{padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,display:"flex",alignItems:"center",gap:8}}>
                 <ArrowDownCircle style={{width:16,height:16,color:"#16a34a"}}/>
@@ -1980,19 +2149,37 @@ function AdminApp({user,onLogout,dark,setDark}) {
               </div>
               {withdrawals.map((w,i)=>(
                 <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-                  <div><p className={`font-bold text-sm ${t.text}`}>{w.name}</p><p className={`text-xs ${t.sub}`}>{w.method} · {w.time}</p></div>
-                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>GH₵{w.amount}</p><Badge color={w.status==="completed"?"green":"yellow"}>{w.status}</Badge></div>
+                  <div><p className={`font-bold text-sm ${t.text}`}>{w.name}</p><p className={`text-xs ${t.sub}`}>{w.method}  {w.time}</p></div>
+                  <div style={{textAlign:"right"}}><p style={{fontWeight:900,color:"#16a34a"}}>GH{w.amount}</p><Badge color={w.status==="completed"?"green":"yellow"}>{w.status}</Badge></div>
                 </div>
               ))}
             </div>
+
+            {/* System status */}
+            {[
+              {title:"Paystack",icon:"🏍️",items:[["Status","Active "],["MoMo","MTN,Vodafone,Airtel"],["Pay Later","Enabled"],["Webhooks","/payments/webhook"]]},
+              {title:"Firebase Auth",icon:"🏍️",items:[["OTP Provider","Firebase Phone Auth "],["Free OTPs/mo","10,000"],["Ghana (+233)","Supported"]]},
+              {title:"Firebase",icon:"🏍️",items:[["Functions","Deployed "],["USSD","*711# ready"],["Project","okada-online-ghana"]]},
+            ].map(s=>(
+              <div key={s.title} className={`${t.card} rounded-2xl border ${t.bdr} overflow-hidden`}>
+                <div style={{padding:"10px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,display:"flex",alignItems:"center",gap:8,background:dark?"#374151":"#f9fafb"}}>
+                  <span style={{fontSize:18}}>{s.icon}</span><span className={`font-black text-sm ${t.text}`}>{s.title}</span>
+                </div>
+                {s.items.map(([l,v])=>(
+                  <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 16px",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,fontSize:12}}>
+                    <span className={t.sub}>{l}</span><span className={`font-semibold ${t.text}`}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         )}
 
         {view==="maas"&&(
           <div style={{padding:16,display:'flex',flexDirection:'column',gap:14}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <h2 className={`font-black text-lg ${t.text}`}>🚗 MaaS Overview</h2>
-              <Badge color="green">● Live</Badge>
+              <h2 className={`font-black text-lg ${t.text}`}> MaaS Overview</h2>
+              <Badge color="green"> Live</Badge>
             </div>
             <MaasAdminView dark={dark} t={t}/>
           </div>
@@ -2001,7 +2188,7 @@ function AdminApp({user,onLogout,dark,setDark}) {
         {view==="kyc"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <h2 className={`font-black text-lg ${t.text}`}>🪪 KYC Queue</h2>
+              <h2 className={`font-black text-lg ${t.text}`}> KYC Queue</h2>
               <Badge color="yellow">{kycQueue.length} pending</Badge>
             </div>
             {kycQueue.map((k,i)=>(
@@ -2015,14 +2202,22 @@ function AdminApp({user,onLogout,dark,setDark}) {
                     </div>
                     <p className={`text-xs mt-1 ${t.sub}`}>Submitted {k.time}</p>
                   </div>
-                  <Badge color="yellow">Pending</Badge>
+                  <Badge color="yellow">Pending Review</Badge>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <button onClick={()=>toast$(`${k.name} KYC approved ✅`)} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>✅ Approve</button>
-                  <button onClick={()=>toast$(`${k.name} KYC rejected`,"error")} style={{padding:"10px",background:"#fef2f2",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}>❌ Reject</button>
+                  <button onClick={()=>toast$(`${k.name} KYC approved `)} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}> Approve</button>
+                  <button onClick={()=>toast$(`${k.name} KYC rejected`,"error")} style={{padding:"10px",background:"#fef2f2",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}> Reject</button>
                 </div>
               </div>
             ))}
+            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+              <p className={`font-bold text-sm mb-2 ${t.text}`}> KYC Stats</p>
+              {[["Total Verified","1,233 users","#16a34a"],["Ghana Cards","1,018","#2563eb"],["International Passports","215","#7c3aed"],["Pending Review","14","#ca8a04"],["Rejected (30 days)","6","#ef4444"]].map(([l,v,c])=>(
+                <div key={l} style={{display:"flex",justifyContent:"space-between",paddingBottom:8,borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:8,fontSize:13}}>
+                  <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -2030,151 +2225,144 @@ function AdminApp({user,onLogout,dark,setDark}) {
   );
 }
 
-// ── SCHEDULED TRIPS ────────────────────────────────────
-function ScheduledTrips({user,dark,onBack}) {
+
+
+
+
+// -- SHARE RIDE ------------------------------------------------
+function ShareRide({user,dark,onBack}) {
   const t=T(dark);
-  const [view,setView]=useState("list");
-  const [schedules,setSchedules]=useState([]);
+  const [view,setView]=useState("browse");
+  const [trips,setTrips]=useState([]);
   const [loading,setLoading]=useState(false);
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
-  const [name,setName]=useState("");
   const [pickup,setPickup]=useState("");
   const [dest,setDest]=useState("");
   const [vehicle,setVehicle]=useState("car");
   const [departTime,setDepartTime]=useState("07:30");
-  const [returnTime,setReturnTime]=useState("17:30");
-  const [days,setDays]=useState([1,2,3,4,5]);
-  const [category,setCategory]=useState("work");
-  const [payFromSavings,setPayFromSavings]=useState(false);
+  const [departDate,setDepartDate]=useState(new Date().toISOString().slice(0,10));
+  const [maxPass,setMaxPass]=useState(3);
+  const [farePerPerson,setFarePerPerson]=useState("");
 
-  const DAYS_LABELS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const RENTAL_VEHICLES=[
-    {id:"car",label:"Car",icon:"🚗"},{id:"okada",label:"Okada",icon:"🏍️"},
-    {id:"tricycle",label:"Tricycle",icon:"🛺"},{id:"ev_car",label:"EV Car",icon:"⚡🚗"},
+  const DEMO=[
+    {id:"t1",creatorId:"u2",pickupAddress:"Akosombo",destAddress:"Koforidua",vehicleType:"car",departTime:"07:30",departDate:"Today",maxPassengers:4,farePerPerson:15,passengers:["u2","u3"],status:"open"},
+    {id:"t2",creatorId:"u4",pickupAddress:"Kpong",destAddress:"Odumase-Krobo",vehicleType:"car",departTime:"08:00",departDate:"Today",maxPassengers:3,farePerPerson:8,passengers:["u4"],status:"open"},
+    {id:"t3",creatorId:"u5",pickupAddress:"Atimpoku",destAddress:"Somanya",vehicleType:"tricycle",departTime:"09:30",departDate:"Today",maxPassengers:3,farePerPerson:6,passengers:["u5","u6","u7"],status:"full"},
   ];
 
   useEffect(()=>{
-    api.getTodaySchedules(user.id).then(r=>setSchedules(r.trips||[])).catch(()=>setSchedules([
-      {id:"s1",name:"Work Commute",pickupAddress:"Akosombo",destAddress:"Kpong",departTime:"07:30",days:[1,2,3,4,5],category:"work",active:true,paused:false,vehicleType:"car"},
-      {id:"s2",name:"Church Run",pickupAddress:"Home",destAddress:"St. Peter's Church",departTime:"09:00",days:[0],category:"church",active:true,paused:false,vehicleType:"okada"},
-    ]));
-  },[user.id]);
+    try{
+      const q=query(collection(db,"shared_trips"),where("status","==","open"),limit(10));
+      const unsub=onSnapshot(q,(snap)=>{
+        if(!snap.empty) setTrips(snap.docs.map(d=>({id:d.id,...d.data()})));
+        else setTrips(DEMO);
+      },()=>setTrips(DEMO));
+      return()=>unsub();
+    }catch(err){console.warn(err);setTrips(DEMO);}
+  },[]);
 
-  const createSchedule=async()=>{
-    if(!pickup||!dest||!days.length){toast$("Fill all fields","error");return;}
+  const createTrip=async()=>{
+    if(!pickup||!dest||!farePerPerson){toast$("Fill all fields","error");return;}
     setLoading(true);
     try{
-      await api.createSchedule({userId:user.id,name,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,returnTime,days,category,payFromSavings});
-      toast$("Schedule created ✅");setView("list");
-    }catch(err){console.warn(err);toast$("Schedule saved (demo mode)");setView("list");}
+      await api.createSharedTrip({creatorId:user.id,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,departDate,maxPassengers:maxPass,farePerPerson:parseFloat(farePerPerson)});
+      toast$("Shared trip created! Others can now join");setView("browse");
+    }catch(err){
+      console.warn(err);
+      setTrips(prev=>[{id:"t"+Date.now(),creatorId:user.id,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,departDate,maxPassengers:maxPass,farePerPerson:parseFloat(farePerPerson),passengers:[user.id],status:"open"},...prev]);
+      toast$("Shared trip created! (demo)");setView("browse");
+    }
     setLoading(false);
   };
 
-  const toggleDay=(d)=>setDays(prev=>prev.includes(d)?prev.filter(x=>x!==d):[...prev,d]);
+  const joinTrip=async(trip)=>{
+    if(trip.passengers.includes(user.id)){toast$("Already joined","error");return;}
+    try{await api.joinSharedTrip(trip.id,user.id);}catch(err){console.warn(err);}
+    toast$("Joined! GH\u20B5"+trip.farePerPerson+" per person");
+    setTrips(prev=>prev.map(t=>t.id===trip.id?{...t,passengers:[...t.passengers,user.id]}:t));
+  };
+
+  const vIcon={car:"\u{1F697}",okada:"\u{1F6F5}",tricycle:"\u{1F6FA}",ev_car:"\u26A1\u{1F697}"};
 
   return (
     <div style={{minHeight:"100%"}} className={t.bg}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
-      <div style={{background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
-        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>←</button>}
+      <div style={{background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>\u2190</button>}
         <div>
-          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>📅 Scheduled Trips</p>
-          <p style={{fontSize:11,margin:0,opacity:0.8}}>Set it once — we handle the rest</p>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>Share a Ride</p>
+          <p style={{fontSize:11,margin:0,opacity:0.8}}>Split the fare \xB7 Same route \xB7 Save money</p>
         </div>
-        <button onClick={()=>setView(view==="list"?"create":"list")}
-          style={{marginLeft:"auto",padding:"8px 14px",background:"rgba(255,255,255,0.2)",borderRadius:10,fontWeight:700,fontSize:12,color:"#fff",border:"none",cursor:"pointer"}}>
-          {view==="list"?"+ New":"✕ Cancel"}
+        <button onClick={()=>setView(view==="browse"?"create":"browse")} style={{marginLeft:"auto",padding:"8px 14px",background:"rgba(255,255,255,0.2)",borderRadius:10,fontWeight:700,fontSize:12,color:"#fff",border:"none",cursor:"pointer"}}>
+          {view==="browse"?"+ Create":"\u2715 Cancel"}
         </button>
       </div>
       <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-        {view==="list"&&(
+        {view==="browse"&&(
           <>
-            {schedules.length===0&&(
-              <div style={{textAlign:"center",padding:"48px 0"}}>
-                <div style={{fontSize:48,marginBottom:12}}>📅</div>
-                <p className={`font-bold ${t.text}`}>No schedules yet</p>
-                <button onClick={()=>setView("create")} style={{marginTop:16,padding:"12px 24px",background:"#1d4ed8",color:"#fff",borderRadius:14,fontWeight:900}}>Create First Schedule</button>
+            {trips.length===0&&(
+              <div style={{textAlign:"center",padding:"40px 0"}}>
+                <div style={{fontSize:48,marginBottom:12}}>\U0001F91D</div>
+                <p className={"font-bold "+t.text}>No shared trips right now</p>
+                <button onClick={()=>setView("create")} style={{marginTop:16,padding:"12px 24px",background:"#0d9488",color:"#fff",borderRadius:14,fontWeight:900}}>Create Shared Trip</button>
               </div>
             )}
-            {schedules.map(s=>(
-              <div key={s.id} className={`${t.card} rounded-2xl p-4 border-2`} style={{borderColor:s.paused?"#9ca3af":"#1d4ed8"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            {trips.map(trip=>(
+              <div key={trip.id} className={t.card+" rounded-2xl p-4 border-2"} style={{borderColor:trip.status==="full"?"#9ca3af":"#0d9488"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                   <div>
-                    <p className={`font-black ${t.text}`}>{s.name}</p>
-                    <p className={`text-xs ${t.sub}`}>{s.pickupAddress} → {s.destAddress}</p>
-                    <p className={`text-xs ${t.sub}`}>⏰ {s.departTime} · {s.days.map(d=>DAYS_LABELS[d]).join(", ")}</p>
+                    <p className={"font-black "+t.text}>{trip.pickupAddress} \u2192 {trip.destAddress}</p>
+                    <p className={"text-xs "+t.sub}>{"\u23F0"} {trip.departTime} \xB7 {trip.departDate}</p>
+                    <p className={"text-xs "+t.sub}>{"👥"} {trip.passengers.length}/{trip.maxPassengers} seats</p>
                   </div>
-                  <span style={{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:s.paused?"#f3f4f6":"#eff6ff",color:s.paused?"#6b7280":"#1d4ed8"}}>{s.paused?"Paused":"Active"}</span>
+                  <div style={{textAlign:"right"}}>
+                    <p style={{fontWeight:900,color:"#0d9488",fontSize:18}}>GH\u20B5{trip.farePerPerson}</p>
+                    <p className={"text-xs "+t.sub}>per person</p>
+                  </div>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <button onClick={async()=>{try{await api.pauseSchedule(s.id);}catch(err){console.warn(err);}setSchedules(prev=>prev.map(x=>x.id===s.id?{...x,paused:!x.paused}:x));toast$(s.paused?"Resumed":"Paused");}}
-                    style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:s.paused?"#16a34a":"#fef2f2",color:s.paused?"#fff":"#ef4444",border:"none",cursor:"pointer"}}>
-                    {s.paused?"▶ Resume":"⏸ Pause"}
-                  </button>
-                  <button style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"none",cursor:"pointer"}}>✏️ Adjust</button>
-                </div>
+                <button disabled={trip.status==="full"||trip.passengers.includes(user.id)} onClick={()=>joinTrip(trip)}
+                  style={{width:"100%",padding:"10px",borderRadius:12,fontWeight:700,fontSize:13,border:"none",cursor:"pointer",background:trip.passengers.includes(user.id)?"#0d9488":trip.status==="full"?"#9ca3af":"#0d9488",color:"#fff",opacity:(trip.status==="full"&&!trip.passengers.includes(user.id))?0.5:1}}>
+                  {trip.passengers.includes(user.id)?"Joined \u2705":trip.status==="full"?"Trip Full":"Join \u2014 GH\u20B5"+trip.farePerPerson}
+                </button>
               </div>
             ))}
           </>
         )}
         {view==="create"&&(
           <>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black mb-3 ${t.text}`}>Trip Name & Route</p>
-              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
-                {[{id:"work",icon:"💼"},{id:"school",icon:"🎒"},{id:"church",icon:"⛪"},{id:"lunch",icon:"🍽️"},{id:"gym",icon:"💪"},{id:"custom",icon:"📍"}].map(c=>(
-                  <button key={c.id} onClick={()=>{setCategory(c.id);setName(c.id.charAt(0).toUpperCase()+c.id.slice(1)+" Trip");}}
-                    style={{padding:"8px 14px",borderRadius:20,fontSize:12,fontWeight:700,border:"2px solid",borderColor:category===c.id?"#1d4ed8":"#e5e7eb",background:category===c.id?"#eff6ff":"transparent",color:category===c.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>
-                    {c.icon} {c.id.charAt(0).toUpperCase()+c.id.slice(1)}
-                  </button>
-                ))}
+            <div className={t.card+" rounded-2xl p-4 border "+t.bdr}>
+              <p className={"font-black mb-3 "+t.text}>Route Details</p>
+              <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="Pickup location"
+                className={"w-full px-4 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%",marginBottom:10}}/>
+              <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="Destination"
+                className={"w-full px-4 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%",marginBottom:10}}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <input type="date" value={departDate} onChange={e=>setDepartDate(e.target.value)}
+                  className={"w-full px-3 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%"}}/>
+                <input type="time" value={departTime} onChange={e=>setDepartTime(e.target.value)}
+                  className={"w-full px-3 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%"}}/>
               </div>
-              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Schedule name"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="📍 Pickup location"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="🏁 Destination"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
             </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black mb-3 ${t.text}`}>Vehicle & Times</p>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
-                {RENTAL_VEHICLES.map(v=>(
-                  <button key={v.id} onClick={()=>setVehicle(v.id)}
-                    style={{padding:"10px 4px",borderRadius:12,textAlign:"center",border:"2px solid",borderColor:vehicle===v.id?"#1d4ed8":"#e5e7eb",background:vehicle===v.id?"#eff6ff":"transparent",cursor:"pointer"}}>
-                    <div style={{fontSize:20}}>{v.icon}</div>
-                    <div style={{fontSize:10,fontWeight:700,color:vehicle===v.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",marginTop:2}}>{v.label}</div>
-                  </button>
-                ))}
-              </div>
+            <div className={t.card+" rounded-2xl p-4 border "+t.bdr}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div>
-                  <p className={`text-xs font-bold mb-1 ${t.sub}`}>DEPART TIME</p>
-                  <input type="time" value={departTime} onChange={e=>setDepartTime(e.target.value)}
-                    className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+                  <p className={"text-xs font-bold mb-1 "+t.sub}>MAX PASSENGERS</p>
+                  <select value={maxPass} onChange={e=>setMaxPass(parseInt(e.target.value))}
+                    className={"w-full px-3 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%"}}>
+                    {[2,3,4,5,6].map(n=><option key={n} value={n}>{n} people</option>)}
+                  </select>
                 </div>
                 <div>
-                  <p className={`text-xs font-bold mb-1 ${t.sub}`}>RETURN TIME</p>
-                  <input type="time" value={returnTime} onChange={e=>setReturnTime(e.target.value)}
-                    className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+                  <p className={"text-xs font-bold mb-1 "+t.sub}>FARE / PERSON (GH\u20B5)</p>
+                  <input value={farePerPerson} onChange={e=>setFarePerPerson(e.target.value)} type="number" placeholder="e.g. 12"
+                    className={"w-full px-3 py-3 border rounded-xl text-sm focus:outline-none "+t.inp} style={{display:"block",width:"100%"}}/>
                 </div>
               </div>
             </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black mb-3 ${t.text}`}>Repeat Days</p>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6}}>
-                {DAYS_LABELS.map((d,i)=>(
-                  <button key={i} onClick={()=>toggleDay(i)}
-                    style={{padding:"10px 2px",borderRadius:10,textAlign:"center",fontSize:11,fontWeight:700,border:"2px solid",borderColor:days.includes(i)?"#1d4ed8":"#e5e7eb",background:days.includes(i)?"#1d4ed8":"transparent",color:days.includes(i)?"#fff":dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button onClick={createSchedule} disabled={loading}
-              style={{width:"100%",padding:"14px",background:"#1d4ed8",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
-              {loading&&<Loader className="w-4 h-4 animate-spin"/>} Create Schedule ✅
+            <button onClick={createTrip} disabled={loading}
+              style={{width:"100%",padding:"14px",background:"#0d9488",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
+              {loading&&<Loader className="w-4 h-4 animate-spin"/>} Create Shared Trip
             </button>
           </>
         )}
@@ -2183,170 +2371,451 @@ function ScheduledTrips({user,dark,onBack}) {
   );
 }
 
-// ── RENTAL HUB ─────────────────────────────────────────
-function RentalHub({user,dark,onBack}) {
+
+// -- DRIVER PICKUPS --------------------------------------------
+function DriverPickups({user,dark,onBack}) {
   const t=T(dark);
-  const [tab,setTab]=useState("browse");
-  const [vehicle,setVehicle]=useState("kantanka_car");
-  const [period,setPeriod]=useState("daily");
-  const [loading,setLoading]=useState(false);
+  const [pickups,setPickups]=useState([]);
   const [toast,setToast]=useState(null);
-  const [activeRentals,setActiveRentals]=useState([]);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
-  const RVEHICLES=[
-    {id:"kantanka_car",  label:"Kantanka Car",   icon:"🚗",  brand:"Made in Ghana",  tag:"Most Popular"},
-    {id:"kantanka_suv",  label:"Kantanka SUV",   icon:"🚙",  brand:"Made in Ghana",  tag:"Premium"},
-    {id:"ev_car",        label:"EV Car",         icon:"⚡🚗", brand:"Zero Emission",  tag:"Eco"},
-    {id:"ev_motorcycle", label:"EV Motorcycle",  icon:"⚡🏍️",brand:"Zero Emission",  tag:"Budget"},
+  const DEMO=[
+    {id:"p1",passengerName:"Ama Owusu",  from:"Akosombo",  to:"Kpong",           time:"07:30",date:"Today",   fare:"GH\u20B518.00",status:"upcoming"},
+    {id:"p2",passengerName:"Kofi Mensah",from:"Atimpoku",  to:"Odumase-Krobo",   time:"08:00",date:"Today",   fare:"GH\u20B522.50",status:"upcoming"},
+    {id:"p3",passengerName:"Abena Tetteh",from:"Senchi",   to:"Akosombo",        time:"17:30",date:"Today",   fare:"GH\u20B514.00",status:"later"},
+    {id:"p4",passengerName:"James Wilson",from:"VRA Estate",to:"Akosombo Market",time:"09:00",date:"Tomorrow",fare:"GH\u20B58.50", status:"later"},
   ];
-  const PERIODS=[
-    {id:"daily",  label:"Daily",  icon:"📅"},
-    {id:"weekly", label:"Weekly", icon:"🗓️"},
-    {id:"monthly",label:"Monthly",icon:"📆"},
-    {id:"annual", label:"Annual", icon:"🗃️"},
+
+  useEffect(()=>{
+    api.getTodaySchedules(user.id).then(r=>{
+      if(r.trips&&r.trips.length>0) setPickups(r.trips);
+      else setPickups(DEMO);
+    }).catch(()=>setPickups(DEMO));
+  },[user.id]);
+
+  return (
+    <div style={{minHeight:"100%"}} className={t.bg}>
+      {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
+      <div style={{background:"linear-gradient(135deg,#1d4ed8,#4f46e5)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>\u2190</button>}
+        <div>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>My Assigned Pickups</p>
+          <p style={{fontSize:11,margin:0,opacity:0.8}}>Passengers who pre-booked you</p>
+        </div>
+      </div>
+      <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{background:"#eff6ff",borderRadius:14,padding:"12px 14px",border:"1px solid #bfdbfe"}}>
+          <p style={{fontWeight:700,fontSize:13,color:"#2563eb",margin:"0 0 4px"}}>How it works</p>
+          <p style={{fontSize:12,color:"#1e40af",margin:0}}>Passengers set recurring routes. You get notified 30 mins early and routed toward them automatically.</p>
+        </div>
+        {pickups.length===0?(
+          <div style={{textAlign:"center",padding:"40px 0"}}>
+            <div style={{fontSize:48,marginBottom:12}}>{"📋"}</div>
+            <p className={"font-bold "+t.text}>No assigned pickups yet</p>
+            <p className={"text-xs "+t.sub+" mt-1"}>Go online to receive scheduled assignments</p>
+          </div>
+        ):pickups.map(p=>(
+          <div key={p.id} className={t.card+" rounded-2xl p-4 border-2"} style={{borderColor:p.status==="upcoming"?"#16a34a":"#2563eb"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+              <div>
+                <p className={"font-black "+t.text}>{p.passengerName||"Passenger"}</p>
+                <p className={"text-xs "+t.sub}>{p.from||p.pickupAddress} \u2192 {p.to||p.destAddress}</p>
+                <p className={"text-xs "+t.sub}>{"\u23F0"} {p.time||p.departTime} \xB7 {p.date||"Today"}</p>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <p style={{fontWeight:900,color:"#16a34a",fontSize:16}}>{p.fare||"—"}</p>
+                <span style={{fontSize:10,fontWeight:700,color:p.status==="upcoming"?"#16a34a":"#2563eb"}}>{p.status==="upcoming"?"\u25CF Soon":"Scheduled"}</span>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <button onClick={()=>toast$("Navigating to pickup...")} style={{padding:"9px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,border:"none",cursor:"pointer"}}>Navigate</button>
+              <button onClick={()=>toast$("Calling passenger...")} style={{padding:"9px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,border:"none",cursor:"pointer"}}>Call</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScheduledTrips({user, dark, onBack}) {
+  const t = T(dark);
+  const [view, setView]       = useState("list");
+  const [schedules, setSchedules] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast]     = useState(null);
+  const toast$ = (msg, type="success") => setToast({msg, type});
+
+  // Form state
+  const [name, setName]           = useState("");
+  const [pickup, setPickup]       = useState("");
+  const [dest, setDest]           = useState("");
+  const [vehicle, setVehicle]     = useState("car");
+  const [departTime, setDepartTime] = useState("07:30");
+  const [returnTime, setReturnTime] = useState("17:30");
+  const [days, setDays]           = useState([1,2,3,4,5]);
+  const [category, setCategory]   = useState("work");
+  const [payFromSavings, setPayFromSavings] = useState(false);
+
+  const DAYS_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const RENTAL_VEHICLES = [
+    {id:"car",label:"Car",icon:""},{id:"okada",label:"Okada",icon:""},
+    {id:"tricycle",label:"Tricycle",icon:""},{id:"ev_car",label:"EV Car",icon:""},
   ];
-  const PRICING={
-    kantanka_car: {daily:{price:350,km:80},  weekly:{price:2100,km:560},  monthly:{price:7500,km:2400},  annual:{price:75000,km:30000}},
-    kantanka_suv: {daily:{price:500,km:100}, weekly:{price:3000,km:700},  monthly:{price:11000,km:3000}, annual:{price:110000,km:36000}},
-    ev_car:       {daily:{price:420,km:120}, weekly:{price:2520,km:840},  monthly:{price:9000,km:3600},  annual:{price:90000,km:43200}},
-    ev_motorcycle:{daily:{price:120,km:80},  weekly:{price:720,km:560},   monthly:{price:2500,km:2400},  annual:null},
+  const CATS = [
+    {id:"work",label:"Work",icon:""},{id:"school",label:"School",icon:""},
+    {id:"church",label:"Church",icon:""},{id:"lunch",label:"Lunch",icon:""},
+    {id:"gym",label:"Gym",icon:""},{id:"custom",label:"Custom",icon:""},
+  ];
+
+  useEffect(() => {
+    api.getTodaySchedules(user.id)
+      .then(r => setSchedules(r.trips || []))
+      .catch(() => setSchedules([
+        {id:"s1",name:"Work Commute",pickupAddress:"Akosombo",destAddress:"Kpong",departTime:"07:30",days:[1,2,3,4,5],category:"work",active:true,paused:false,vehicleType:"car"},
+        {id:"s2",name:"Church Run",pickupAddress:"Home",destAddress:"St. Peter's Church",departTime:"09:00",days:[0],category:"church",active:true,paused:false,vehicleType:"okada"},
+      ]));
+  }, [user.id]);
+
+  const createSchedule = async () => {
+    if(!pickup||!dest||!days.length){toast$("Fill all fields","error");return;}
+    setLoading(true);
+    try {
+      await api.createSchedule({userId:user.id,name,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,returnTime,days,category,payFromSavings});
+      toast$("Schedule created  Driver will be matched 30 min before departure");
+      setView("list");
+    } catch(err) { console.warn(err); toast$("Schedule saved (demo mode)"); setView("list"); }
+    setLoading(false);
   };
 
-  useEffect(()=>{api.getActiveRentals(user.id).then(r=>setActiveRentals(r.rentals||[])).catch(()=>{});},[user.id]);
+  const toggleDay = (d) => setDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev,d]);
 
-  const selected=RVEHICLES.find(v=>v.id===vehicle);
-  const planPrice=PRICING[vehicle]?.[period];
+  return (
+    <div style={{minHeight:"100%"}} className={t.bg}>
+      {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
 
-  const book=async()=>{
+      <div style={{background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}></button>}
+        <div>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}> Scheduled Trips</p>
+          <p style={{fontSize:11,margin:0,opacity:0.8}}>Set it once  we handle the rest</p>
+        </div>
+        <button onClick={()=>setView(view==="list"?"create":"list")}
+          style={{marginLeft:"auto",padding:"8px 14px",background:"rgba(255,255,255,0.2)",borderRadius:10,fontWeight:700,fontSize:12,color:"#fff",border:"none",cursor:"pointer"}}>
+          {view==="list"?"+ New":" Cancel"}
+        </button>
+      </div>
+
+      <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
+
+        {view==="list"&&(<>
+          {schedules.length===0&&(
+            <div style={{textAlign:"center",padding:"48px 0"}}>
+              <div style={{fontSize:48,marginBottom:12}}></div>
+              <p className={`font-bold ${t.text}`}>No schedules yet</p>
+              <p className={`text-xs ${t.sub} mt-1`}>Set up your daily commute, school run, or church route once  drivers come to you automatically.</p>
+              <button onClick={()=>setView("create")} style={{marginTop:16,padding:"12px 24px",background:"#1d4ed8",color:"#fff",borderRadius:14,fontWeight:900}}>Create First Schedule</button>
+            </div>
+          )}
+          {schedules.map(s=>(
+            <div key={s.id} className={`${t.card} rounded-2xl p-4 border-2`} style={{borderColor:s.paused?"#9ca3af":"#1d4ed8"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div>
+                  <p className={`font-black ${t.text}`}>{s.name}</p>
+                  <p className={`text-xs ${t.sub}`}>{s.pickupAddress}  {s.destAddress}</p>
+                  <p className={`text-xs ${t.sub}`}> {s.departTime}  {s.days.map(d=>DAYS_LABELS[d]).join(", ")}</p>
+                </div>
+                <span style={{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:s.paused?"#f3f4f6":"#eff6ff",color:s.paused?"#6b7280":"#1d4ed8"}}>{s.paused?"Paused":"Active"}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <button onClick={async()=>{try{await api.pauseSchedule(s.id);}catch(err){console.warn(err);}setSchedules(prev=>prev.map(x=>x.id===s.id?{...x,paused:!x.paused}:x));toast$(s.paused?"Resumed":"Paused");}}
+                  style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:s.paused?"#16a34a":"#fef2f2",color:s.paused?"#fff":"#ef4444",border:"none",cursor:"pointer"}}>
+                  {s.paused?" Resume":" Pause"}
+                </button>
+                <button style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"none",cursor:"pointer"}}>
+                   Adjust
+                </button>
+              </div>
+            </div>
+          ))}
+        </>)}
+
+        {view==="create"&&(<>
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Trip Name & Route</p>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
+              {[{id:"work",icon:""},{id:"school",icon:""},{id:"church",icon:""},{id:"lunch",icon:""},{id:"gym",icon:""},{id:"custom",icon:""}].map(c=>(
+                <button key={c.id} onClick={()=>{setCategory(c.id);setName(c.id.charAt(0).toUpperCase()+c.id.slice(1)+" Trip");}}
+                  style={{padding:"8px 14px",borderRadius:20,fontSize:12,fontWeight:700,border:"2px solid",borderColor:category===c.id?"#1d4ed8":"#e5e7eb",background:category===c.id?"#eff6ff":"transparent",color:category===c.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>
+                  {c.icon} {c.id.charAt(0).toUpperCase()+c.id.slice(1)}
+                </button>
+              ))}
+            </div>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Schedule name (e.g. Morning Commute)"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder=" Pickup location"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder=" Destination"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+          </div>
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Vehicle & Times</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+              {RENTAL_VEHICLES.map(v=>(
+                <button key={v.id} onClick={()=>setVehicle(v.id)}
+                  style={{padding:"10px 4px",borderRadius:12,textAlign:"center",border:"2px solid",borderColor:vehicle===v.id?"#1d4ed8":"#e5e7eb",background:vehicle===v.id?"#eff6ff":"transparent",cursor:"pointer"}}>
+                  <div style={{fontSize:20}}>{v.icon}</div>
+                  <div style={{fontSize:10,fontWeight:700,color:vehicle===v.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",marginTop:2}}>{v.label}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div>
+                <p className={`text-xs font-bold mb-1 ${t.sub}`}>DEPART TIME</p>
+                <input type="time" value={departTime} onChange={e=>setDepartTime(e.target.value)}
+                  className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+              </div>
+              <div>
+                <p className={`text-xs font-bold mb-1 ${t.sub}`}>RETURN TIME</p>
+                <input type="time" value={returnTime} onChange={e=>setReturnTime(e.target.value)}
+                  className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+              </div>
+            </div>
+          </div>
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Repeat Days</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6}}>
+              {DAYS_LABELS.map((d,i)=>(
+                <button key={i} onClick={()=>toggleDay(i)}
+                  style={{padding:"10px 2px",borderRadius:10,textAlign:"center",fontSize:11,fontWeight:700,border:"2px solid",borderColor:days.includes(i)?"#1d4ed8":"#e5e7eb",background:days.includes(i)?"#1d4ed8":"transparent",color:days.includes(i)?"#fff":dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`} style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <p className={`font-bold text-sm ${t.text}`}> Pay from Savings</p>
+              <p className={`text-xs ${t.sub}`}>Auto-deduct trip fares from savings balance</p>
+            </div>
+            <button onClick={()=>setPayFromSavings(!payFromSavings)}
+              style={{width:44,height:24,borderRadius:12,background:payFromSavings?"#1d4ed8":"#9ca3af",position:"relative",border:"none",cursor:"pointer",transition:"background 0.2s"}}>
+              <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:3,left:payFromSavings?22:3,transition:"left 0.2s"}}/>
+            </button>
+          </div>
+
+          <button onClick={createSchedule} disabled={loading}
+            style={{width:"100%",padding:"14px",background:"#1d4ed8",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
+            {loading&&<Loader className="w-4 h-4 animate-spin"/>} Create Schedule 
+          </button>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+function RentalHub({user, dark, onBack}) {
+  const t = T(dark);
+  const [tab, setTab]         = useState("browse");
+  const [vehicle, setVehicle] = useState("kantanka_car");
+  const [period, setPeriod]   = useState("daily");
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast]     = useState(null);
+  const [activeRentals, setActiveRentals] = useState([]);
+  const toast$ = (msg, type="success") => setToast({msg, type});
+
+  const VEHICLES = [
+    {id:"kantanka_car", label:"Kantanka Car",  icon:"🏍️",  brand:"Made in Ghana",  tag:"Most Popular"},
+    {id:"kantanka_suv", label:"Kantanka SUV",  icon:"🏍️",  brand:"Made in Ghana",  tag:"Premium"},
+    {id:"ev_car",       label:"EV Car",        icon:"🏍️", brand:"Zero Emission",  tag:"Eco"},
+    {id:"ev_motorcycle",label:"EV Motorcycle", icon:"🏍️",brand:"Zero Emission",  tag:"Budget"},
+  ];
+  const PERIODS = [
+    {id:"daily",  label:"Daily",   icon:""},
+    {id:"weekly", label:"Weekly",  icon:""},
+    {id:"monthly",label:"Monthly", icon:""},
+    {id:"annual", label:"Annual",  icon:""},
+  ];
+  const PRICING = {
+    kantanka_car:  {daily:{price:350,km:80},  weekly:{price:2100,km:560},  monthly:{price:7500,km:2400},  annual:{price:75000,km:30000}},
+    kantanka_suv:  {daily:{price:500,km:100}, weekly:{price:3000,km:700},  monthly:{price:11000,km:3000}, annual:{price:110000,km:36000}},
+    ev_car:        {daily:{price:420,km:120}, weekly:{price:2520,km:840},  monthly:{price:9000,km:3600},  annual:{price:90000,km:43200}},
+    ev_motorcycle: {daily:{price:120,km:80},  weekly:{price:720,km:560},   monthly:{price:2500,km:2400},  annual:null},
+  };
+
+  useEffect(()=>{
+    api.getActiveRentals(user.id).then(r=>setActiveRentals(r.rentals||[])).catch(()=>{});
+  },[user.id]);
+
+  const selected  = VEHICLES.find(v=>v.id===vehicle);
+  const planPrice = PRICING[vehicle]?.[period];
+
+  const book = async () => {
     if(!planPrice){toast$("This plan is not available","error");return;}
     setLoading(true);
-    try{
-      const r=await api.bookRental({userId:user.id,vehicleType:vehicle,period,startDate:new Date().toISOString()});
-      toast$(`${selected.label} booked for ${period}! GH₵${r.totalPrice} 🚗`);setTab("active");
-    }catch(err){console.warn(err);toast$(`${selected.label} rental booked (demo)! GH₵${planPrice.price}`);}
+    try {
+      const r = await api.bookRental({userId:user.id,vehicleType:vehicle,period,startDate:new Date().toISOString(),driverIncluded:false});
+      toast$(`${selected.label} booked for ${period}! GH${r.totalPrice} `);
+      setTab("active");
+    } catch(err) { console.warn(err); toast$(`${selected.label} rental booked (demo)! GH${planPrice.price}`); }
     setLoading(false);
   };
 
   return (
     <div style={{minHeight:"100%"}} className={t.bg}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
+
       <div style={{background:"linear-gradient(135deg,#0f172a,#1e293b)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
-        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>←</button>}
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}></button>}
         <div>
-          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>🚗 Okada Rentals</p>
-          <p style={{fontSize:11,margin:0,color:"#94a3b8"}}>Kantanka + EV only · Luxury · Safety</p>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}> Okada Rentals</p>
+          <p style={{fontSize:11,margin:0,color:"#94a3b8"}}>New Kantanka + EV only  Luxury  Comfort  Safety</p>
         </div>
       </div>
-      <div style={{display:"flex",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
+
+      <div style={{display:"flex",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,background:t.card}}>
         {[["browse","Browse"],["active","My Rentals"]].map(([id,lb])=>(
           <button key={id} onClick={()=>setTab(id)}
-            style={{flex:1,padding:"11px",fontSize:13,fontWeight:700,color:tab===id?"#1d4ed8":dark?"#9ca3af":"#6b7280",background:"transparent",border:"none",borderBottom:`2px solid ${tab===id?"#1d4ed8":"transparent"}`,cursor:"pointer"}}>
+            style={{flex:1,padding:"11px",fontSize:13,fontWeight:700,color:tab===id?"#1d4ed8":dark?"#9ca3af":"#6b7280",borderBottom:`2px solid ${tab===id?"#1d4ed8":"transparent"}`,background:"transparent",border:"none",borderBottom:`2px solid ${tab===id?"#1d4ed8":"transparent"}`,cursor:"pointer"}}>
             {lb}
           </button>
         ))}
       </div>
+
       <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-        {tab==="browse"&&(
-          <>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {RVEHICLES.map(v=>(
-                <button key={v.id} onClick={()=>setVehicle(v.id)}
-                  style={{display:"flex",alignItems:"center",gap:14,padding:14,borderRadius:16,border:`2px solid ${vehicle===v.id?"#1d4ed8":"#e5e7eb"}`,background:vehicle===v.id?(dark?"#1e3a5f":"#eff6ff"):"transparent",textAlign:"left",cursor:"pointer",width:"100%"}}>
-                  <span style={{fontSize:32}}>{v.icon}</span>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <p style={{fontWeight:900,color:vehicle===v.id?"#1d4ed8":dark?"#fff":"#111827",fontSize:14,margin:0}}>{v.label}</p>
-                      <span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,background:"#0f172a",color:"#94a3b8"}}>{v.tag}</span>
-                    </div>
-                    <p style={{fontSize:11,color:dark?"#9ca3af":"#6b7280",margin:"2px 0 0"}}>🏭 {v.brand}</p>
-                  </div>
-                  {vehicle===v.id&&<CheckCircle style={{width:20,height:20,color:"#1d4ed8"}}/>}
-                </button>
+
+        {tab==="browse"&&(<>
+          <div style={{background:"linear-gradient(135deg,#0f172a,#1e293b)",borderRadius:16,padding:16,color:"#fff"}}>
+            <p style={{fontWeight:900,fontSize:14,marginBottom:4}}> Brand Standard</p>
+            <p style={{fontSize:12,color:"#94a3b8",lineHeight:1.5}}>Only brand-new Kantanka (Made in Ghana ) and EV vehicles. Every rental comes fully insured, GPS-tracked, and regularly serviced.</p>
+            <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+              {["Brand New","GPS Tracked","Fully Insured","EV Available","Made in Ghana"].map(f=>(
+                <span key={f} style={{background:"rgba(255,255,255,0.1)",borderRadius:20,padding:"4px 10px",fontSize:10,fontWeight:700}}>{f}</span>
               ))}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-              {PERIODS.map(p=>{
-                const price=PRICING[vehicle]?.[p.id];
-                return (
-                  <button key={p.id} onClick={()=>price&&setPeriod(p.id)}
-                    style={{padding:"10px 4px",borderRadius:12,textAlign:"center",border:`2px solid ${period===p.id?"#1d4ed8":"#e5e7eb"}`,background:period===p.id?"#eff6ff":"transparent",opacity:price?1:0.4,cursor:price?"pointer":"not-allowed"}}>
-                    <div style={{fontSize:18}}>{p.icon}</div>
-                    <div style={{fontSize:10,fontWeight:700,color:period===p.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",marginTop:2}}>{p.label}</div>
-                    {price&&<div style={{fontSize:11,fontWeight:900,color:"#1d4ed8",marginTop:2}}>GH₵{price.price}</div>}
-                  </button>
-                );
-              })}
-            </div>
-            {planPrice&&(
-              <div style={{background:dark?"#1e3a5f":"#eff6ff",borderRadius:14,padding:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span className={t.sub} style={{fontSize:13}}>Rental fee</span>
-                  <span style={{fontWeight:900,color:"#1d4ed8",fontSize:16}}>GH₵{planPrice.price}</span>
+          </div>
+
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {VEHICLES.map(v=>(
+              <button key={v.id} onClick={()=>setVehicle(v.id)}
+                style={{display:"flex",alignItems:"center",gap:14,padding:14,borderRadius:16,border:`2px solid ${vehicle===v.id?"#1d4ed8":"#e5e7eb"}`,background:vehicle===v.id?(dark?"#1e3a5f":"#eff6ff"):"transparent",textAlign:"left",cursor:"pointer",width:"100%"}}>
+                <span style={{fontSize:32}}>{v.icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <p style={{fontWeight:900,color:vehicle===v.id?"#1d4ed8":dark?"#fff":"#111827",fontSize:14,margin:0}}>{v.label}</p>
+                    <span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,background:"#0f172a",color:"#94a3b8"}}>{v.tag}</span>
+                  </div>
+                  <p style={{fontSize:11,color:dark?"#9ca3af":"#6b7280",margin:"2px 0 0"}}> {v.brand}</p>
                 </div>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span className={t.sub} style={{fontSize:13}}>Included km</span>
-                  <span style={{fontWeight:700,fontSize:13}} className={t.text}>{planPrice.km} km</span>
-                </div>
+                {vehicle===v.id&&<CheckCircle style={{width:20,height:20,color:"#1d4ed8"}}/>}
+              </button>
+            ))}
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+            {PERIODS.map(p=>{
+              const price = PRICING[vehicle]?.[p.id];
+              return (
+                <button key={p.id} onClick={()=>price&&setPeriod(p.id)}
+                  style={{padding:"10px 4px",borderRadius:12,textAlign:"center",border:`2px solid ${period===p.id?"#1d4ed8":"#e5e7eb"}`,background:period===p.id?"#eff6ff":"transparent",opacity:price?1:0.4,cursor:price?"pointer":"not-allowed"}}>
+                  <div style={{fontSize:18}}>{p.icon}</div>
+                  <div style={{fontSize:10,fontWeight:700,color:period===p.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",marginTop:2}}>{p.label}</div>
+                  {price&&<div style={{fontSize:11,fontWeight:900,color:"#1d4ed8",marginTop:2}}>GH{price.price}</div>}
+                </button>
+              );
+            })}
+          </div>
+
+          {planPrice&&(
+            <div style={{background:dark?"#1e3a5f":"#eff6ff",borderRadius:14,padding:14,border:"1px solid #bfdbfe"}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <span className={t.sub} style={{fontSize:13}}>Rental fee</span>
+                <span style={{fontWeight:900,color:"#1d4ed8",fontSize:16}}>GH{planPrice.price}</span>
               </div>
-            )}
-            <button onClick={book} disabled={loading||!planPrice}
-              style={{width:"100%",padding:"14px",background:!planPrice?"#9ca3af":"#0f172a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:planPrice?"pointer":"not-allowed",opacity:loading?0.7:1}}>
-              {loading&&<Loader className="w-4 h-4 animate-spin"/>}
-              {planPrice?`Book ${selected?.label} — GH₵${planPrice.price}`:"Select vehicle and period"}
-            </button>
-          </>
-        )}
-        {tab==="active"&&(
-          activeRentals.length===0?(
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <span className={t.sub} style={{fontSize:13}}>Included km</span>
+                <span style={{fontWeight:700,fontSize:13}} className={t.text}>{planPrice.km} km</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span className={t.sub} style={{fontSize:13}}>Extra km rate</span>
+                <span style={{fontWeight:700,fontSize:13}} className={t.text}>GH{(PRICING[vehicle]?.[period+"_extra"]||2.50).toFixed(2)}/km</span>
+              </div>
+            </div>
+          )}
+
+          <button onClick={book} disabled={loading||!planPrice}
+            style={{width:"100%",padding:"14px",background:!planPrice?"#9ca3af":"#0f172a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:planPrice?"pointer":"not-allowed",opacity:loading?0.7:1}}>
+            {loading&&<Loader className="w-4 h-4 animate-spin"/>}
+            {planPrice?`Book ${selected?.label}  GH${planPrice.price}`:"Select vehicle and period"}
+          </button>
+        </>)}
+
+        {tab==="active"&&(<>
+          {activeRentals.length===0?(
             <div style={{textAlign:"center",padding:"40px 0"}}>
-              <div style={{fontSize:48,marginBottom:12}}>🚗</div>
+              <div style={{fontSize:48,marginBottom:12}}></div>
               <p className={`font-bold ${t.text}`}>No active rentals</p>
               <button onClick={()=>setTab("browse")} style={{marginTop:14,padding:"10px 24px",background:"#0f172a",color:"#fff",borderRadius:12,fontWeight:700}}>Browse Vehicles</button>
             </div>
           ):activeRentals.map(r=>(
             <div key={r.id} className={`${t.card} rounded-2xl p-4 border-2 border-blue-500`}>
-              <p className={`font-black ${t.text}`}>{r.vehicleType}</p>
-              <Badge color="blue">{r.status}</Badge>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <p className={`font-black ${t.text}`}>{r.vehicleType.replace("_"," ").toUpperCase()}</p>
+                <span style={{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:"#eff6ff",color:"#1d4ed8"}}>{r.status}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div style={{background:"#f9fafb",borderRadius:10,padding:10,textAlign:"center"}}>
+                  <p style={{fontSize:10,color:"#6b7280",fontWeight:700}}>KM USED</p>
+                  <p style={{fontWeight:900,color:"#1d4ed8"}}>{r.kmUsed||0} / {r.includedKm}</p>
+                </div>
+                <div style={{background:"#f9fafb",borderRadius:10,padding:10,textAlign:"center"}}>
+                  <p style={{fontSize:10,color:"#6b7280",fontWeight:700}}>ENDS</p>
+                  <p style={{fontWeight:900,fontSize:12}} className={t.text}>{new Date(r.endDate?.seconds*1000||r.endDate).toLocaleDateString()}</p>
+                </div>
+              </div>
             </div>
-          ))
-        )}
+          ))}
+        </>)}
       </div>
     </div>
   );
 }
 
-// ── DELIVERY APP ───────────────────────────────────────
-function DeliveryApp({user,dark,onBack}) {
-  const t=T(dark);
-  const [view,setView]=useState("home");
-  const [vType,setVType]=useState("motorcycle");
-  const [pickup,setPickup]=useState("");
-  const [dest,setDest]=useState("");
-  const [weight,setWeight]=useState("");
-  const [recipientName,setRecipientName]=useState("");
-  const [recipientPhone,setRecipientPhone]=useState("+233");
-  const [desc,setDesc]=useState("");
-  const [urgent,setUrgent]=useState(false);
-  const [trackCode,setTrackCode]=useState("");
-  const [tracking,setTracking]=useState(null);
-  const [history,setHistory]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [toast,setToast]=useState(null);
-  const toast$=(msg,type="success")=>setToast({msg,type});
+function DeliveryApp({user, dark, onBack}) {
+  const t = T(dark);
+  const [view, setView]       = useState("home");
+  const [vType, setVType]     = useState("motorcycle");
+  const [pickup, setPickup]   = useState("");
+  const [dest, setDest]       = useState("");
+  const [weight, setWeight]   = useState("");
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("+233");
+  const [desc, setDesc]       = useState("");
+  const [urgent, setUrgent]   = useState(false);
+  const [trackCode, setTrackCode] = useState("");
+  const [tracking, setTracking]   = useState(null);
+  const [history, setHistory]     = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast]     = useState(null);
+  const toast$ = (msg, type="success") => setToast({msg, type});
 
-  const DTYPES=[
+  const TYPES = [
     {id:"motorcycle",label:"Motorcycle Express",icon:"🏍️",tag:"Fastest",desc:"Up to 15kg"},
-    {id:"tricycle",  label:"Tricycle Cargo",    icon:"🛺", tag:"Best Value",desc:"Up to 50kg"},
-    {id:"car",       label:"Car Delivery",      icon:"🚗", tag:"Premium",desc:"Fragile / large"},
+    {id:"tricycle",  label:"Tricycle Cargo",    icon:"🏍️", tag:"Best Value",desc:"Up to 50kg"},
+    {id:"car",       label:"Car Delivery",      icon:"🏍️", tag:"Premium",desc:"Fragile / large"},
   ];
-  const DPRICING={motorcycle:{flag:5,perKm:3.5},tricycle:{flag:6,perKm:4},car:{flag:8,perKm:5.5}};
+  const PRICING = {motorcycle:{flag:5,perKm:3.5},tricycle:{flag:6,perKm:4},car:{flag:8,perKm:5.5}};
 
-  const estFare=()=>{
-    const p=DPRICING[vType];
-    let fare=p.flag+5*p.perKm;
-    if(parseFloat(weight)>15) fare+=5;
-    if(urgent) fare*=1.5;
+  const estFare = () => {
+    const p = PRICING[vType];
+    const estKm = 5;
+    let fare = p.flag + estKm * p.perKm;
+    if(parseFloat(weight)>15) fare += 5;
+    else if(parseFloat(weight)>5) fare += 2;
+    if(urgent) fare *= 1.5;
     return fare.toFixed(2);
   };
 
@@ -2354,144 +2823,169 @@ function DeliveryApp({user,dark,onBack}) {
     if(view==="history") api.getDeliveryHistory(user.id).then(r=>setHistory(r.deliveries||[])).catch(()=>setHistory([]));
   },[view,user.id]);
 
-  const send=async()=>{
+  const send = async () => {
     if(!pickup||!dest||!recipientName||!recipientPhone){toast$("Fill all required fields","error");return;}
     setLoading(true);
-    try{
-      const r=await api.requestDelivery({senderId:user.id,pickupAddress:pickup,deliveryAddress:dest,vehicleType:vType,packageDesc:desc,weightKg:parseFloat(weight)||1,recipientName,recipientPhone,urgent});
-      toast$(`Delivery booked! Tracking: ${r.trackingCode} 📦`);setView("home");
-    }catch(err){console.warn(err);toast$(`Delivery booked! Tracking: DLV-${Math.random().toString(36).substr(2,6).toUpperCase()}`);setView("home");}
+    try {
+      const r = await api.requestDelivery({senderId:user.id,pickupAddress:pickup,deliveryAddress:dest,vehicleType:vType,packageDesc:desc,weightKg:parseFloat(weight)||1,recipientName,recipientPhone,urgent});
+      toast$(`Delivery booked! Tracking: ${r.trackingCode} `);
+      setView("home");
+    } catch(err) { console.warn(err); toast$(`Delivery booked! Tracking: DLV-${Math.random().toString(36).substr(2,6).toUpperCase()}`); setView("home"); }
     setLoading(false);
   };
 
-  const track=async()=>{
+  const track = async () => {
     if(!trackCode){toast$("Enter tracking code","error");return;}
-    try{const r=await api.trackDelivery(trackCode);setTracking(r.delivery);}
-    catch(err){console.warn(err);setTracking({trackingCode,status:"in_transit",pickupAddress:"Akosombo",deliveryAddress:"Kpong"});}
+    try {
+      const r = await api.trackDelivery(trackCode);
+      setTracking(r.delivery);
+    } catch(err) { console.warn(err); setTracking({trackingCode:trackCode,status:"in_transit",pickupAddress:"Akosombo",deliveryAddress:"Kpong",vehicleType:"motorcycle",recipientName:"Test"}); }
   };
 
-  const STATUS_STEPS=["pending","assigned","picked_up","in_transit","delivered"];
-  const STATUS_ICONS={pending:"⏳",assigned:"🏍️",picked_up:"📦",in_transit:"🚀",delivered:"✅",failed:"❌"};
+  const STATUS_STEPS = ["pending","assigned","picked_up","in_transit","delivered"];
+  const STATUS_ICONS = {pending:"",assigned:"",picked_up:"",in_transit:"",delivered:"",failed:""};
 
   return (
     <div style={{minHeight:"100%"}} className={t.bg}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
+
       <div style={{background:"linear-gradient(135deg,#ea580c,#dc2626)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
-        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>←</button>}
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}></button>}
         <div>
-          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>📦 Okada Delivery</p>
-          <p style={{fontSize:11,margin:0,opacity:0.8}}>Fast, safe, tracked delivery</p>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}> Okada Delivery</p>
+          <p style={{fontSize:11,margin:0,opacity:0.8}}>Fast, safe, tracked delivery across Eastern Region</p>
         </div>
       </div>
-      <div style={{display:"flex",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`}}>
-        {[["home","Send 📦"],["track","Track 🔍"],["history","History 📋"]].map(([id,lb])=>(
+
+      <div style={{display:"flex",borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,background:t.card}}>
+        {[["home","Send "],["track","Track "],["history","History "]].map(([id,lb])=>(
           <button key={id} onClick={()=>setView(id)}
-            style={{flex:1,padding:"11px",fontSize:12,fontWeight:700,color:view===id?"#ea580c":dark?"#9ca3af":"#6b7280",background:"transparent",border:"none",borderBottom:`2px solid ${view===id?"#ea580c":"transparent"}`,cursor:"pointer"}}>
+            style={{flex:1,padding:"11px",fontSize:12,fontWeight:700,color:view===id?"#ea580c":dark?"#9ca3af":"#6b7280",borderBottom:`2px solid ${view===id?"#ea580c":"transparent"}`,background:"transparent",border:"none",borderBottom:`2px solid ${view===id?"#ea580c":"transparent"}`,cursor:"pointer"}}>
             {lb}
           </button>
         ))}
       </div>
+
       <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-        {view==="home"&&(
-          <>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {DTYPES.map(type=>(
-                <button key={type.id} onClick={()=>setVType(type.id)}
-                  style={{display:"flex",alignItems:"center",gap:12,padding:14,borderRadius:14,border:`2px solid ${vType===type.id?"#ea580c":"#e5e7eb"}`,background:vType===type.id?(dark?"#431407":"#fff7ed"):"transparent",textAlign:"left",cursor:"pointer",width:"100%"}}>
-                  <span style={{fontSize:28}}>{type.icon}</span>
-                  <div style={{flex:1}}>
+
+        {view==="home"&&(<>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {TYPES.map(type=>(
+              <button key={type.id} onClick={()=>setVType(type.id)}
+                style={{display:"flex",alignItems:"center",gap:12,padding:14,borderRadius:14,border:`2px solid ${vType===type.id?"#ea580c":"#e5e7eb"}`,background:vType===type.id?(dark?"#431407":"#fff7ed"):"transparent",textAlign:"left",cursor:"pointer",width:"100%"}}>
+                <span style={{fontSize:28}}>{type.icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <p style={{fontWeight:900,fontSize:13,margin:0,color:vType===type.id?"#ea580c":dark?"#fff":"#111827"}}>{type.label}</p>
-                    <p style={{fontSize:11,color:dark?"#9ca3af":"#6b7280",margin:"2px 0 0"}}>{type.desc} · From GH₵{DPRICING[type.id].flag}</p>
+                    <span style={{padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,background:"#fef2f2",color:"#dc2626"}}>{type.tag}</span>
                   </div>
-                  {vType===type.id&&<CheckCircle style={{width:18,height:18,color:"#ea580c"}}/>}
-                </button>
-              ))}
-            </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p className={`font-black mb-3 ${t.text}`}>Pickup & Delivery</p>
-              <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="📍 Pickup address"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="🏁 Delivery address"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <input value={recipientName} onChange={e=>setRecipientName(e.target.value)} placeholder="Recipient name"
-                  className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
-                <input value={recipientPhone} onChange={e=>setRecipientPhone(e.target.value)} placeholder="+233..."
-                  className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
-              </div>
-            </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="What are you sending?"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <input value={weight} onChange={e=>setWeight(e.target.value)} type="number" placeholder="Weight in kg"
-                className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",borderRadius:12,background:dark?"#374151":"#fef2f2"}}>
-                <div>
-                  <p style={{fontWeight:700,fontSize:13,color:"#dc2626",margin:0}}>⚡ Urgent Delivery</p>
-                  <p style={{fontSize:11,color:"#9ca3af",margin:0}}>1.5× fare — priority dispatch</p>
+                  <p style={{fontSize:11,color:dark?"#9ca3af":"#6b7280",margin:"2px 0 0"}}>{type.desc}  From GH{PRICING[type.id].flag}</p>
                 </div>
-                <button onClick={()=>setUrgent(!urgent)}
-                  style={{width:44,height:24,borderRadius:12,background:urgent?"#dc2626":"#9ca3af",position:"relative",border:"none",cursor:"pointer"}}>
-                  <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:3,left:urgent?22:3,transition:"left 0.2s"}}/>
-                </button>
-              </div>
+                {vType===type.id&&<CheckCircle style={{width:18,height:18,color:"#ea580c"}}/>}
+              </button>
+            ))}
+          </div>
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Pickup & Delivery</p>
+            <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder=" Pickup address"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder=" Delivery address"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <input value={recipientName} onChange={e=>setRecipientName(e.target.value)} placeholder="Recipient name"
+                className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
+              <input value={recipientPhone} onChange={e=>setRecipientPhone(e.target.value)} placeholder="+233..."
+                className={`w-full px-3 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
             </div>
-            <div style={{background:dark?"#431407":"#fff7ed",borderRadius:14,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontWeight:700,fontSize:13,color:"#ea580c"}}>Estimated Fare</span>
-              <span style={{fontWeight:900,fontSize:20,color:"#ea580c"}}>GH₵{estFare()}</span>
-            </div>
-            <button onClick={send} disabled={loading}
-              style={{width:"100%",padding:"14px",background:"#ea580c",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
-              {loading&&<Loader className="w-4 h-4 animate-spin"/>} Send Package 📦
-            </button>
-          </>
-        )}
-        {view==="track"&&(
-          <>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <div style={{display:"flex",gap:8}}>
-                <input value={trackCode} onChange={e=>setTrackCode(e.target.value.toUpperCase())} placeholder="DLV-XXXXXXXX"
-                  className={`w-full px-4 py-3 border rounded-xl text-sm font-mono focus:outline-none ${t.inp}`} style={{flex:1}}/>
-                <button onClick={track} style={{padding:"12px 16px",background:"#ea580c",color:"#fff",borderRadius:12,fontWeight:700,border:"none",cursor:"pointer"}}>Track</button>
+          </div>
+
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Package Details</p>
+            <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="What are you sending?"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <input value={weight} onChange={e=>setWeight(e.target.value)} type="number" placeholder="Weight in kg (approx)"
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",borderRadius:12,background:dark?"#374151":"#fef2f2",border:"1px solid #fecaca"}}>
+              <div>
+                <p style={{fontWeight:700,fontSize:13,color:"#dc2626",margin:0}}> Urgent Delivery</p>
+                <p style={{fontSize:11,color:"#9ca3af",margin:0}}>1.5 fare  priority dispatch</p>
               </div>
+              <button onClick={()=>setUrgent(!urgent)}
+                style={{width:44,height:24,borderRadius:12,background:urgent?"#dc2626":"#9ca3af",position:"relative",border:"none",cursor:"pointer"}}>
+                <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:3,left:urgent?22:3,transition:"left 0.2s"}}/>
+              </button>
             </div>
-            {tracking&&(
-              <div className={`${t.card} rounded-2xl p-4 border-2 border-orange-400`}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                  <p className={`font-black ${t.text}`}>{tracking.trackingCode}</p>
-                  <span style={{fontSize:24}}>{STATUS_ICONS[tracking.status]||"📦"}</span>
-                </div>
-                <div style={{display:"flex",gap:4,marginBottom:8}}>
-                  {STATUS_STEPS.map((s,i)=>(
-                    <div key={s} style={{flex:1,height:4,borderRadius:4,background:STATUS_STEPS.indexOf(tracking.status)>=i?"#ea580c":"#e5e7eb"}}/>
-                  ))}
-                </div>
-                <p style={{fontWeight:700,fontSize:13,color:"#ea580c",textAlign:"center",textTransform:"capitalize"}}>{tracking.status.replace("_"," ")}</p>
+          </div>
+
+          <div style={{background:dark?"#431407":"#fff7ed",borderRadius:14,padding:"12px 14px",border:"1px solid #fed7aa",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontWeight:700,fontSize:13,color:"#ea580c"}}>Estimated Fare</span>
+            <span style={{fontWeight:900,fontSize:20,color:"#ea580c"}}>GH{estFare()}</span>
+          </div>
+
+          <button onClick={send} disabled={loading}
+            style={{width:"100%",padding:"14px",background:"#ea580c",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
+            {loading&&<Loader className="w-4 h-4 animate-spin"/>} Send Package 
+          </button>
+        </>)}
+
+        {view==="track"&&(<>
+          <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <p className={`font-black mb-3 ${t.text}`}>Enter Tracking Code</p>
+            <div style={{display:"flex",gap:8}}>
+              <input value={trackCode} onChange={e=>setTrackCode(e.target.value.toUpperCase())} placeholder="DLV-XXXXXXXX"
+                className={`w-full px-4 py-3 border rounded-xl text-sm font-mono focus:outline-none ${t.inp}`} style={{flex:1}}/>
+              <button onClick={track} style={{padding:"12px 16px",background:"#ea580c",color:"#fff",borderRadius:12,fontWeight:700,border:"none",cursor:"pointer"}}>Track</button>
+            </div>
+          </div>
+
+          {tracking&&(
+            <div className={`${t.card} rounded-2xl p-4 border-2 border-orange-400`}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+                <p className={`font-black ${t.text}`}>{tracking.trackingCode}</p>
+                <span style={{fontSize:24}}>{STATUS_ICONS[tracking.status]||""}</span>
               </div>
-            )}
-          </>
-        )}
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:12}}>
+                <span className={t.sub}>From: {tracking.pickupAddress}</span>
+                <span className={t.sub}>To: {tracking.deliveryAddress}</span>
+              </div>
+              <div style={{display:"flex",gap:4,marginBottom:10}}>
+                {STATUS_STEPS.map((s,i)=>(
+                  <div key={s} style={{flex:1,height:4,borderRadius:4,background:STATUS_STEPS.indexOf(tracking.status)>=i?"#ea580c":"#e5e7eb"}}/>
+                ))}
+              </div>
+              <p style={{fontWeight:700,fontSize:13,color:"#ea580c",textAlign:"center",textTransform:"capitalize"}}>{tracking.status.replace("_"," ")}</p>
+            </div>
+          )}
+        </>)}
+
         {view==="history"&&(
           history.length===0?(
             <div style={{textAlign:"center",padding:"40px 0"}}>
-              <div style={{fontSize:48,marginBottom:12}}>📦</div>
+              <div style={{fontSize:48,marginBottom:12}}></div>
               <p className={`font-bold ${t.text}`}>No deliveries yet</p>
             </div>
           ):history.map(d=>(
             <div key={d.id} className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <p style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:"#ea580c"}}>{d.trackingCode}</p>
-              <p className={`text-xs ${t.sub}`}>{d.pickupAddress} → {d.deliveryAddress}</p>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <p style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:"#ea580c"}}>{d.trackingCode}</p>
+                <span style={{fontSize:16}}>{STATUS_ICONS[d.status]}</span>
+              </div>
+              <p className={`text-xs ${t.sub}`}>{d.pickupAddress}  {d.deliveryAddress}</p>
+              <p className={`text-xs ${t.sub}`}>To: {d.recipientName}  GH{d.fare}</p>
             </div>
           ))
         )}
       </div>
     </div>
+    </div>
   );
 }
+//  DRIVE TO OWN 
 
-// ── MAAS ADMIN VIEW ────────────────────────────────────
-function MaasAdminView({dark,t}) {
-  const [stats,setStats]=useState(null);
+//  MAAS ADMIN VIEW 
+function MaasAdminView({dark, t}) {
+  const [stats, setStats] = useState(null);
   useEffect(()=>{
     api.getMaasStats().then(r=>setStats(r)).catch(()=>setStats({
       activeSchedules:42,activeRentals:8,activeSubscriptions:23,
@@ -2504,37 +2998,41 @@ function MaasAdminView({dark,t}) {
     <>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
         {[
-          ['📅',stats.activeSchedules,'Active Schedules','blue'],
-          ['🚗',stats.activeRentals,'Active Rentals','green'],
-          ['💎',stats.activeSubscriptions,'Subscriptions','purple'],
-          ['📦',stats.pendingDeliveries,'Pending Deliveries','orange'],
-          ['🏢',stats.corporateAccounts,'Corporate Accounts','teal'],
-          ['🎉',stats.upcomingEvents,'Upcoming Events','yellow'],
+          ['',stats.activeSchedules,'Active Schedules','blue'],
+          ['',stats.activeRentals,'Active Rentals','green'],
+          ['',stats.activeSubscriptions,'Subscriptions','purple'],
+          ['',stats.pendingDeliveries,'Pending Deliveries','orange'],
+          ['',stats.corporateAccounts,'Corporate Accounts','teal'],
+          ['',stats.upcomingEvents,'Upcoming Events','yellow'],
         ].map(([i,v,l,c])=>(
-          <div key={l} className={`${t.card} rounded-2xl p-3 border ${t.bdr}`}>
+          <div key={l} className={t.card+' rounded-2xl p-3 border '+t.bdr}>
             <span style={{fontSize:22}}>{i}</span>
             <p style={{fontSize:22,fontWeight:900,color:{blue:'#2563eb',green:'#16a34a',purple:'#9333ea',orange:'#ea580c',teal:'#0d9488',yellow:'#ca8a04'}[c]||'#16a34a',margin:'4px 0 2px'}}>{v}</p>
             <p style={{fontSize:10,color:dark?'#9ca3af':'#6b7280',margin:0}}>{l}</p>
           </div>
         ))}
       </div>
-      <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-        <p className={`font-bold mb-3 ${t.text}`}>MaaS Monthly Revenue</p>
-        {[['Rentals','GH₵'+stats.monthlyRevenue.rentals.toLocaleString(),'#2563eb'],
-          ['Subscriptions','GH₵'+stats.monthlyRevenue.subscriptions.toLocaleString(),'#9333ea'],
-          ['Total','GH₵'+stats.monthlyRevenue.total.toLocaleString(),'#16a34a']
+      <div className={t.card+' rounded-2xl p-4 border '+t.bdr}>
+        <p className={'font-bold mb-3 '+t.text}>MaaS Monthly Revenue</p>
+        {[['Rentals','GH'+stats.monthlyRevenue.rentals.toLocaleString(),'#2563eb'],
+          ['Subscriptions','GH'+stats.monthlyRevenue.subscriptions.toLocaleString(),'#9333ea'],
+          ['Total','GH'+stats.monthlyRevenue.total.toLocaleString(),'#16a34a']
         ].map(([l,v,c])=>(
-          <div key={l} style={{display:'flex',justifyContent:'space-between',paddingBottom:8,borderBottom:`1px solid ${dark?'#374151':'#e5e7eb'}`,marginBottom:8,fontSize:13}}>
+          <div key={l} style={{display:'flex',justifyContent:'space-between',paddingBottom:8,borderBottom:'1px solid '+(dark?'#374151':'#e5e7eb'),marginBottom:8,fontSize:13}}>
             <span style={{color:dark?'#9ca3af':'#6b7280'}}>{l}</span>
             <span style={{fontWeight:700,color:c}}>{v}</span>
           </div>
         ))}
       </div>
+      <div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:12,padding:12}}>
+        <p style={{fontWeight:700,color:'#16a34a',fontSize:12,margin:'0 0 6px'}}>MaaS Services Active</p>
+        {['Scheduled Trips (commute planner)','Vehicle Rental (Kantanka + EV only)','Personal Driver Subscriptions','Package Delivery (motorcycle/tricycle/car)','Trip Sharing','Corporate & School Accounts','Event Rides'].map(s=>(
+          <p key={s} style={{fontSize:11,color:'#374151',margin:'2px 0'}}>{' '+s}</p>
+        ))}
+      </div>
     </>
   );
 }
-
-// ── DRIVE TO OWN ───────────────────────────────────────
 function DriveToOwn({user,role,dark,onBack}) {
   const t=T(dark);
   const [track,setTrack]=useState('A');
@@ -2548,13 +3046,13 @@ function DriveToOwn({user,role,dark,onBack}) {
 
   const DTV={
     A:[
-      {id:'okada',   name:'Motorcycle (Okada)', price:12000,icon:'🏍️',months:'9-10'},
-      {id:'tricycle',name:'Tricycle (Pragya)',  price:18000,icon:'🛺', months:'13-14'},
-      {id:'ev_bike', name:'Electric Motorcycle',price:22000,icon:'⚡🏍️',months:'16-17'},
+      {id:'okada',   name:'Motorcycle (Okada)',  price:12000, icon:'', months:'9-10'},
+      {id:'tricycle',name:'Tricycle (Pragya)',   price:18000, icon:'',  months:'13-14'},
+      {id:'ev_bike', name:'Electric Motorcycle', price:22000, icon:'',months:'16-17'},
     ],
     B:[
-      {id:'k71',  name:'Kantanka K71 SUV',  price:105000,icon:'🚗'},
-      {id:'omama',name:'Kantanka Omama 4x4',price:150000,icon:'🚙'},
+      {id:'k71',  name:'Kantanka K71 SUV',   price:105000, icon:''},
+      {id:'omama',name:'Kantanka Omama 4x4', price:150000, icon:''},
     ],
   };
   const vehicles=DTV[track]||DTV.A;
@@ -2565,46 +3063,53 @@ function DriveToOwn({user,role,dark,onBack}) {
     setLoading(true);
     try{
       await api.req('POST','/dto/apply',{userId:user.id,role,vehicleType:vehId,track});
-      setAppStatus('applied');toast$('Application submitted! Admin reviews within 48hrs');
-    }catch(e){setAppStatus('active');toast$('Drive to Own demo activated!');}
+      setAppStatus('applied');
+      toast$('Application submitted! Admin reviews within 48hrs');
+    }catch(e){
+      setAppStatus('active');
+      toast$('Drive to Own demo activated!');
+    }
     setLoading(false);
   };
 
   return (
-    <div style={{minHeight:'100vh'}} className={t.bg}>
+    <div style={{minHeight:'100vh',background:t.bg}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
       <div style={{background:'linear-gradient(90deg,#1e3a5f,#2563eb)',color:'#fff',padding:'14px 16px',display:'flex',alignItems:'center',gap:12,position:'sticky',top:0,zIndex:20}}>
-        {onBack&&<button onClick={onBack} style={{background:'rgba(255,255,255,0.2)',border:'none',color:'#fff',borderRadius:8,padding:6,cursor:'pointer',fontSize:16}}>←</button>}
+        {onBack&&<button onClick={onBack} style={{background:'rgba(255,255,255,0.2)',border:'none',color:'#fff',borderRadius:8,padding:6,cursor:'pointer',fontSize:16}}>{'<'}</button>}
         <div>
-          <p style={{fontFamily:'Syne,sans-serif',fontWeight:900,fontSize:17,margin:0}}>🏍️ Drive to Own</p>
+          <p style={{fontFamily:'Syne,sans-serif',fontWeight:900,fontSize:17,margin:0}}>{' Drive to Own'}</p>
           <p style={{fontSize:10,margin:0,opacity:0.8}}>Own your vehicle through earnings</p>
         </div>
       </div>
       <div style={{padding:16,display:'flex',flexDirection:'column',gap:14}}>
+
         {appStatus==='done'&&(
           <div style={{background:'linear-gradient(135deg,#14532d,#16a34a)',borderRadius:20,padding:32,color:'#fff',textAlign:'center'}}>
-            <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+            <div style={{fontSize:56,marginBottom:12}}>{''}</div>
             <p style={{fontFamily:'Syne,sans-serif',fontWeight:900,fontSize:22,margin:'0 0 8px'}}>You OWN Your Vehicle!</p>
-            <p style={{fontSize:13,opacity:0.9,margin:0}}>{selected&&selected.name} fully paid off.</p>
+            <p style={{fontSize:13,opacity:0.9,margin:0}}>{selected&&selected.name} fully paid off. Documents released within 48hrs.</p>
           </div>
         )}
+
         {appStatus==='active'&&selected&&(
           <>
             <div style={{background:'linear-gradient(135deg,#1e3a5f,#2563eb)',borderRadius:20,padding:20,color:'#fff',textAlign:'center'}}>
               <div style={{fontSize:40,marginBottom:8}}>{selected.icon}</div>
               <p style={{fontWeight:900,fontSize:18,margin:'0 0 4px'}}>{selected.name}</p>
+              <p style={{fontSize:12,opacity:0.85,margin:0}}>Track {track} - {track==='A'?'35% of daily earnings':'40% of owner share'}</p>
             </div>
-            <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
+            <div className={t.card+' rounded-2xl p-4 border '+t.bdr}>
               <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-                <span className={`font-black text-sm ${t.text}`}>Ownership Progress</span>
+                <span className={'font-black text-sm '+t.text}>Ownership Progress</span>
                 <span style={{fontWeight:900,color:'#2563eb'}}>{progress.toFixed(1)}%</span>
               </div>
               <div style={{height:14,borderRadius:999,background:dark?'#374151':'#e5e7eb',marginBottom:8}}>
                 <div style={{height:14,borderRadius:999,width:progress+'%',background:'linear-gradient(90deg,#2563eb,#16a34a)',transition:'width 0.5s'}}/>
               </div>
               <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
-                <span className={t.sub}>GH₵{paid.toLocaleString()} paid</span>
-                <span className={t.sub}>GH₵{selected.price.toLocaleString()} total</span>
+                <span className={t.sub}>{'GH'+paid.toLocaleString()+' paid'}</span>
+                <span className={t.sub}>{'GH'+selected.price.toLocaleString()+' total'}</span>
               </div>
             </div>
             <button onClick={()=>{
@@ -2613,36 +3118,46 @@ function DriveToOwn({user,role,dark,onBack}) {
               const pa=Math.min(paid+(selected.price*inc/100),selected.price);
               setProgress(np);setPaid(pa);
               if(np>=100){setAppStatus('done');toast$('Vehicle FULLY PAID OFF!');}
-              else toast$('Ride complete! Earnings going toward your '+selected.name);
+              else toast$('Ride complete! +GH'+String.fromCharCode(8373)+(selected.price*inc/100).toFixed(2)+' toward your '+selected.name);
             }} style={{padding:'12px',background:dark?'#374151':'#f0fdf4',border:'1px dashed #16a34a',borderRadius:12,color:'#16a34a',fontWeight:700,fontSize:12,cursor:'pointer',width:'100%'}}>
               Simulate ride completion (demo)
             </button>
           </>
         )}
+
         {!appStatus&&(
           <>
             <div style={{background:'linear-gradient(135deg,#1e3a5f,#2563eb)',borderRadius:16,padding:16,color:'#fff'}}>
               <p style={{fontFamily:'Syne,sans-serif',fontWeight:900,fontSize:16,margin:'0 0 8px'}}>Own Your Vehicle Through Work</p>
-              <p style={{fontSize:12,opacity:0.85,margin:0}}>Your earnings automatically pay off your vehicle. No lump sums. Just drive and own.</p>
+              <p style={{fontSize:12,opacity:0.85,margin:'0 0 12px'}}>Your earnings automatically pay off your vehicle. No lump sums. No arguments. Just drive and own.</p>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,fontSize:11}}>
+                {[['35%','of daily earnings'],['0','upfront (Track A)'],['','Made-in-Ghana']].map(([v,l])=>(
+                  <div key={l} style={{background:'rgba(255,255,255,0.15)',borderRadius:10,padding:'10px 6px',textAlign:'center'}}>
+                    <p style={{fontWeight:900,fontSize:18,margin:'0 0 4px'}}>{v}</p>
+                    <p style={{fontSize:9,opacity:0.8,margin:0}}>{l}</p>
+                  </div>
+                ))}
+              </div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-              {[['A','Driver Direct','🏍️','35% daily earnings'],['B','Owner Assisted','🚗','30% down payment']].map(([tr,lb,ic,desc])=>(
-                <button key={tr} onClick={()=>{setTrack(tr);setVehId('');}} style={{padding:14,borderRadius:14,textAlign:'left',border:`2px solid ${track===tr?'#2563eb':'#e5e7eb'}`,background:track===tr?'#eff6ff':t.card,cursor:'pointer',fontFamily:'inherit'}}>
+              {[['A','Driver Direct','','35% daily earnings'],['B','Owner Assisted','','30% down payment']].map(([tr,lb,ic,desc])=>(
+                <button key={tr} onClick={()=>{setTrack(tr);setVehId('');}} style={{padding:14,borderRadius:14,textAlign:'left',border:'2px solid '+(track===tr?'#2563eb':'#e5e7eb'),background:track===tr?'#eff6ff':t.card,cursor:'pointer',fontFamily:'inherit'}}>
                   <div style={{fontSize:22,marginBottom:4}}>{ic}</div>
-                  <p style={{fontWeight:700,color:track===tr?'#1d4ed8':dark?'#fff':'#111827',fontSize:13,margin:'0 0 2px'}}>Track {tr} - {lb}</p>
+                  <p style={{fontWeight:700,color:track===tr?'#1d4ed8':dark?'#fff':'#111827',fontSize:13,margin:'0 0 2px'}}>{'Track '+tr+' - '+lb}</p>
                   <p style={{fontSize:10,color:dark?'#9ca3af':'#6b7280',margin:0}}>{desc}</p>
                 </button>
               ))}
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              <p className={'font-black text-sm '+t.text}>Select Vehicle:</p>
               {vehicles.map(v=>(
-                <div key={v.id} onClick={()=>setVehId(v.id)} style={{padding:14,borderRadius:14,cursor:'pointer',border:`2px solid ${vehId===v.id?'#2563eb':'#e5e7eb'}`,background:vehId===v.id?'#eff6ff':t.card}}>
+                <div key={v.id} onClick={()=>setVehId(v.id)} style={{padding:14,borderRadius:14,cursor:'pointer',border:'2px solid '+(vehId===v.id?'#2563eb':'#e5e7eb'),background:vehId===v.id?'#eff6ff':t.card}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                     <div style={{display:'flex',alignItems:'center',gap:10}}>
                       <span style={{fontSize:26}}>{v.icon}</span>
                       <div>
                         <p style={{fontWeight:700,color:dark?'#fff':'#111827',fontSize:13,margin:0}}>{v.name}</p>
-                        <p style={{fontSize:11,color:dark?'#9ca3af':'#6b7280',margin:0}}>GH₵{v.price.toLocaleString()}{track==='A'&&v.months?' · ~'+v.months+' months':''}</p>
+                        <p style={{fontSize:11,color:dark?'#9ca3af':'#6b7280',margin:0}}>{'GH'+String.fromCharCode(8373)+v.price.toLocaleString()+(track==='A'&&v.months?' - ~'+v.months+' months':'')}</p>
                       </div>
                     </div>
                     {vehId===v.id&&<CheckCircle style={{width:20,height:20,color:'#2563eb'}}/>}
@@ -2650,8 +3165,15 @@ function DriveToOwn({user,role,dark,onBack}) {
                 </div>
               ))}
             </div>
+            <div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:12,padding:12}}>
+              <p style={{fontWeight:700,color:'#16a34a',fontSize:12,margin:'0 0 6px'}}>Eligibility Requirements</p>
+              {['10+ rides on the platform','KYC verified (Ghana Card or Passport)','No active disputes'].map(r=>(
+                <p key={r} style={{fontSize:11,color:'#374151',margin:'2px 0'}}>{' '+r}</p>
+              ))}
+            </div>
             <button onClick={apply} disabled={loading||!vehId} style={{width:'100%',padding:'14px',borderRadius:14,fontWeight:900,fontSize:15,cursor:(!loading&&vehId)?'pointer':'not-allowed',opacity:(!loading&&vehId)?1:0.5,background:'#2563eb',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:8,border:'none',fontFamily:'inherit'}}>
-              {loading&&<Spin/>} Apply for Drive to Own
+              {loading&&<Spin/>}
+              Apply for Drive to Own
             </button>
           </>
         )}
@@ -2659,8 +3181,7 @@ function DriveToOwn({user,role,dark,onBack}) {
     </div>
   );
 }
-
-// ── ROOT ───────────────────────────────────────────────
+//  ROOT 
 export default function App() {
   const [dark,setDark]           = useState(false);
   const [user,setUser]           = useState(null);
@@ -2669,16 +3190,16 @@ export default function App() {
 
   useEffect(()=>{
     fetch("https://us-central1-okada-online-ghana.cloudfunctions.net/api/health")
-      .then(r=>r.json()).then(d=>setApiStatus((d.success||d.status==="healthy")?"ok":"error")).catch(()=>setApiStatus("error"));
+      .then(r=>r.json()).then(d=>setApiStatus(d.success?"ok":"error")).catch(()=>setApiStatus("error"));
   },[]);
 
   const login  = (u,token,r) => { api.token=token; setUser(u); setRole(r); };
   const logout = () => { setUser(null); setRole(null); api.token=null; };
 
   if(!user) return <AuthScreen onLogin={login} dark={dark} apiStatus={apiStatus}/>;
-  const props={user,onLogout:logout,dark,setDark};
+  const props = {user,onLogout:logout,dark,setDark};
   if(role==="passenger") return <PassengerApp {...props}/>;
   if(role==="driver")    return <DriverApp    {...props}/>;
   if(role==="owner")     return <OwnerApp     {...props}/>;
   if(role==="admin")     return <AdminApp     {...props}/>;
-               }
+}
