@@ -1764,7 +1764,6 @@ function DriverApp({user,onLogout,dark,setDark}) {
       </div>
       <Nav/>
     </div>
-    </div>
   );
 }
 
@@ -1896,9 +1895,7 @@ function OwnerApp({user,onLogout,dark,setDark}) {
       <Nav/>
     </div>
     </div>
-  
-    </div>
-);
+  );
 }
 // ── ADMIN APP ──────────────────────────────────────────
 function AdminApp({user,onLogout,dark,setDark}) {
@@ -2340,4 +2337,4 @@ export default function App() {
   if(role==="driver")    return <DriverApp    {...props}/>;
   if(role==="owner")     return <OwnerApp     {...props}/>;
   if(role==="admin")     return <AdminApp     {...props}/>;
-                 }
+         }
