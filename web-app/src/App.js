@@ -1432,7 +1432,6 @@ function PassengerApp({user,onLogout,dark,setDark}) {
       </div>
       <Nav/>
     </div>
-    </div>
   );
 }
 // ── DRIVER APP ─────────────────────────────────────────
@@ -1896,7 +1895,9 @@ function OwnerApp({user,onLogout,dark,setDark}) {
       <Nav/>
     </div>
     </div>
-  );
+  
+    </div>
+);
 }
 // ── ADMIN APP ──────────────────────────────────────────
 function AdminApp({user,onLogout,dark,setDark}) {
@@ -2312,7 +2313,9 @@ function DriveToOwn({user,role,dark,onBack}) {
         )}
       </div>
     </div>
+ 
     </div>
+   </div>
   );
 }
 // ── ROOT ───────────────────────────────────────────────
@@ -2336,4 +2339,4 @@ export default function App() {
   if(role==="driver")    return <DriverApp    {...props}/>;
   if(role==="owner")     return <OwnerApp     {...props}/>;
   if(role==="admin")     return <AdminApp     {...props}/>;
-                                                }
+}
