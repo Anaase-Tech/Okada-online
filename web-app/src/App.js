@@ -387,7 +387,9 @@ function KycVerify({role, onVerified, dark}) {
         )}
       </div>
     </div>
-  );
+  
+    </div>
+);
 }
 // ── WITHDRAW SHEET ─────────────────────────────────────
 function WithdrawSheet({available,pending,userId,onClose,dark}) {
@@ -878,7 +880,9 @@ function FintechHub({user,role,dark}) {
         </>)}
       </div>
     </div>
-  );
+  
+    </div>
+);
 }
 // ── AUTH SCREEN ────────────────────────────────────────
 function AuthScreen({onLogin,dark,apiStatus="checking"}) {
@@ -1894,9 +1898,9 @@ function OwnerApp({user,onLogout,dark,setDark}) {
       </div>
       <Nav/>
     </div>
-    </div>
+    
   
-    </div>
+    
 );
 }
 // ── ADMIN APP ──────────────────────────────────────────
@@ -2314,8 +2318,8 @@ function DriveToOwn({user,role,dark,onBack}) {
       </div>
     </div>
  
-    </div>
-   </div>
+    
+   
   );
 }
 // ── ROOT ───────────────────────────────────────────────
@@ -2339,4 +2343,4 @@ export default function App() {
   if(role==="driver")    return <DriverApp    {...props}/>;
   if(role==="owner")     return <OwnerApp     {...props}/>;
   if(role==="admin")     return <AdminApp     {...props}/>;
-}
+          }
