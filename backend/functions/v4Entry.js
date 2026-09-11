@@ -52,16 +52,14 @@ function sanitize(value) {
 const fail = (res, code, msg) => res.status(code).json({ error: msg });
 const ok = (res, data, code = 200) => res.status(code).json({ ok: true, ...data });
 
-const { createTrotroRouter } = require('./modules/trotroRoutes');
+const { createTrotroRouter } = require('./modules/trotroRoutesV2');
 const trotroRouter = createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 
 const stack = capturedApp._router?.stack;
 if (!Array.isArray(stack)) throw new Error('V4 integration failed: Express router stack unavailable');
 
 // Find the legacy terminal 404 middleware by its (req,res) signature.
-const terminal404Index = stack.findIndex((layer) =>
-  layer && layer.handle && !layer.route && layer.handle.length === 2
-);
+const terminal404Index = stack.findIndex((layer) => layer && layer.handle && !layer.route && layer.handle.length === 2);
 const insertIndex = terminal404Index >= 0 ? terminal404Index : stack.length;
 
 const v4LayerFactory = express.Router();
