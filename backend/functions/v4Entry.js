@@ -45,6 +45,7 @@ const { createTransitRouter } = require('./modules/transitRoutes');
 const { createTransitBookingRouter } = require('./modules/transitBookingRoutes');
 const { createTransitHubRouter } = require('./modules/transitHubRoutes');
 const { createVipTransitRouter } = require('./modules/vipTransitRoutes');
+const { createJourneyBookingRouter } = require('./modules/journeyBookingRoutes');
 
 const trotroRouter = createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 const trotroAdminRouter = createTrotroAdminRouter({
@@ -55,6 +56,7 @@ const transitRouter = createTransitRouter({ express, db, admin, requireAuth, fai
 const transitBookingRouter = createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 const transitHubRouter = createTransitHubRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 const vipTransitRouter = createVipTransitRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
+const journeyBookingRouter = createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 
 const stack = capturedApp._router?.stack;
 if (!Array.isArray(stack)) throw new Error('V4 integration failed: Express router stack unavailable');
@@ -67,7 +69,8 @@ v4LayerFactory.use('/transit', transitRouter);
 v4LayerFactory.use('/transit', transitBookingRouter);
 v4LayerFactory.use('/transit', transitHubRouter);
 v4LayerFactory.use('/transit', vipTransitRouter);
+v4LayerFactory.use('/journeys', journeyBookingRouter);
 const v4Layers = v4LayerFactory._router?.stack || [];
 stack.splice(insertIndex, 0, ...v4Layers);
-console.log(`✅ Okada Online V4 mounted: /trotro + /trotro-admin + /transit (${v4Layers.length} layers)`);
+console.log(`✅ Okada Online V4 mounted: /trotro + /trotro-admin + /transit + /journeys (${v4Layers.length} layers)`);
 module.exports = legacy;
