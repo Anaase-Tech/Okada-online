@@ -1,23 +1,20 @@
 'use strict';
 
-// V4 integration entrypoint.
-// Loads the existing production API unchanged, captures its Express app,
-// then inserts the new Trotro router immediately before the legacy 404 handler.
-// This keeps the large legacy index.js stable while V4 domains are integrated.
+// Okada Online V4 integration entrypoint.
+// Loads the legacy production API and mounts V4 domain routers before the
+// legacy catch-all 404 layer. Existing functionality remains available.
 
-const expressModule = require('express');
-let capturedApp = null;
-
-const originalExpress = expressModule;
-function captureExpress(...args) {
-  capturedApp = originalExpress(...args);
-  return capturedApp;
-}
-Object.assign(captureExpress, originalExpress);
-Object.setPrototypeOf(captureExpress, Object.getPrototypeOf(originalExpress));
-
+const express = require('express');
 const expressCache = require.cache[require.resolve('express')];
 const previousExpressExport = expressCache.exports;
+let capturedApp = null;
+
+function captureExpress(...args) {
+  capturedApp = express(...args);
+  return capturedApp;
+}
+Object.assign(captureExpress, express);
+Object.setPrototypeOf(captureExpress, Object.getPrototypeOf(express));
 expressCache.exports = captureExpress;
 
 let legacy;
@@ -36,11 +33,12 @@ const auth = admin.auth();
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing authorization token' });
-  const token = header.slice('Bearer '.length);
   try {
-    const decoded = await auth.verifyIdToken(token);
+    const decoded = await auth.verifyIdToken(header.slice('Bearer '.length));
     req.uid = decoded.uid;
-    next();
+    const adminSnap = await db.collection('admins').doc(req.uid).get();
+    req.isAdmin = adminSnap.exists;
+    return next();
   } catch (_err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
@@ -55,28 +53,22 @@ const fail = (res, code, msg) => res.status(code).json({ error: msg });
 const ok = (res, data, code = 200) => res.status(code).json({ ok: true, ...data });
 
 const { createTrotroRouter } = require('./modules/trotroRoutes');
-const trotroRouter = createTrotroRouter({
-  express: originalExpress,
-  db,
-  admin,
-  requireAuth,
-  fail,
-  ok,
-  sanitize,
-});
+const trotroRouter = createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitize });
 
-// index.js installs its catch-all 404 middleware before exporting the app.
-// Insert the V4 router before that terminal layer so /trotro/* is reachable.
 const stack = capturedApp._router?.stack;
 if (!Array.isArray(stack)) throw new Error('V4 integration failed: Express router stack unavailable');
-const terminal404Index = stack.findIndex((layer) => layer && layer.handle && !layer.route && layer.handle.length === 2 && !layer.name?.toLowerCase?.().includes('cors'));
+
+// Find the legacy terminal 404 middleware by its (req,res) signature.
+const terminal404Index = stack.findIndex((layer) =>
+  layer && layer.handle && !layer.route && layer.handle.length === 2
+);
 const insertIndex = terminal404Index >= 0 ? terminal404Index : stack.length;
 
-const layerFactory = originalExpress.Router();
-layerFactory.use('/trotro', trotroRouter);
-const newLayers = layerFactory._router?.stack || [];
-stack.splice(insertIndex, 0, ...newLayers);
+const v4LayerFactory = express.Router();
+v4LayerFactory.use('/trotro', trotroRouter);
+const v4Layers = v4LayerFactory._router?.stack || [];
+stack.splice(insertIndex, 0, ...v4Layers);
 
-console.log(`✅ Okada Online V4 Trotro router mounted at /trotro (${newLayers.length} middleware layers)`);
+console.log(`✅ Okada Online V4 Trotro router mounted at /trotro (${v4Layers.length} layers)`);
 
 module.exports = legacy;
