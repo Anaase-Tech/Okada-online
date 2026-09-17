@@ -47,7 +47,14 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
       console.error("OTP error:",e);
       if(e.code==='auth/invalid-phone-number'){toast$("Invalid phone number","error");}
       else if(e.code==='auth/too-many-requests'){toast$("Too many OTP requests. Try in 10 minutes.","error");}
-      else{ setStep("otp"); toast$("Demo mode — enter any 6 digits"); }
+      else{
+        // Reset the reCAPTCHA widget so the next attempt gets a fresh one
+        // instead of retrying against one that already failed.
+        try{ window.recaptchaVerifier?.clear?.(); }catch(_){}
+        window.recaptchaVerifier=null;
+        setStep("otp");
+        toast$(`Demo mode  real SMS failed (${e.code||e.message||"unknown error"})`,"error");
+      }
     }
     setLoading(false);
   };
