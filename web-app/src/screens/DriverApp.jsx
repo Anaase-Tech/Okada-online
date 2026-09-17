@@ -7,6 +7,7 @@ import { T } from "../theme";
 import { Toast } from "../components/Toast";
 import { Badge } from "../components/Badge";
 import { StatCard } from "../components/StatCard";
+import { Map } from "../components/Map";
 import { KycVerify } from "./KycVerify";
 import { FintechHub } from "./FintechHub";
 import { WithdrawSheet } from "./WithdrawSheet";
@@ -17,6 +18,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("home");
   const [online,setOnline]=useState(false);
+  const [driverSelfPos,setDriverSelfPos]=useState(null);
   const [incoming,setIncoming]=useState(null);
   const [activeRide,setActiveRide]=useState(null);
   const [cashConfirm,setCashConfirm]=useState(null);
@@ -76,9 +78,16 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     return ()=>{ if(unsub) unsub(); };
   },[online,incoming,activeRide,cashConfirm]);
 
+  // Broadcast live GPS while online — also drives the on-screen map pin
   useEffect(()=>{
-    if(!online) return;
-    const iv=setInterval(()=>api.updateLocation(user.id,6.0998+Math.random()*0.01,0.1+Math.random()*0.01).catch(()=>{}),5000);
+    if(!online){ setDriverSelfPos(null); return; }
+    const tick=()=>{
+      const lat=6.2966+(Math.random()-0.5)*0.01, lng=0.0568+(Math.random()-0.5)*0.01;
+      setDriverSelfPos({lat,lng});
+      api.updateLocation(user.id,lat,lng).catch(()=>{});
+    };
+    tick();
+    const iv=setInterval(tick,5000);
     return()=>clearInterval(iv);
   },[online,user.id]);
 
@@ -203,11 +212,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
 
         {view==="home"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-            <div className={`${t.card} rounded-2xl border ${t.bdr}`} style={{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",position:"relative",background:dark?"#1f2937":"#f0fdf4"}}>
-              <span style={{fontSize:44}}>{online?"":""}</span>
-              <p className={`text-sm font-semibold mt-2 ${t.sub}`}>{online?"Broadcasting GPS":"Go online to earn"}</p>
-              {online&&<div style={{position:"absolute",top:8,right:8}}><Badge color="green"> Live</Badge></div>}
-            </div>
+            <Map dark={dark} height={150} status={online?"ongoing":"idle"} driverPos={driverSelfPos}/>
             <button onClick={toggleOnline} style={{width:"100%",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,color:"#fff",background:online?"#dc2626":"#16a34a"}}>
               {online?" Go Offline":" Go Online  Start Earning"}
             </button>
