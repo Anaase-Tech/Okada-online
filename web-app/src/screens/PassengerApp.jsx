@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import { MapPin, Navigation, Star, X, Moon, Sun, AlertCircle, CheckCircle, LogOut } from "lucide-react";
 import { api } from "../api";
 import { T } from "../theme";
-import { VEHICLES, LOCS } from "../constants";
+import { VEHICLES, LOCS, LOCATION_COORDS } from "../constants";
 import { Toast } from "../components/Toast";
 import { Badge } from "../components/Badge";
 import { Spin } from "../components/Spin";
+import { Map } from "../components/Map";
 import { KycVerify } from "./KycVerify";
 import { FintechHub } from "./FintechHub";
 import { ScheduledTrips } from "./ScheduledTrips";
@@ -22,6 +23,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
   const [fare,setFare]=useState(null);
   const [status,setStatus]=useState("idle");
   const [driver,setDriver]=useState(null);
+  const [driverPos,setDriverPos]=useState(null);
   const [eta,setEta]=useState(0);
   const [history,setHistory]=useState([]);
   const [loading,setLoading]=useState(false);
@@ -61,6 +63,18 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       return()=>clearInterval(iv);
     }
   },[status,eta]);
+
+  // Live driver pin: offset near pickup while matched, at pickup on arrival,
+  // midpoint of the route while the ride is ongoing.
+  useEffect(()=>{
+    const p = LOCATION_COORDS[pickup];
+    const d = LOCATION_COORDS[dest];
+    if(!p){ setDriverPos(null); return; }
+    if(status==="matched"){ setDriverPos({ lat:p.lat+0.01, lng:p.lng+0.008 }); }
+    else if(status==="arrived"){ setDriverPos(p); }
+    else if(status==="ongoing"&&d){ setDriverPos({ lat:(p.lat+d.lat)/2, lng:(p.lng+d.lng)/2 }); }
+    else { setDriverPos(null); }
+  },[status,pickup,dest]);
 
   useEffect(()=>{
     if(view==="history"){
@@ -123,10 +137,11 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                 </div>
               </div>
             )}
-            <div className={`${t.card} rounded-2xl border ${t.bdr}`} style={{height:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",marginBottom:12,position:"relative",background:dark?"#1f2937":"linear-gradient(135deg,#f0fdf4,#eff6ff)"}}>
-              <span style={{fontSize:40}}>{status==="ongoing"?"":""}</span>
-              <p className={`text-xs font-semibold mt-2 ${t.sub}`}>{status==="idle"?"Akosombo  Eastern Region":status==="searching"?"Finding drivers":status==="matched"?"Driver on the way! ":status==="arrived"?"Driver arrived!":status==="ongoing"?"Ride in progress":"Done "}</p>
-              <div style={{position:"absolute",top:8,right:8}}><Badge color="green"> GPS Live</Badge></div>
+            <div style={{marginBottom:12}}>
+              <Map dark={dark} height={150} status={status}
+                pickup={LOCATION_COORDS[pickup]||null}
+                destination={LOCATION_COORDS[dest]||null}
+                driverPos={driverPos}/>
             </div>
 
             <div className={`${t.card} rounded-2xl shadow p-4 border ${t.bdr}`} style={{display:"flex",flexDirection:"column",gap:12}}>
