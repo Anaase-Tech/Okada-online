@@ -62,22 +62,46 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
   const verifyOtp=async()=>{
     if(otp.length<4){toast$("Enter OTP","error");return;}
     setLoading(true);
-    try{
-      let fbToken="demo_token";
-      if(window._otpConfirm){
+
+    // Step 1: confirm the code with Firebase, if we have a real challenge.
+    let fbToken=null;
+    if(window._otpConfirm){
+      try{
         const result=await window._otpConfirm.confirm(otp);
         fbToken=await result.user.getIdToken();
         window._otpConfirm=null;
+      }catch(e){
+        console.error("OTP confirm failed:",e);
+        toast$(e.code==='auth/invalid-verification-code'?"Wrong code — try again":"Verification failed — try again","error");
+        setLoading(false);
+        return; // don't fall through to demo on a wrong/expired code
       }
-      try{
-        const res=await api.req("POST","/auth/create-profile",{phone,role,name:name||"User",ownerCode:role==="driver"?owner:undefined});
-        api.token=fbToken; onLogin(res.user,fbToken,role);
+    }
+
+    // Step 2: set the token BEFORE the authenticated backend call — this
+    // was the bug: the request used to fire with no Authorization header,
+    // the backend correctly rejected it with 401, and a real, successfully
+    // verified login was silently swapped for a fake demo one.
+    api.token = fbToken || "demo_token";
+
+    try{
+      const res=await api.req("POST","/auth/create-profile",{phone,role,name:name||"User",ownerCode:role==="driver"?owner:undefined});
+      onLogin(res.user,api.token,role);
+      setLoading(false);
+      return;
+    }catch(err){
+      console.error("Profile error:",err);
+      if(fbToken){
+        // Real phone verification succeeded but the backend call failed —
+        // surface the real reason instead of quietly downgrading to demo.
+        toast$(`Verified, but couldn't reach the server (${err.message||"unknown error"})`,"error");
         setLoading(false);
         return;
-      }catch(err){ console.warn("Profile error:",err); }
-      api.token=fbToken;
-    }catch(e){ console.error("verifyOtp:",e); }
-    // Demo fallback
+      }
+    }
+
+    // True demo mode — reached only when there was never a real Firebase
+    // challenge to confirm in the first place (e.g. OTP send itself failed).
     onLogin({
       id:"demo_"+Date.now(),name:name||"Demo User",phone,role,rating:5.0,totalRides:0,
       profilePhoto:role==="driver"?"👨🏿‍🦱":role==="owner"?"🏢":role==="passenger"?"👤":"⚙️",
