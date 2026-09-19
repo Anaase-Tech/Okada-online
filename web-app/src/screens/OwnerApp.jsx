@@ -4,6 +4,7 @@ import { api } from "../api";
 import { T } from "../theme";
 import { VEHICLES } from "../constants";
 import { Toast } from "../components/Toast";
+import { Badge } from "../components/Badge";
 import { StatCard } from "../components/StatCard";
 import { KycVerify } from "./KycVerify";
 import { FintechHub } from "./FintechHub";
@@ -25,11 +26,15 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
 
   if(showKyc) return <KycVerify role="owner" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
+  const NAV_ITEMS = [["dashboard","📊","Dashboard"],["fintech","💎","Fintech"],["dto","🏍️","Own"],["fleet","🚗","Fleet"],["pools","⛽","Pools"]];
+
   const Nav=()=>(
-    <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`} style={{display:"flex",justifyContent:"space-around",padding:"6px 0",zIndex:30}}>
-      {[["dashboard","","Dashboard"],["fintech","","Fintech"],["dto","","Own"],["fleet","","Fleet"],["pools","","Pools"]].map(([v,ic,lb])=>(
-        <button key={v} onClick={()=>setView(v)} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"4px 8px",color:view===v?"#2563eb":dark?"#9ca3af":"#6b7280"}}>
-          <span style={{fontSize:18}}>{ic}</span><span style={{fontSize:10,fontWeight:700,marginTop:1}}>{lb}</span>
+    <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`}
+      style={{display:"flex",overflowX:"auto",WebkitOverflowScrolling:"touch",padding:"6px 4px",zIndex:30}}>
+      {NAV_ITEMS.map(([v,ic,lb])=>(
+        <button key={v} onClick={()=>setView(v)}
+          style={{display:"flex",flexDirection:"column",alignItems:"center",flex:"0 0 auto",padding:"4px 10px",minWidth:52,color:view===v?"#2563eb":dark?"#9ca3af":"#6b7280"}}>
+          <span style={{fontSize:18}}>{ic}</span><span style={{fontSize:10,fontWeight:700,marginTop:1,whiteSpace:"nowrap"}}>{lb}</span>
         </button>
       ))}
     </div>
@@ -52,7 +57,7 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-500`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <p style={{color:"#2563eb",fontWeight:900,fontSize:13}}> My Wallet</p>
+                <p style={{color:"#2563eb",fontWeight:900,fontSize:13}}>💰 My Wallet</p>
                 <button onClick={()=>setShowWithdraw(true)} style={{padding:"6px 12px",background:"#2563eb",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
                   <ArrowDownCircle style={{width:12,height:12}}/> Withdraw
                 </button>
@@ -60,37 +65,37 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div style={{background:"#eff6ff",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#2563eb",fontWeight:700}}>AVAILABLE</p>
-                  <p style={{fontWeight:900,color:"#2563eb",fontSize:20}}>GH{wallet.available.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#2563eb",fontSize:20}}>GH₵{wallet.available.toFixed(2)}</p>
                 </div>
                 <div style={{background:dark?"#374151":"#fefce8",borderRadius:12,padding:"10px",textAlign:"center"}}>
                   <p style={{fontSize:10,color:"#ca8a04",fontWeight:700}}>PENDING 24H</p>
-                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH{wallet.pending.toFixed(2)}</p>
+                  <p style={{fontWeight:900,color:"#ca8a04",fontSize:20}}>GH₵{wallet.pending.toFixed(2)}</p>
                 </div>
               </div>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border-2 border-blue-400`}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div><p style={{color:"#2563eb",fontWeight:900,fontSize:13}}> Your Owner Code</p><p className={`text-xs ${t.sub}`}>Share with your drivers</p></div>
+                <div><p style={{color:"#2563eb",fontWeight:900,fontSize:13}}>🔑 Your Owner Code</p><p className={`text-xs ${t.sub}`}>Share with your drivers</p></div>
                 <button onClick={()=>setShowCode(!showCode)}>{showCode?<EyeOff style={{width:16,height:16,color:"#9ca3af"}}/>:<Eye style={{width:16,height:16,color:"#9ca3af"}}/>}</button>
               </div>
               {showCode?(
                 <div style={{display:"flex",gap:8}}>
                   <div className={`flex-1 px-4 py-3 border rounded-xl ${t.inp} font-mono font-black text-center text-lg`}>{user.ownerCode||"OWN??????"}</div>
-                  <button onClick={()=>{navigator.clipboard?.writeText(user.ownerCode||"");toast$("Copied! ");}} style={{padding:"12px",background:"#2563eb",color:"#fff",borderRadius:12}}><Copy style={{width:18,height:18}}/></button>
+                  <button onClick={()=>{navigator.clipboard?.writeText(user.ownerCode||"");toast$("Copied! 📋");}} style={{padding:"12px",background:"#2563eb",color:"#fff",borderRadius:12}}><Copy style={{width:18,height:18}}/></button>
                 </div>
               ):(
-                <div style={{textAlign:"center",padding:"12px 0",fontSize:28,fontFamily:"monospace",letterSpacing:"0.2em",color:dark?"#374151":"#d1d5db"}}></div>
+                <div style={{textAlign:"center",padding:"12px 0",fontSize:28,fontFamily:"monospace",letterSpacing:"0.2em",color:dark?"#374151":"#d1d5db"}}>••••••</div>
               )}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="" label="Today (70%)" value={"GH"+stats.todayRevenue} color="green" dark={dark}/>
-              <StatCard icon="" label="This Week" value={"GH"+stats.weekRevenue} color="blue" dark={dark}/>
-              <StatCard icon="" label="Total Earned" value={"GH"+stats.totalRevenue} color="purple" dark={dark}/>
-              <StatCard icon="" label="Drivers" value={`${stats.activeDrivers}/${stats.totalDrivers}`} sub="Online/Total" color="yellow" dark={dark}/>
+              <StatCard icon="💰" label="Today (50%)" value={"GH₵"+stats.todayRevenue} color="green" dark={dark}/>
+              <StatCard icon="📅" label="This Week" value={"GH₵"+stats.weekRevenue} color="blue" dark={dark}/>
+              <StatCard icon="🏆" label="Total Earned" value={"GH₵"+stats.totalRevenue} color="purple" dark={dark}/>
+              <StatCard icon="👥" label="Drivers" value={`${stats.activeDrivers}/${stats.totalDrivers}`} sub="Online/Total" color="yellow" dark={dark}/>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH{stats.totalRevenue})</h3>
-              {[["Your share (50%)","GH"+(stats.totalRevenue*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH"+(stats.totalRevenue*0.10).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH"+(stats.totalRevenue*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH"+(stats.totalRevenue*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH"+(stats.totalRevenue*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
+              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH₵{stats.totalRevenue})</h3>
+              {[["Your share (50%)","GH₵"+(stats.totalRevenue*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH₵"+(stats.totalRevenue*0.25).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH₵"+(stats.totalRevenue*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
                 <div key={l} style={{display:"flex",justifyContent:"space-between",paddingBottom:8,borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:8,fontSize:13}}>
                   <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
                 </div>
@@ -103,11 +108,11 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
         )}
         {view==="fleet"&&(
           <div style={{padding:16}}>
-            <h2 className={`font-black text-lg mb-4 ${t.text}`}> My Fleet</h2>
+            <h2 className={`font-black text-lg mb-4 ${t.text}`}>🚗 My Fleet</h2>
             {(user.vehicles||[{id:"v1",type:"okada",plate:"ER-1234-26"},{id:"v2",type:"car",plate:"ER-5678-26"}]).map(v=>(
               <div key={v.id} className={`${t.card} rounded-2xl p-4 border ${t.bdr} mb-3`}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <span style={{fontSize:32}}>{VEHICLES.find(x=>x.id===v.type)?.icon||""}</span>
+                  <span style={{fontSize:32}}>{VEHICLES.find(x=>x.id===v.type)?.icon||"🏍️"}</span>
                   <div style={{flex:1}}><p className={`font-bold ${t.text}`}>{VEHICLES.find(x=>x.id===v.type)?.label}</p><p className={`text-xs font-mono ${t.sub}`}>{v.plate}</p></div>
                   <Badge color="green">Active</Badge>
                 </div>
@@ -117,14 +122,14 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
         )}
         {view==="pools"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-            <h2 className={`font-black text-lg ${t.text}`}> Fuel & Maintenance Pools</h2>
-            {[{icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.fuelPool,color:"#ca8a04",border:"border-yellow-500",items:[" Locked  fuel stations only"," Driver code at pump"," Full transaction log"]},
-              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.maintenancePool,color:"#ea580c",border:"border-orange-500",items:[" Service due alerts"," You approve payments"," Direct to garages"]}
+            <h2 className={`font-black text-lg ${t.text}`}>⛽ Fuel & Maintenance Pools</h2>
+            {[{icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.fuelPool,color:"#ca8a04",border:"border-yellow-500",items:["🔒 Locked — fuel stations only","⛽ Driver code at pump","📊 Full transaction log"]},
+              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.maintenancePool,color:"#ea580c",border:"border-orange-500",items:["🔧 Service due alerts","✅ You approve payments","📱 Direct to garages"]}
             ].map(p=>(
               <div key={p.label} className={`${t.card} rounded-2xl p-4 border-2 ${p.border}`}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>{p.icon}<span className={`font-black ${t.text}`}>{p.label}</span></div>
-                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH{p.val}</span>
+                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH₵{p.val}</span>
                 </div>
                 <div className={`rounded-xl p-3 text-xs ${dark?"bg-gray-700":"bg-gray-50"}`}>
                   {p.items.map(i=><p key={i} className={t.text} style={{marginBottom:3}}>{i}</p>)}
@@ -138,4 +143,3 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
     </div>
   );
 }
-//  ADMIN APP
