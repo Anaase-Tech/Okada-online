@@ -25,13 +25,13 @@ export function ScheduledTrips({user, dark, onBack}) {
 
   const DAYS_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const RENTAL_VEHICLES = [
-    {id:"car",label:"Car",icon:""},{id:"okada",label:"Okada",icon:""},
-    {id:"tricycle",label:"Tricycle",icon:""},{id:"ev_car",label:"EV Car",icon:""},
+    {id:"car",label:"Car",icon:"🚗"},{id:"okada",label:"Okada",icon:"🏍️"},
+    {id:"tricycle",label:"Tricycle",icon:"🛺"},{id:"ev_car",label:"EV Car",icon:"⚡🚗"},
   ];
   const CATS = [
-    {id:"work",label:"Work",icon:""},{id:"school",label:"School",icon:""},
-    {id:"church",label:"Church",icon:""},{id:"lunch",label:"Lunch",icon:""},
-    {id:"gym",label:"Gym",icon:""},{id:"custom",label:"Custom",icon:""},
+    {id:"work",label:"Work",icon:"💼"},{id:"school",label:"School",icon:"🎒"},
+    {id:"church",label:"Church",icon:"⛪"},{id:"lunch",label:"Lunch",icon:"🍽️"},
+    {id:"gym",label:"Gym",icon:"💪"},{id:"custom",label:"Custom",icon:"📍"},
   ];
 
   useEffect(() => {
@@ -48,7 +48,7 @@ export function ScheduledTrips({user, dark, onBack}) {
     setLoading(true);
     try {
       await api.createSchedule({userId:user.id,name,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,returnTime,days,category,payFromSavings});
-      toast$("Schedule created  Driver will be matched 30 min before departure");
+      toast$("Schedule created ✅ Driver will be matched 30 min before departure");
       setView("list");
     } catch(err) { console.warn(err); toast$("Schedule saved (demo mode)"); setView("list"); }
     setLoading(false);
@@ -61,14 +61,14 @@ export function ScheduledTrips({user, dark, onBack}) {
       {toast&&<Toast msg={toast.msg} type={toast.type} close={()=>setToast(null)}/>}
 
       <div style={{background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20}}>
-        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}></button>}
+        {onBack&&<button onClick={onBack} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer"}}>←</button>}
         <div>
-          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}> Scheduled Trips</p>
-          <p style={{fontSize:11,margin:0,opacity:0.8}}>Set it once  we handle the rest</p>
+          <p style={{fontFamily:"Syne,sans-serif",fontWeight:900,fontSize:17,margin:0}}>📅 Scheduled Trips</p>
+          <p style={{fontSize:11,margin:0,opacity:0.8}}>Set it once — we handle the rest</p>
         </div>
         <button onClick={()=>setView(view==="list"?"create":"list")}
           style={{marginLeft:"auto",padding:"8px 14px",background:"rgba(255,255,255,0.2)",borderRadius:10,fontWeight:700,fontSize:12,color:"#fff",border:"none",cursor:"pointer"}}>
-          {view==="list"?"+ New":" Cancel"}
+          {view==="list"?"+ New":"✕ Cancel"}
         </button>
       </div>
 
@@ -77,9 +77,9 @@ export function ScheduledTrips({user, dark, onBack}) {
         {view==="list"&&(<>
           {schedules.length===0&&(
             <div style={{textAlign:"center",padding:"48px 0"}}>
-              <div style={{fontSize:48,marginBottom:12}}></div>
+              <div style={{fontSize:48,marginBottom:12}}>📅</div>
               <p className={`font-bold ${t.text}`}>No schedules yet</p>
-              <p className={`text-xs ${t.sub} mt-1`}>Set up your daily commute, school run, or church route once  drivers come to you automatically.</p>
+              <p className={`text-xs ${t.sub} mt-1`}>Set up your daily commute, school run, or church route once — drivers come to you automatically.</p>
               <button onClick={()=>setView("create")} style={{marginTop:16,padding:"12px 24px",background:"#1d4ed8",color:"#fff",borderRadius:14,fontWeight:900}}>Create First Schedule</button>
             </div>
           )}
@@ -88,18 +88,18 @@ export function ScheduledTrips({user, dark, onBack}) {
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                 <div>
                   <p className={`font-black ${t.text}`}>{s.name}</p>
-                  <p className={`text-xs ${t.sub}`}>{s.pickupAddress}  {s.destAddress}</p>
-                  <p className={`text-xs ${t.sub}`}> {s.departTime}  {s.days.map(d=>DAYS_LABELS[d]).join(", ")}</p>
+                  <p className={`text-xs ${t.sub}`}>{s.pickupAddress} → {s.destAddress}</p>
+                  <p className={`text-xs ${t.sub}`}>⏰ {s.departTime} · {s.days.map(d=>DAYS_LABELS[d]).join(", ")}</p>
                 </div>
                 <span style={{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:s.paused?"#f3f4f6":"#eff6ff",color:s.paused?"#6b7280":"#1d4ed8"}}>{s.paused?"Paused":"Active"}</span>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <button onClick={async()=>{try{await api.pauseSchedule(s.id);}catch(err){console.warn(err);}setSchedules(prev=>prev.map(x=>x.id===s.id?{...x,paused:!x.paused}:x));toast$(s.paused?"Resumed":"Paused");}}
                   style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:s.paused?"#16a34a":"#fef2f2",color:s.paused?"#fff":"#ef4444",border:"none",cursor:"pointer"}}>
-                  {s.paused?" Resume":" Pause"}
+                  {s.paused?"▶ Resume":"⏸ Pause"}
                 </button>
                 <button style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"none",cursor:"pointer"}}>
-                   Adjust
+                  ✏️ Adjust
                 </button>
               </div>
             </div>
@@ -110,7 +110,7 @@ export function ScheduledTrips({user, dark, onBack}) {
           <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
             <p className={`font-black mb-3 ${t.text}`}>Trip Name & Route</p>
             <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
-              {[{id:"work",icon:""},{id:"school",icon:""},{id:"church",icon:""},{id:"lunch",icon:""},{id:"gym",icon:""},{id:"custom",icon:""}].map(c=>(
+              {CATS.map(c=>(
                 <button key={c.id} onClick={()=>{setCategory(c.id);setName(c.id.charAt(0).toUpperCase()+c.id.slice(1)+" Trip");}}
                   style={{padding:"8px 14px",borderRadius:20,fontSize:12,fontWeight:700,border:"2px solid",borderColor:category===c.id?"#1d4ed8":"#e5e7eb",background:category===c.id?"#eff6ff":"transparent",color:category===c.id?"#1d4ed8":dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>
                   {c.icon} {c.id.charAt(0).toUpperCase()+c.id.slice(1)}
@@ -119,9 +119,9 @@ export function ScheduledTrips({user, dark, onBack}) {
             </div>
             <input value={name} onChange={e=>setName(e.target.value)} placeholder="Schedule name (e.g. Morning Commute)"
               className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-            <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder=" Pickup location"
+            <input value={pickup} onChange={e=>setPickup(e.target.value)} list="locs" placeholder="📍 Pickup location"
               className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:10}}/>
-            <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder=" Destination"
+            <input value={dest} onChange={e=>setDest(e.target.value)} list="locs" placeholder="🏁 Destination"
               className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%"}}/>
           </div>
 
@@ -164,7 +164,7 @@ export function ScheduledTrips({user, dark, onBack}) {
 
           <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`} style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div>
-              <p className={`font-bold text-sm ${t.text}`}> Pay from Savings</p>
+              <p className={`font-bold text-sm ${t.text}`}>💰 Pay from Savings</p>
               <p className={`text-xs ${t.sub}`}>Auto-deduct trip fares from savings balance</p>
             </div>
             <button onClick={()=>setPayFromSavings(!payFromSavings)}
@@ -175,7 +175,7 @@ export function ScheduledTrips({user, dark, onBack}) {
 
           <button onClick={createSchedule} disabled={loading}
             style={{width:"100%",padding:"14px",background:"#1d4ed8",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"none",cursor:"pointer",opacity:loading?0.7:1}}>
-            {loading&&<Loader className="w-4 h-4 animate-spin"/>} Create Schedule 
+            {loading&&<Loader className="w-4 h-4 animate-spin"/>} Create Schedule ✅
           </button>
         </>)}
       </div>
