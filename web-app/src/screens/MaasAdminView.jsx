@@ -16,12 +16,12 @@ export function MaasAdminView({dark, t}) {
     <>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
         {[
-          ['',stats.activeSchedules,'Active Schedules','blue'],
-          ['',stats.activeRentals,'Active Rentals','green'],
-          ['',stats.activeSubscriptions,'Subscriptions','purple'],
-          ['',stats.pendingDeliveries,'Pending Deliveries','orange'],
-          ['',stats.corporateAccounts,'Corporate Accounts','teal'],
-          ['',stats.upcomingEvents,'Upcoming Events','yellow'],
+          ['📅',stats.activeSchedules,'Active Schedules','blue'],
+          ['🚗',stats.activeRentals,'Active Rentals','green'],
+          ['💎',stats.activeSubscriptions,'Subscriptions','purple'],
+          ['📦',stats.pendingDeliveries,'Pending Deliveries','orange'],
+          ['🏢',stats.corporateAccounts,'Corporate Accounts','teal'],
+          ['🎉',stats.upcomingEvents,'Upcoming Events','yellow'],
         ].map(([i,v,l,c])=>(
           <div key={l} className={t.card+' rounded-2xl p-3 border '+t.bdr}>
             <span style={{fontSize:22}}>{i}</span>
@@ -31,10 +31,10 @@ export function MaasAdminView({dark, t}) {
         ))}
       </div>
       <div className={t.card+' rounded-2xl p-4 border '+t.bdr}>
-        <p className={'font-bold mb-3 '+t.text}>MaaS Monthly Revenue</p>
-        {[['Rentals','GH'+stats.monthlyRevenue.rentals.toLocaleString(),'#2563eb'],
-          ['Subscriptions','GH'+stats.monthlyRevenue.subscriptions.toLocaleString(),'#9333ea'],
-          ['Total','GH'+stats.monthlyRevenue.total.toLocaleString(),'#16a34a']
+        <p className={'font-bold mb-3 '+t.text}>💰 MaaS Monthly Revenue</p>
+        {[['Rentals','GH₵'+stats.monthlyRevenue.rentals.toLocaleString(),'#2563eb'],
+          ['Subscriptions','GH₵'+stats.monthlyRevenue.subscriptions.toLocaleString(),'#9333ea'],
+          ['Total','GH₵'+stats.monthlyRevenue.total.toLocaleString(),'#16a34a']
         ].map(([l,v,c])=>(
           <div key={l} style={{display:'flex',justifyContent:'space-between',paddingBottom:8,borderBottom:'1px solid '+(dark?'#374151':'#e5e7eb'),marginBottom:8,fontSize:13}}>
             <span style={{color:dark?'#9ca3af':'#6b7280'}}>{l}</span>
@@ -43,9 +43,9 @@ export function MaasAdminView({dark, t}) {
         ))}
       </div>
       <div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:12,padding:12}}>
-        <p style={{fontWeight:700,color:'#16a34a',fontSize:12,margin:'0 0 6px'}}>MaaS Services Active</p>
+        <p style={{fontWeight:700,color:'#16a34a',fontSize:12,margin:'0 0 6px'}}>✅ MaaS Services Active</p>
         {['Scheduled Trips (commute planner)','Vehicle Rental (Kantanka + EV only)','Personal Driver Subscriptions','Package Delivery (motorcycle/tricycle/car)','Trip Sharing','Corporate & School Accounts','Event Rides'].map(s=>(
-          <p key={s} style={{fontSize:11,color:'#374151',margin:'2px 0'}}>{' '+s}</p>
+          <p key={s} style={{fontSize:11,color:'#374151',margin:'2px 0'}}>✓ {s}</p>
         ))}
       </div>
     </>
