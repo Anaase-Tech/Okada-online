@@ -59,18 +59,21 @@ export function DriverApp({user,onLogout,dark,setDark}) {
               dist: r.distance || '—',
               dur: r.duration || '—',
               fare: 'GH₵' + (r.fare || r.total || '0'),
-              earn: 'GH₵' + ((r.fare || r.total || 0) * 0.10).toFixed(2),
+              // 25% base driver share (matches backend CFG.splits.driver) —
+              // the exact per-ride figure still comes from the backend at
+              // /rides/:id/complete, which also applies +2% female/EV bonuses.
+              earn: 'GH₵' + ((r.fare || r.total || 0) * 0.25).toFixed(2),
               payMethod: r.payMethod || 'mtn',
             });
           }
         }, () => {
           // Firestore unavailable — demo simulation fallback
-          const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+          const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
           return ()=>clearTimeout(tm);
         });
       } catch(err) {
         // Demo fallback
-        const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵1.35',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+        const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
         return ()=>clearTimeout(tm);
       }
     };
@@ -110,7 +113,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   };
 
   const confirmCash=async()=>{
-    const earned=parseFloat((cashConfirm.earn||"GH₵1.35").replace("GH₵",""));
+    const earned=parseFloat((cashConfirm.earn||"GH₵3.38").replace("GH₵",""));
     try{await api.confirmCashPayment(cashConfirm.id,user.id);}catch(err){ console.warn("Error:",err); }
     setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
     setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
@@ -120,7 +123,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   };
 
   const complete=()=>{
-    const earned=parseFloat((activeRide.earn||"GH₵1.35").replace("GH₵",""));
+    const earned=parseFloat((activeRide.earn||"GH₵3.38").replace("GH₵",""));
     setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
     setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
     setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
@@ -303,7 +306,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
               </button>
             </div>
             <div className={`${t.card} rounded-2xl p-5 border ${t.bdr}`} style={{textAlign:"center"}}>
-              <p className={`text-sm ${t.sub}`}>Total Lifetime (your 10%)</p>
+              <p className={`text-sm ${t.sub}`}>Total Lifetime (your 25%)</p>
               <p style={{fontSize:40,fontWeight:900,color:"#16a34a",margin:"4px 0"}}>GH₵{earnings.total}</p>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
