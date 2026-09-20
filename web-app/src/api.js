@@ -60,7 +60,16 @@ class Api {
   // payment status updates arrive via the Paystack webhook instead.
   verifyPayment(ref)                             { return this.req("GET", `/payments/verify/${ref}`); }
   payLaterRequest(rideId, userId, amount)        { return this.req("POST", "/fintech/pay-later/request", { userId, rideId, amount }); }
-  repayLater(userId, payLaterTxId)               { return this.req("POST", "/fintech/pay-later/repay", { userId, payLaterTxId }); }
+  // FintechHub only ever has a lump "amount owed", not a specific
+  // transaction id, so this repays by userId+amount; the backend finds
+  // and settles the matching pending record(s) itself. Pass a specific
+  // payLaterTxId instead when you actually have one (e.g. from a fetched
+  // list of pending records).
+  repayLater(userId, amountOrTxId)               {
+    const isTxId = typeof amountOrTxId === "string";
+    return this.req("POST", "/fintech/pay-later/repay",
+      isTxId ? { userId, payLaterTxId: amountOrTxId } : { userId, amount: amountOrTxId });
+  }
   requestWithdrawal(userId, amount, momoPhone)   { return this.req("POST", "/wallet/withdraw", { userId, amount, momoPhone }); }
 
   // ── Fintech ────────────────────────────────────────
@@ -72,7 +81,9 @@ class Api {
   getLoanEligibility(userId)                     { return this.req("GET", `/fintech/loans/eligibility/${userId}`); }
   getLoanStatus(userId)                          { return this.req("GET", `/fintech/loans/status/${userId}`); }
   buyInsurance(userId, planId)                   { return this.req("POST", "/insurance/buy", { userId, planId }); }
-  fileInsuranceClaim(userId, policyId, claimType, description) { return this.req("POST", "/insurance/claim", { userId, policyId, claimType, description }); }
+  // Matches how FintechHub actually calls this: (userId, claimType, description).
+  // policyId is optional server-side, so it's an optional 4th arg here too.
+  fileInsuranceClaim(userId, claimType, description, policyId = "") { return this.req("POST", "/insurance/claim", { userId, policyId, claimType, description }); }
   getInsurancePolicy(userId)                     { return this.req("GET", `/insurance/policy/${userId}`); }
 
   // ── MaaS: Scheduled Trips ──────────────────────────
