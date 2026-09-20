@@ -1491,20 +1491,56 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   }
 });
 
+// Supports two calling patterns:
+//   { userId, payLaterTxId }  — repay one specific known record
+//   { userId, amount }        — no specific record known (this is how
+//     FintechHub actually calls it, since it only tracks a lump total
+//     owed); settles oldest pending/overdue records up to that amount.
 app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
   try {
-    const { userId, payLaterTxId } = req.body;
-    const txRef  = db.collection('pay_later').doc(sanitize(payLaterTxId));
-    const txSnap = await txRef.get();
-    if (!txSnap.exists) return fail(res, 404, 'Record not found');
-    if (txSnap.data().status === 'paid') return ok(res, { message: 'Already paid' });
-    const amount = txSnap.data().amount;
-    await txRef.update({ status: 'paid',
-      paidAt: admin.firestore.FieldValue.serverTimestamp() });
+    const { userId, payLaterTxId, amount } = req.body;
+
+    if (payLaterTxId) {
+      const txRef  = db.collection('pay_later').doc(sanitize(payLaterTxId));
+      const txSnap = await txRef.get();
+      if (!txSnap.exists) return fail(res, 404, 'Record not found');
+      if (txSnap.data().status === 'paid') return ok(res, { message: 'Already paid' });
+      const amt = txSnap.data().amount;
+      await txRef.update({ status: 'paid',
+        paidAt: admin.firestore.FieldValue.serverTimestamp() });
+      await db.collection('users').doc(sanitize(userId)).update({
+        'payLater.used': admin.firestore.FieldValue.increment(-amt),
+      });
+      return ok(res, { repaid: amt, status: 'paid' });
+    }
+
+    if (!userId || !amount)
+      return fail(res, 400, 'userId and amount, or payLaterTxId, required');
+
+    let remaining = parseFloat(amount);
+    const pending = await db.collection('pay_later')
+      .where('userId','==', sanitize(userId))
+      .where('status','in',['deferred','overdue'])
+      .orderBy('createdAt','asc').get();
+
+    let totalRepaid = 0;
+    const batch = db.batch();
+    for (const doc of pending.docs) {
+      if (remaining <= 0) break;
+      const amt = doc.data().amount;
+      batch.update(doc.ref, { status: 'paid',
+        paidAt: admin.firestore.FieldValue.serverTimestamp() });
+      remaining   -= amt;
+      totalRepaid += amt;
+    }
+    if (totalRepaid === 0) return fail(res, 400, 'No outstanding Pay Later balance found');
+
+    await batch.commit();
     await db.collection('users').doc(sanitize(userId)).update({
-      'payLater.used': admin.firestore.FieldValue.increment(-amount),
+      'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
+      'payLater.suspended': false,
     });
-    return ok(res, { repaid: amount, status: 'paid' });
+    return ok(res, { repaid: +totalRepaid.toFixed(2), status: 'paid' });
   } catch (e) {
     return fail(res, 500, e.message);
   }
