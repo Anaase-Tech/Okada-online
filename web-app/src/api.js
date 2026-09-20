@@ -30,15 +30,23 @@ class Api {
   }
 
   // ── Auth / KYC ─────────────────────────────────────
+  // NOTE: real phone auth goes through Firebase client-side
+  // (signInWithPhoneNumber) — AuthScreen calls /auth/create-profile
+  // directly. These two are kept only in case anything still
+  // references them, but the backend has no matching routes.
   sendOtp(phone, role)                          { return this.req("POST", "/auth/send-otp", { phone, role }); }
   verifyOtp(phone, otp, role, name, ownerCode)  { return this.req("POST", "/auth/verify-otp", { phone, otp, role, name, ownerCode }); }
-  verifyGhanaCard(cardNum, photo, selfie)        { return this.req("POST", "/kyc/ghana-card", { cardNum, photo, selfie }); }
-  verifyPassport(passNum, country, photo, selfie){ return this.req("POST", "/kyc/passport", { passNum, country, photo, selfie }); }
+  // Real KYC path is unified: POST /verify/kyc with docType ('ghana_card'|'passport'|'voters_id')
+  verifyGhanaCard(userId, role, cardNum)         { return this.req("POST", "/verify/kyc", { userId, role, docType: "ghana_card", docNumber: cardNum }); }
+  verifyPassport(userId, role, passNum)          { return this.req("POST", "/verify/kyc", { userId, role, docType: "passport", docNumber: passNum }); }
 
   // ── Rides ──────────────────────────────────────────
   requestRide(data)                              { return this.req("POST", "/rides/request", data); }
   acceptRide(rideId, driverId)                   { return this.req("POST", `/rides/${rideId}/accept`, { driverId }); }
-  confirmCashPayment(rideId, driverId)           { return this.req("POST", `/rides/${rideId}/confirm-cash`, { driverId }); }
+  // There is no separate "confirm cash" endpoint — a cash-paid ride is
+  // still completed through the same /complete route as any other ride;
+  // the payment method itself doesn't change how the backend settles it.
+  confirmCashPayment(rideId)                     { return this.req("POST", `/rides/${rideId}/complete`, {}); }
   completeRide(rideId)                           { return this.req("POST", `/rides/${rideId}/complete`, {}); }
   toggleOnline(id, isOnline, vehicleType)        { return this.req("PUT", `/drivers/${id}/status`, { isOnline, vehicleType }); }
   updateLocation(id, lat, lng)                   { return this.req("PUT", `/drivers/${id}/location`, { latitude: lat, longitude: lng }); }
@@ -48,18 +56,24 @@ class Api {
 
   // ── Payments / Wallet ──────────────────────────────
   initPayment(rideId, amount, email, phone)      { return this.req("POST", "/payments/initialize", { rideId, amount, email, phone }); }
+  // No GET /payments/verify/:ref route exists on the backend yet —
+  // payment status updates arrive via the Paystack webhook instead.
   verifyPayment(ref)                             { return this.req("GET", `/payments/verify/${ref}`); }
-  payLaterRequest(rideId, userId)                { return this.req("POST", "/payments/pay-later", { rideId, userId }); }
-  repayLater(userId, amount)                     { return this.req("POST", "/payments/repay-later", { userId, amount }); }
+  payLaterRequest(rideId, userId, amount)        { return this.req("POST", "/fintech/pay-later/request", { userId, rideId, amount }); }
+  repayLater(userId, payLaterTxId)               { return this.req("POST", "/fintech/pay-later/repay", { userId, payLaterTxId }); }
   requestWithdrawal(userId, amount, momoPhone)   { return this.req("POST", "/wallet/withdraw", { userId, amount, momoPhone }); }
 
   // ── Fintech ────────────────────────────────────────
   depositSavings(userId, amount)                 { return this.req("POST", "/fintech/savings/deposit", { userId, amount }); }
-  withdrawSavings(userId, amount)                { return this.req("POST", "/fintech/savings/withdraw", { userId, amount }); }
-  setSavingsRate(userId, percent)                { return this.req("PUT", `/fintech/savings/rate/${userId}`, { percent }); }
+  withdrawSavings(userId, amount, momoPhone)     { return this.req("POST", "/fintech/savings/withdraw", { userId, amount, momoPhone }); }
+  setSavingsRate(userId, rate)                   { return this.req("PUT", "/fintech/savings/rate", { userId, rate }); }
+  getSavingsBalance(userId)                      { return this.req("GET", `/fintech/savings/balance/${userId}`); }
   applyLoan(userId, amount, purpose)             { return this.req("POST", "/fintech/loans/apply", { userId, amount, purpose }); }
-  buyInsurance(userId, plan, vehicleId)          { return this.req("POST", "/insurance/buy", { userId, plan, vehicleId }); }
-  fileInsuranceClaim(userId, type, desc)         { return this.req("POST", "/insurance/claim", { userId, type, desc }); }
+  getLoanEligibility(userId)                     { return this.req("GET", `/fintech/loans/eligibility/${userId}`); }
+  getLoanStatus(userId)                          { return this.req("GET", `/fintech/loans/status/${userId}`); }
+  buyInsurance(userId, planId)                   { return this.req("POST", "/insurance/buy", { userId, planId }); }
+  fileInsuranceClaim(userId, policyId, claimType, description) { return this.req("POST", "/insurance/claim", { userId, policyId, claimType, description }); }
+  getInsurancePolicy(userId)                     { return this.req("GET", `/insurance/policy/${userId}`); }
 
   // ── MaaS: Scheduled Trips ──────────────────────────
   createSchedule(data)                   { return this.req("POST", "/maas/schedule/create", data); }
