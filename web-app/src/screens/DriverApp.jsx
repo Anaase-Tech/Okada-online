@@ -22,6 +22,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   const [incoming,setIncoming]=useState(null);
   const [activeRide,setActiveRide]=useState(null);
   const [cashConfirm,setCashConfirm]=useState(null);
+  const [completing,setCompleting]=useState(false);
   const [earnings,setEarnings]=useState({today:0,week:0,total:0,rides:0});
   const [wallet,setWallet]=useState({available:0,pending:0});
   const [showWithdraw,setShowWithdraw]=useState(false);
@@ -30,6 +31,22 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   const [showKyc,setShowKyc]=useState(!user.kycData&&!user.ghanaCard);
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
+
+  // Load real earnings/wallet from the backend on mount, instead of
+  // always starting from zero. Falls back to whatever the profile object
+  // already carried (e.g. from a demo session) if the fetch fails.
+  useEffect(()=>{
+    api.req("GET",`/auth/profile/${user.firebaseUid||user.id}`)
+      .then(r=>{
+        const u = r.user||{};
+        setEarnings(u.earnings || {today:0,week:0,total:0,rides:u.totalRides||0});
+        setWallet(u.wallet || {available:0,pending:0});
+      })
+      .catch(()=>{
+        setEarnings(user.earnings || {today:0,week:0,total:0,rides:0});
+        setWallet(user.wallet || {available:0,pending:0});
+      });
+  },[user.id, user.firebaseUid]);
 
   // Real-time ride requests via Firestore
   useEffect(()=>{
@@ -41,8 +58,8 @@ export function DriverApp({user,onLogout,dark,setDark}) {
         // db already imported at module level
         const q = query(
           collection(db, 'rides'),
-          where('status','==','searching'),
-          where('vehicleType','==','okada'),
+          where('status','==','requested'),
+          where('rideType','==','okada'),
           orderBy('createdAt','desc'),
           limit(1)
         );
@@ -52,28 +69,28 @@ export function DriverApp({user,onLogout,dark,setDark}) {
             const r = doc.data();
             setIncoming({
               id: doc.id,
-              passenger: r.passengerName || 'Passenger',
-              phone: r.passengerPhone || '',
-              from: r.pickupLocation?.address || r.from || 'Pickup',
-              to: r.destination?.address || r.to || 'Destination',
-              dist: r.distance || '—',
-              dur: r.duration || '—',
-              fare: 'GH₵' + (r.fare || r.total || '0'),
-              // 25% base driver share (matches backend CFG.splits.driver) —
-              // the exact per-ride figure still comes from the backend at
-              // /rides/:id/complete, which also applies +2% female/EV bonuses.
-              earn: 'GH₵' + ((r.fare || r.total || 0) * 0.25).toFixed(2),
+              passenger: r.userName || 'Passenger',
+              phone: r.userPhone || '',
+              from: r.pickupLocation?.address || 'Pickup',
+              to: r.destination?.address || 'Destination',
+              dist: r.distance ? `${r.distance} km` : '—',
+              dur: r.estimatedDuration ? `${r.estimatedDuration} min` : '—',
+              fare: 'GH₵' + (r.fare?.total || '0'),
+              // Displayed estimate only — the real, authoritative split
+              // (including any female/EV bonus) is computed server-side
+              // when the ride is actually completed via calcFareSplits.
+              earn: 'GH₵' + (r.fare?.driver ?? ((r.fare?.total||0) * 0.25)).toFixed(2),
               payMethod: r.payMethod || 'mtn',
             });
           }
         }, () => {
           // Firestore unavailable — demo simulation fallback
-          const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+          const tm = setTimeout(()=>setIncoming({id:'demo_ride_'+Date.now(),demo:true,passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
           return ()=>clearTimeout(tm);
         });
       } catch(err) {
         // Demo fallback
-        const tm = setTimeout(()=>setIncoming({id:'ride_'+Date.now(),passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
+        const tm = setTimeout(()=>setIncoming({id:'demo_ride_'+Date.now(),demo:true,passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
         return ()=>clearTimeout(tm);
       }
     };
@@ -112,24 +129,43 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     toast$("Ride accepted! Navigate to passenger 📍");
   };
 
-  const confirmCash=async()=>{
-    const earned=parseFloat((cashConfirm.earn||"GH₵3.38").replace("GH₵",""));
-    try{await api.confirmCashPayment(cashConfirm.id,user.id);}catch(err){ console.warn("Error:",err); }
-    setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
-    setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
-    setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
-    setCashConfirm(null);setActiveRide(null);
-    toast$(`Cash confirmed! GH₵${earned.toFixed(2)} earned 💰`);
+  // Finishes a ride for real: calls the backend's /rides/:id/complete,
+  // which is what actually moves money — credits the driver's real
+  // share (with any female/EV bonus applied), pays the owner, deducts
+  // any active Drive to Own or loan installment, and tops up the fuel
+  // and maintenance pools. Demo rides (no backend record) still get the
+  // old client-side simulation so the demo experience keeps working.
+  const finishRide = async (ride) => {
+    setCompleting(true);
+    try {
+      if (!ride.demo) {
+        const res = await api.completeRide(ride.id);
+        setEarnings(e=>({
+          today: +(e.today + res.netDriverEarnings).toFixed(2),
+          week:  +(e.week  + res.netDriverEarnings).toFixed(2),
+          total: +(e.total + res.netDriverEarnings).toFixed(2),
+          rides: e.rides + 1,
+        }));
+        setWallet(w=>({ ...w, pending: +(w.pending + res.netDriverEarnings).toFixed(2) }));
+        toast$(`Ride complete! +GH₵${res.netDriverEarnings.toFixed(2)} (24hr hold) 💰`);
+      } else {
+        const earned=parseFloat((ride.earn||"GH₵3.38").replace("GH₵",""));
+        setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
+        setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
+        setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
+        toast$(`Ride complete! +GH₵${earned.toFixed(2)} (demo) 💰`);
+      }
+    } catch (e) {
+      console.error("completeRide failed:", e);
+      toast$(`Couldn't complete the ride on the server (${e.message}) — nothing was charged`, "error");
+    }
+    setCompleting(false);
+    setCashConfirm(null);
+    setActiveRide(null);
   };
 
-  const complete=()=>{
-    const earned=parseFloat((activeRide.earn||"GH₵3.38").replace("GH₵",""));
-    setEarnings(e=>({today:+(e.today+earned).toFixed(2),week:+(e.week+earned).toFixed(2),total:+(e.total+earned).toFixed(2),rides:e.rides+1}));
-    setWallet(w=>({available:w.available,pending:+(w.pending+earned).toFixed(2)}));
-    setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
-    setActiveRide(null);
-    toast$(`Ride complete! +GH₵${earned.toFixed(2)} (24hr hold) 💰`);
-  };
+  const confirmCash = () => finishRide(cashConfirm);
+  const complete    = () => finishRide(activeRide);
 
   if(showKyc) return <KycVerify role="driver" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
@@ -172,7 +208,10 @@ export function DriverApp({user,onLogout,dark,setDark}) {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <button onClick={()=>{setCashConfirm(null);toast$("Dispute raised — admin will review","error");}}
                 style={{padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:14,fontWeight:700,fontSize:13}}>❌ Not Received</button>
-              <button onClick={confirmCash} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13}}>✅ Confirm Cash</button>
+              <button onClick={confirmCash} disabled={completing}
+                style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13,opacity:completing?0.6:1}}>
+                {completing?"Confirming…":"✅ Confirm Cash"}
+              </button>
             </div>
           </div>
         </div>
@@ -262,7 +301,10 @@ export function DriverApp({user,onLogout,dark,setDark}) {
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <a href={`tel:${activeRide.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                  <button onClick={complete} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>✅ Complete</button>
+                  <button onClick={complete} disabled={completing}
+                    style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>
+                    {completing?"Completing…":"✅ Complete"}
+                  </button>
                 </div>
               </div>
             )}
