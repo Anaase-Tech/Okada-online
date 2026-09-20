@@ -35,6 +35,11 @@ const app = express();
 // ════════════════════════════════════════════════════════════
 
 // Strict CORS — only allow your domain
+// NOTE: allowedHeaders must list every custom header the frontend sends.
+// api.js sends X-Platform on every request; it was missing here, which
+// made the browser silently block the *real* request after a successful
+// CORS preflight (OPTIONS 204) — verified against production logs, where
+// every /auth/create-profile hit was an OPTIONS with zero matching POSTs.
 app.use(cors({
   origin: [
     'https://okada-online.vercel.app',
@@ -42,7 +47,7 @@ app.use(cors({
     'http://localhost:3000', // dev only
   ],
   methods: ['GET','POST','PUT','DELETE'],
-  allowedHeaders: ['Content-Type','Authorization','X-Request-ID'],
+  allowedHeaders: ['Content-Type','Authorization','X-Request-ID','X-Platform'],
   credentials: true,
 }));
 
@@ -55,6 +60,12 @@ app.use((req, _res, next) => {
 });
 
 // ── In-memory rate limiter (per IP) ────────────────────────
+// KNOWN LIMITATION: this only rate-limits within a single warm function
+// instance. Cloud Functions can and will run several instances at once
+// under real load, each with its own empty Map, so this is a soft
+// speed-bump, not a hard guarantee, against abuse at scale. Fine for
+// launch; revisit with Firestore- or Redis-backed limiting before
+// meaningful traffic.
 const rateLimitStore = new Map();
 function rateLimit(maxReqs = 60, windowMs = 60000) {
   return (req, res, next) => {
@@ -77,21 +88,23 @@ const globalLimit = rateLimit(120, 60000); // 120/min general
 app.use(globalLimit);
 
 // ── Firebase Auth middleware ────────────────────────────────
+// Every request must carry a real Firebase ID token. The previous
+// version accepted the literal string "demo_token" as valid auth for
+// *any* userId supplied in the request body — a live authentication
+// bypass reachable by anyone, not a real demo mode. Removed. The app's
+// actual demo experience is (and always should be) a purely client-side
+// simulation that never expects a real write to succeed on the backend.
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer '))
     return res.status(401).json({ error: 'Missing authorization token' });
   const token = header.split('Bearer ')[1];
-  // Allow demo tokens in development
-  if (token === 'demo_token') {
-    req.uid = req.body?.userId || 'demo';
-    return next();
-  }
   try {
     const decoded = await auth.verifyIdToken(token);
     req.uid = decoded.uid;
     next();
-  } catch {
+  } catch (e) {
+    console.error('Token verification failed:', e.code || e.message);
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
@@ -218,7 +231,17 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
 
     const col = { driver:'drivers', owner:'owners', admin:'admins' }[role] || 'users';
 
-    // Idempotent — return existing profile if already created
+    // Idempotent — return existing profile if already created.
+    // Matches by firebaseUid first (authoritative identity), falling back
+    // to phone only for legacy records that predate this field being
+    // reliably set. This avoids the previous phone-only check creating a
+    // duplicate profile in a different collection if the same person ever
+    // re-registers under a different role by mistake.
+    const uidMatch = await db.collection(col)
+      .where('firebaseUid', '==', req.uid).limit(1).get();
+    if (!uidMatch.empty) {
+      return ok(res, { user: { id: uidMatch.docs[0].id, ...uidMatch.docs[0].data() }, isNew: false });
+    }
     const existing = await db.collection(col)
       .where('phone', '==', sanitize(phone)).get();
     if (!existing.empty) {
@@ -1527,6 +1550,11 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
   try {
     const { rideId, amount, email, phone } = req.body;
     if (!rideId || !amount) return fail(res, 400, 'rideId, amount required');
+    const paystackSecret = functions.config().paystack?.secret;
+    if (!paystackSecret) {
+      console.error('Paystack secret is not configured — run: firebase functions:config:set paystack.secret="sk_..."');
+      return fail(res, 500, 'Payments are not configured yet');
+    }
     const r = await axios.post(
       'https://api.paystack.co/transaction/initialize',
       {
@@ -1537,7 +1565,7 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
         callback_url: 'https://okada-online.vercel.app/payment/callback',
         metadata: { rideId: sanitize(rideId), phone: sanitize(phone||'') },
       },
-      { headers: { Authorization: `Bearer ${functions.config().paystack?.secret}` } }
+      { headers: { Authorization: `Bearer ${paystackSecret}` } }
     );
     await db.collection('payments').add({
       rideId: sanitize(rideId), amount: parseFloat(amount), currency: 'GHS',
@@ -1549,19 +1577,22 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
       reference:        r.data.data.reference,
     });
   } catch (e) {
+    console.error('payment init error:', e.response?.data || e.message);
     return fail(res, 500, e.message);
   }
 });
 
 app.post('/payments/webhook', async (req, res) => {
   try {
-    // Validate Paystack signature
-    const sig  = req.headers['x-paystack-signature'];
+    const paystackSecret = functions.config().paystack?.secret || '';
+    // Validate Paystack signature (timing-safe comparison)
+    const sig  = req.headers['x-paystack-signature'] || '';
     const body = JSON.stringify(req.body);
-    const expected = crypto
-      .createHmac('sha512', functions.config().paystack?.secret || '')
-      .update(body).digest('hex');
-    if (sig !== expected) return fail(res, 401, 'Invalid signature');
+    const expected = crypto.createHmac('sha512', paystackSecret).update(body).digest('hex');
+    const sigBuf = Buffer.from(sig, 'utf8');
+    const expBuf = Buffer.from(expected, 'utf8');
+    const sigValid = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+    if (!sigValid) return fail(res, 401, 'Invalid signature');
 
     if (req.body.event === 'charge.success') {
       const { reference, metadata } = req.body.data;
@@ -1745,9 +1776,12 @@ app.post('/maas/schedule/create', requireAuth, async (req,res) => {
 app.put('/maas/schedule/:id/adjust', requireAuth, async (req,res) => {
   try {
     const { date, newTime, skip } = req.body;
+    if (!date) return fail(res,400,'date is required');
     const ref  = db.collection('scheduled_trips').doc(req.params.id);
     const snap = await ref.get();
     if(!snap.exists) return fail(res,404,'Schedule not found');
+    if(snap.data().userId !== req.uid && req.body.userId !== snap.data().userId)
+      return fail(res,403,'Not your schedule');
     if(skip) {
       await ref.update({ skippedDates:admin.firestore.FieldValue.arrayUnion(date) });
       return ok(res, { message:`Trip on ${date} skipped` });
@@ -1759,7 +1793,7 @@ app.put('/maas/schedule/:id/adjust', requireAuth, async (req,res) => {
       return ok(res, { message:`Trip on ${date} adjusted to ${newTime}` });
     }
     return fail(res,400,'Provide newTime or skip=true');
-  } catch(e) { return fail(res,500,e.message); }
+  } catch(e) { console.error('schedule adjust error:', e); return fail(res,500,e.message); }
 });
 
 app.put('/maas/schedule/:id/pause', requireAuth, async (req,res) => {
@@ -2141,7 +2175,7 @@ app.post('/maas/schedule/dispatch', async (_req,res) => {
 app.get('/health', (_req, res) => {
   res.json({
     status: 'healthy',
-    version: '3.0.0',
+    version: '3.0.1',
     platform: 'Okada Online',
     region: 'Eastern Region, Ghana 🇬🇭',
     splits: { owner:'50%', driver:'25%', fuel:'5%', maintenance:'5%', platform:'15%' },
