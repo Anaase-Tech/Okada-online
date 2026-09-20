@@ -23,6 +23,12 @@ export function ScheduledTrips({user, dark, onBack}) {
   const [category, setCategory]   = useState("work");
   const [payFromSavings, setPayFromSavings] = useState(false);
 
+  // Adjust sheet state
+  const [adjusting, setAdjusting]   = useState(null); // the schedule being adjusted
+  const [adjustDate, setAdjustDate] = useState("");
+  const [adjustTime, setAdjustTime] = useState("");
+  const [adjustBusy, setAdjustBusy] = useState(false);
+
   const DAYS_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const RENTAL_VEHICLES = [
     {id:"car",label:"Car",icon:"🚗"},{id:"okada",label:"Okada",icon:"🏍️"},
@@ -55,6 +61,44 @@ export function ScheduledTrips({user, dark, onBack}) {
   };
 
   const toggleDay = (d) => setDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev,d]);
+
+  const openAdjust = (s) => {
+    setAdjusting(s);
+    setAdjustDate(new Date().toISOString().slice(0,10));
+    setAdjustTime(s.departTime);
+  };
+
+  const submitSkip = async () => {
+    if(!adjustDate){toast$("Pick a date","error");return;}
+    setAdjustBusy(true);
+    try{
+      await api.adjustSchedule(adjusting.id, {userId:user.id, date:adjustDate, skip:true});
+      toast$(`${adjusting.name} skipped on ${adjustDate} ✅`);
+    }catch(err){
+      console.warn(err);
+      toast$(`Couldn't reach the server (${err.message}) — not saved`, "error");
+      setAdjustBusy(false);
+      return;
+    }
+    setAdjustBusy(false);
+    setAdjusting(null);
+  };
+
+  const submitTimeChange = async () => {
+    if(!adjustDate||!adjustTime){toast$("Pick a date and time","error");return;}
+    setAdjustBusy(true);
+    try{
+      await api.adjustSchedule(adjusting.id, {userId:user.id, date:adjustDate, newTime:adjustTime});
+      toast$(`${adjusting.name} moved to ${adjustTime} on ${adjustDate} ✅`);
+    }catch(err){
+      console.warn(err);
+      toast$(`Couldn't reach the server (${err.message}) — not saved`, "error");
+      setAdjustBusy(false);
+      return;
+    }
+    setAdjustBusy(false);
+    setAdjusting(null);
+  };
 
   return (
     <div style={{minHeight:"100%"}} className={t.bg}>
@@ -98,7 +142,8 @@ export function ScheduledTrips({user, dark, onBack}) {
                   style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:s.paused?"#16a34a":"#fef2f2",color:s.paused?"#fff":"#ef4444",border:"none",cursor:"pointer"}}>
                   {s.paused?"▶ Resume":"⏸ Pause"}
                 </button>
-                <button style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"none",cursor:"pointer"}}>
+                <button onClick={()=>openAdjust(s)}
+                  style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"none",cursor:"pointer"}}>
                   ✏️ Adjust
                 </button>
               </div>
@@ -179,6 +224,38 @@ export function ScheduledTrips({user, dark, onBack}) {
           </button>
         </>)}
       </div>
+
+      {/* Adjust sheet */}
+      {adjusting&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:60,display:"flex",alignItems:"flex-end",maxWidth:448,margin:"0 auto"}}>
+          <div className={`${t.card} rounded-t-3xl p-6 w-full shadow-2xl`}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <h3 className={`text-lg font-black ${t.text}`}>✏️ Adjust {adjusting.name}</h3>
+              <button onClick={()=>setAdjusting(null)} style={{background:"none",border:"none",fontSize:18,color:dark?"#9ca3af":"#6b7280",cursor:"pointer"}}>✕</button>
+            </div>
+            <p className={`text-xs ${t.sub} mb-4`}>{adjusting.pickupAddress} → {adjusting.destAddress} · usually {adjusting.departTime}</p>
+
+            <p className={`text-xs font-bold mb-1 ${t.sub}`}>DATE</p>
+            <input type="date" value={adjustDate} onChange={e=>setAdjustDate(e.target.value)}
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:12}}/>
+
+            <p className={`text-xs font-bold mb-1 ${t.sub}`}>NEW TIME (leave as-is to only skip)</p>
+            <input type="time" value={adjustTime} onChange={e=>setAdjustTime(e.target.value)}
+              className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none ${t.inp}`} style={{display:"block",width:"100%",marginBottom:16}}/>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <button onClick={submitSkip} disabled={adjustBusy}
+                style={{padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:14,fontWeight:700,fontSize:13,opacity:adjustBusy?0.6:1}}>
+                {adjustBusy?"…":"Skip this date"}
+              </button>
+              <button onClick={submitTimeChange} disabled={adjustBusy}
+                style={{padding:"12px",background:"#1d4ed8",color:"#fff",borderRadius:14,fontWeight:900,fontSize:13,opacity:adjustBusy?0.6:1}}>
+                {adjustBusy?"…":"Change time"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
