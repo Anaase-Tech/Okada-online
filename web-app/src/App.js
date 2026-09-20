@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { auth } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { api } from "./api";
 import { AuthScreen }   from "./screens/AuthScreen";
 import { PassengerApp } from "./screens/PassengerApp";
@@ -11,6 +13,7 @@ export default function App() {
   const [user, setUser]           = useState(null);
   const [role, setRole]           = useState(null);
   const [apiStatus, setApiStatus] = useState("checking");
+  const [restoring, setRestoring] = useState(true);
 
   useEffect(() => {
     // Try Firebase backend first, then Vercel backend.
@@ -34,8 +37,43 @@ export default function App() {
     checkHealth();
   }, []);
 
+  // Restore a real, previously-verified session on page load/refresh.
+  // Firebase itself already persists the phone-auth session in the browser —
+  // the app just never checked for it before, so every reload looked like a
+  // brand new login even for a real, already-verified user. Demo-mode
+  // sessions have no underlying Firebase session, so they correctly still
+  // require a fresh login after a refresh — only real logins are restored.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (!fbUser) { setRestoring(false); return; }
+      try {
+        const token = await fbUser.getIdToken();
+        api.token = token;
+        const res = await api.req("GET", `/auth/profile/${fbUser.uid}`);
+        setUser(res.user);
+        setRole(res.user.role);
+      } catch (e) {
+        console.warn("Session restore failed:", e);
+        api.token = null;
+      }
+      setRestoring(false);
+    });
+    return unsub;
+  }, []);
+
   const login  = (u, token, r) => { api.token = token; setUser(u); setRole(r); };
-  const logout = () => { setUser(null); setRole(null); api.token = null; };
+  const logout = () => {
+    setUser(null); setRole(null); api.token = null;
+    auth.signOut().catch(() => {});
+  };
+
+  if (restoring) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f9fafb"}}>
+        <div style={{width:40,height:40,border:"4px solid #16a34a",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+      </div>
+    );
+  }
 
   if (!user) return <AuthScreen onLogin={login} dark={dark} apiStatus={apiStatus} />;
 
