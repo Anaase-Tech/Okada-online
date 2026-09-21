@@ -124,6 +124,23 @@ function sanitize(str) {
   return str.replace(/[<>"'`\\]/g, '').trim().substring(0, 500);
 }
 
+// ── Cross-collection user lookup ─────────────────────────────
+// A userId can live in 'users' (passengers), 'drivers', or 'owners'.
+// Many fintech routes (savings, loans, insurance, wallet) are shared
+// across all three roles but used to hardcode db.collection('users'),
+// which meant they 404'd — or worse, silently wrote a stray new
+// document — for every driver and owner. This resolves the real
+// collection a given userId actually lives in.
+async function resolveUserRef(userId) {
+  const id = sanitize(userId);
+  for (const col of ['users', 'drivers', 'owners']) {
+    const ref  = db.collection(col).doc(id);
+    const snap = await ref.get();
+    if (snap.exists) return { ref, col, data: snap.data() };
+  }
+  return null;
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 const fail = (res, code, msg) =>
   res.status(code).json({ error: msg });
@@ -282,6 +299,8 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
       earnings:  { total: 0, today: 0, week: 0 },
       pools:     { fuel: 0, maintenance: 0 },
       wallet:    { available: 0, pending: 0 },
+      savings:   { balance: 0, totalDeposited: 0, interestEarned: 0 },
+      disputes:  0,
     });
 
     if (role === 'passenger') Object.assign(base, {
@@ -289,6 +308,7 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
       savings:   { balance: 0, totalDeposited: 0, interestEarned: 0 },
       payLater:  { limit: CFG.payLater.defaultLimit, used: 0, suspended: false },
       referredBy: sanitize(referredBy || ''),
+      disputes:  0,
     });
 
     const ref = await db.collection(col).add(base);
@@ -1197,13 +1217,15 @@ app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
     const { userId, amount } = req.body;
     if (!userId || !amount || parseFloat(amount) <= 0)
       return fail(res, 400, 'userId, amount required');
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
     const a = parseFloat(amount);
     await db.collection('savings_transactions').add({
       userId: sanitize(userId), type: 'manual_deposit',
       amount: a, status: 'completed',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'savings.balance':        admin.firestore.FieldValue.increment(a),
       'savings.totalDeposited': admin.firestore.FieldValue.increment(a),
     });
@@ -1219,10 +1241,10 @@ app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
     if (!userId || !amount || !momoPhone)
       return fail(res, 400, 'userId, amount, momoPhone required');
 
-    const snap = await db.collection('users').doc(sanitize(userId)).get();
-    if (!snap.exists) return fail(res, 404, 'User not found');
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
 
-    const bal = snap.data()?.savings?.balance || 0;
+    const bal = u.data?.savings?.balance || 0;
     const a   = parseFloat(amount);
     if (bal < a) return fail(res, 400, `Insufficient balance. Available: GH₵${bal}`);
 
@@ -1232,7 +1254,7 @@ app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
       status: 'pending',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'savings.balance': admin.firestore.FieldValue.increment(-a),
     });
     return ok(res, { txId: tx.id, withdrawn: a, status: 'pending' });
@@ -1243,17 +1265,17 @@ app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
 
 app.get('/fintech/savings/balance/:userId', requireAuth, async (req, res) => {
   try {
-    const snap = await db.collection('users').doc(sanitize(req.params.userId)).get();
-    if (!snap.exists) return fail(res, 404, 'User not found');
-    const s = snap.data()?.savings || {};
+    const u = await resolveUserRef(req.params.userId);
+    if (!u) return fail(res, 404, 'User not found');
+    const s = u.data?.savings || {};
     const txs = await db.collection('savings_transactions')
-      .where('userId','==', req.params.userId)
+      .where('userId','==', sanitize(req.params.userId))
       .orderBy('createdAt','desc').limit(12).get();
     return ok(res, {
       balance:        s.balance        || 0,
       totalDeposited: s.totalDeposited || 0,
       interestEarned: s.interestEarned || 0,
-      savingsRate:    snap.data()?.savingsRate || 0,
+      savingsRate:    u.data?.savingsRate || 0,
       history:        txs.docs.map(d => ({ id: d.id, ...d.data() })),
     });
   } catch (e) {
@@ -1267,7 +1289,9 @@ app.put('/fintech/savings/rate', requireAuth, async (req, res) => {
     const r = parseFloat(rate);
     if (r < 0 || r > CFG.savings.maxRate)
       return fail(res, 400, `Rate must be 0–${CFG.savings.maxRate}%`);
-    await db.collection('users').doc(sanitize(userId)).update({ savingsRate: r });
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+    await u.ref.update({ savingsRate: r });
     return ok(res, { savingsRate: r });
   } catch (e) {
     return fail(res, 500, e.message);
@@ -1281,20 +1305,20 @@ app.put('/fintech/savings/rate', requireAuth, async (req, res) => {
 app.get('/fintech/loans/eligibility/:userId', requireAuth, async (req, res) => {
   try {
     const userId  = sanitize(req.params.userId);
-    const snap    = await db.collection('users').doc(userId).get();
-    if (!snap.exists) return fail(res, 404, 'User not found');
-    const u       = snap.data();
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+    const dd      = u.data;
     const txSnap  = await db.collection('savings_transactions')
       .where('userId','==', userId).where('type','==','auto_deposit').get();
     const months  = new Set(txSnap.docs.map(d => {
       const t = d.data().createdAt?.toDate?.() || new Date();
       return `${t.getFullYear()}-${t.getMonth()}`;
     })).size;
-    const rides    = u.totalRides || 0;
-    const rating   = u.rating || 0;
-    const disputes = u.disputes || 0;
-    const kyc      = u.kycStatus === 'approved';
-    const savBal   = u?.savings?.balance || 0;
+    const rides    = dd.totalRides || 0;
+    const rating   = dd.rating || 0;
+    const disputes = dd.disputes || 0;
+    const kyc      = dd.kycStatus === 'approved';
+    const savBal   = dd?.savings?.balance || 0;
     let score = 300;
     score += Math.min(rides, 200);
     score += Math.min(months * 30, 150);
@@ -1333,9 +1357,9 @@ app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
     if (!existing.empty)
       return fail(res, 400, 'Repay active loan before applying');
 
-    const userSnap = await db.collection('users').doc(sanitize(userId)).get();
-    if (!userSnap.exists) return fail(res, 404, 'User not found');
-    if (userSnap.data().kycStatus !== 'approved')
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+    if (u.data.kycStatus !== 'approved')
       return fail(res, 400, 'KYC approval required');
 
     const a   = parseFloat(amount);
@@ -1349,7 +1373,7 @@ app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
       createdAt:   admin.firestore.FieldValue.serverTimestamp(),
     });
     if (a <= CFG.loans.autoApproveLimit) {
-      await db.collection('users').doc(sanitize(userId)).update({ activeLoanId: ref.id });
+      await u.ref.update({ activeLoanId: ref.id });
     }
     return ok(res, { loanId: ref.id,
       status: a <= CFG.loans.autoApproveLimit ? 'active' : 'pending' });
@@ -1387,6 +1411,9 @@ app.post('/insurance/buy', requireAuth, async (req, res) => {
     const plan = CFG.insurance[sanitize(planId)];
     if (!plan) return fail(res, 400, 'Invalid plan');
 
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+
     const expiry = new Date();
     expiry.setMonth(expiry.getMonth() + 1);
 
@@ -1397,7 +1424,7 @@ app.post('/insurance/buy', requireAuth, async (req, res) => {
       expiresAt: expiry, renewsAt: expiry,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'insurance.policyId': ref.id,
       'insurance.planId':   planId,
       'insurance.status':   'active',
@@ -1468,9 +1495,9 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   try {
     const { userId, rideId, amount } = req.body;
     if (!userId || !rideId || !amount) return fail(res, 400, 'Missing fields');
-    const snap = await db.collection('users').doc(sanitize(userId)).get();
-    if (!snap.exists) return fail(res, 404, 'User not found');
-    const pl   = snap.data()?.payLater || {};
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+    const pl   = u.data?.payLater || {};
     const avail = (pl.limit || CFG.payLater.defaultLimit) - (pl.used || 0);
     if (pl.suspended) return fail(res, 400, 'Pay Later suspended — contact support');
     if (parseFloat(amount) > avail)
@@ -1482,10 +1509,33 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
       amount: parseFloat(amount), status: 'deferred',
       dueDate, createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'payLater.used': admin.firestore.FieldValue.increment(parseFloat(amount)),
     });
     return ok(res, { payLaterTxId: ref.id, dueDate, amountDeferred: amount });
+  } catch (e) {
+    return fail(res, 500, e.message);
+  }
+});
+
+// GET /fintech/pay-later/history/:userId
+// Returns current limit/used plus the underlying transaction records —
+// FintechHub only ever had a hardcoded lump "used" amount before; this
+// gives it the real thing.
+app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
+  try {
+    const u = await resolveUserRef(req.params.userId);
+    if (!u) return fail(res, 404, 'User not found');
+    const pl = u.data?.payLater || { limit: CFG.payLater.defaultLimit, used: 0, suspended: false };
+    const snap = await db.collection('pay_later')
+      .where('userId','==', sanitize(req.params.userId))
+      .orderBy('createdAt','desc').limit(20).get();
+    return ok(res, {
+      limit: pl.limit || CFG.payLater.defaultLimit,
+      used: pl.used || 0,
+      suspended: !!pl.suspended,
+      history: snap.docs.map(d => ({ id: d.id, ...d.data() })),
+    });
   } catch (e) {
     return fail(res, 500, e.message);
   }
@@ -1499,6 +1549,8 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
 app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
   try {
     const { userId, payLaterTxId, amount } = req.body;
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
 
     if (payLaterTxId) {
       const txRef  = db.collection('pay_later').doc(sanitize(payLaterTxId));
@@ -1508,7 +1560,7 @@ app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
       const amt = txSnap.data().amount;
       await txRef.update({ status: 'paid',
         paidAt: admin.firestore.FieldValue.serverTimestamp() });
-      await db.collection('users').doc(sanitize(userId)).update({
+      await u.ref.update({
         'payLater.used': admin.firestore.FieldValue.increment(-amt),
       });
       return ok(res, { repaid: amt, status: 'paid' });
@@ -1536,7 +1588,7 @@ app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
     if (totalRepaid === 0) return fail(res, 400, 'No outstanding Pay Later balance found');
 
     await batch.commit();
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
       'payLater.suspended': false,
     });
@@ -1555,9 +1607,9 @@ app.post('/wallet/withdraw', requireAuth, async (req, res) => {
     const { userId, amount, momoPhone, network } = req.body;
     if (!userId || !amount || !momoPhone)
       return fail(res, 400, 'userId, amount, momoPhone required');
-    const snap = await db.collection('users').doc(sanitize(userId)).get();
-    if (!snap.exists) return fail(res, 404, 'User not found');
-    const avail = snap.data()?.wallet?.available || 0;
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res, 404, 'User not found');
+    const avail = u.data?.wallet?.available || 0;
     const a = parseFloat(amount);
     if (avail < a)
       return fail(res, 400, `Insufficient balance. Available: GH₵${avail.toFixed(2)}`);
@@ -1569,7 +1621,7 @@ app.post('/wallet/withdraw', requireAuth, async (req, res) => {
       status:   'pending',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'wallet.available': admin.firestore.FieldValue.increment(-a),
     });
     return ok(res, { txId: tx.id, amount: a, status: 'pending' });
@@ -1864,8 +1916,9 @@ app.post('/maas/subscription/create', requireAuth, async (req,res) => {
       return fail(res,400,'Invalid tier');
     const plan   = MAAS_PRICING.subscription[tier];
     const expiry = new Date(); expiry.setMonth(expiry.getMonth()+1);
-    const uSnap  = await db.collection('users').doc(sanitize(userId)).get();
-    const wallet = uSnap.data()?.wallet?.available||0;
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res,404,'User not found');
+    const wallet = u.data?.wallet?.available||0;
     if(wallet < plan.monthly) return fail(res,400,`Insufficient balance. Need GH₵${plan.monthly}`);
     const ref = await db.collection('subscriptions').add({
       userId:sanitize(userId), driverId:sanitize(driverId||''),
@@ -1874,7 +1927,7 @@ app.post('/maas/subscription/create', requireAuth, async (req,res) => {
       status:'active', autoRenew:!!autoRenew,
       startedAt:admin.firestore.FieldValue.serverTimestamp(), expiresAt:expiry, renewsAt:expiry,
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'wallet.available':admin.firestore.FieldValue.increment(-plan.monthly),
       activeSubscriptionId:ref.id,
     });
@@ -1889,8 +1942,9 @@ app.post('/maas/subscription/create', requireAuth, async (req,res) => {
 
 app.get('/maas/subscription/status/:userId', requireAuth, async (req,res) => {
   try {
-    const uSnap = await db.collection('users').doc(sanitize(req.params.userId)).get();
-    const subId = uSnap.data()?.activeSubscriptionId;
+    const u = await resolveUserRef(req.params.userId);
+    if (!u) return fail(res,404,'User not found');
+    const subId = u.data?.activeSubscriptionId;
     if(!subId) return ok(res, { subscription:null });
     const subSnap = await db.collection('subscriptions').doc(subId).get();
     return ok(res, { subscription:{id:subId,...subSnap.data()} });
@@ -1910,8 +1964,9 @@ app.post('/maas/rental/book', requireAuth, async (req,res) => {
     if(!plan) return fail(res,400,'Invalid vehicle type or rental period');
     const driverFee  = driverIncluded ? Math.round(plan.price*0.20) : 0;
     const totalPrice = plan.price + driverFee;
-    const uSnap = await db.collection('users').doc(sanitize(userId)).get();
-    if((uSnap.data()?.wallet?.available||0) < totalPrice)
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res,404,'User not found');
+    if((u.data?.wallet?.available||0) < totalPrice)
       return fail(res,400,`Insufficient balance. Need GH₵${totalPrice}`);
     const start = new Date(startDate);
     const end   = new Date(start);
@@ -1926,7 +1981,7 @@ app.post('/maas/rental/book', requireAuth, async (req,res) => {
       brandNote:'New Kantanka / EV vehicle — luxury, comfort, safety',
       createdAt:admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'wallet.available':admin.firestore.FieldValue.increment(-totalPrice),
     });
     return ok(res, { rentalId:ref.id, vehicleType, period, totalPrice,
@@ -1947,7 +2002,8 @@ app.post('/maas/rental/:id/log-km', requireAuth, async (req,res) => {
     await ref.update({ kmUsed:newKmUsed, extraKmCharges:extraCharge });
     if(extraCharge > (r.extraKmCharges||0)) {
       const newCharge = extraCharge - (r.extraKmCharges||0);
-      await db.collection('users').doc(r.userId).update({
+      const u = await resolveUserRef(r.userId);
+      if (u) await u.ref.update({
         'wallet.available':admin.firestore.FieldValue.increment(-newCharge),
       });
     }
@@ -2022,7 +2078,8 @@ app.post('/maas/corporate/:id/add-member', requireAdmin, async (req,res) => {
     await db.collection('corporate_accounts').doc(req.params.id).update({
       members:admin.firestore.FieldValue.arrayUnion(sanitize(userId)),
     });
-    await db.collection('users').doc(sanitize(userId)).update({ corporateAccountId:req.params.id });
+    const u = await resolveUserRef(userId);
+    if (u) await u.ref.update({ corporateAccountId:req.params.id });
     return ok(res, { message:'Member added' });
   } catch(e) { return fail(res,500,e.message); }
 });
@@ -2048,8 +2105,9 @@ app.post('/maas/events/book', requireAuth, async (req,res) => {
     const pricing   = MAAS_PRICING.scheduled[sanitize(vehicleType)]||MAAS_PRICING.scheduled.car;
     const estFare   = +(pricing.flag + 15*pricing.perKm).toFixed(2);
     const deposit   = +(estFare*(depositPercent||0.30)).toFixed(2);
-    const uSnap     = await db.collection('users').doc(sanitize(userId)).get();
-    if((uSnap.data()?.wallet?.available||0) < deposit)
+    const u = await resolveUserRef(userId);
+    if (!u) return fail(res,404,'User not found');
+    if((u.data?.wallet?.available||0) < deposit)
       return fail(res,400,`Deposit required: GH₵${deposit}`);
     const ref = await db.collection('event_rides').add({
       userId:sanitize(userId), eventName:sanitize(eventName),
@@ -2060,7 +2118,7 @@ app.post('/maas/events/book', requireAuth, async (req,res) => {
       status:'confirmed', driverId:null,
       createdAt:admin.firestore.FieldValue.serverTimestamp(),
     });
-    await db.collection('users').doc(sanitize(userId)).update({
+    await u.ref.update({
       'wallet.available':admin.firestore.FieldValue.increment(-deposit),
       'wallet.pending':  admin.firestore.FieldValue.increment(deposit),
     });
@@ -2277,21 +2335,24 @@ exports.releasePendingEarnings = functions.pubsub
 exports.applySavingsInterest = functions.pubsub
   .schedule('0 0 1 * *').timeZone('Africa/Accra')
   .onRun(async () => {
-    const users = await db.collection('users').get();
-    const b = db.batch();
+    const collections = ['users', 'drivers', 'owners'];
     let count = 0;
-    users.forEach(doc => {
-      const bal = doc.data()?.savings?.balance || 0;
-      if (bal > 0) {
-        const interest = +(bal * CFG.savings.monthlyRate).toFixed(2);
-        b.update(doc.ref, {
-          'savings.balance':      admin.firestore.FieldValue.increment(interest),
-          'savings.interestEarned': admin.firestore.FieldValue.increment(interest),
-        });
-        count++;
-      }
-    });
-    await b.commit();
+    for (const col of collections) {
+      const snap = await db.collection(col).get();
+      const b = db.batch();
+      snap.forEach(doc => {
+        const bal = doc.data()?.savings?.balance || 0;
+        if (bal > 0) {
+          const interest = +(bal * CFG.savings.monthlyRate).toFixed(2);
+          b.update(doc.ref, {
+            'savings.balance':      admin.firestore.FieldValue.increment(interest),
+            'savings.interestEarned': admin.firestore.FieldValue.increment(interest),
+          });
+          count++;
+        }
+      });
+      await b.commit();
+    }
     console.log(`✅ Applied interest to ${count} accounts`);
   });
 
@@ -2365,9 +2426,8 @@ exports.nightlyChecks = functions.pubsub
       .where('dueDate','<=', now).get();
     for (const doc of overdue.docs) {
       await doc.ref.update({ status: 'overdue' });
-      await db.collection('users').doc(doc.data().userId).update({
-        'payLater.suspended': true,
-      });
+      const u = await resolveUserRef(doc.data().userId);
+      if (u) await u.ref.update({ 'payLater.suspended': true });
     }
 
     // Insurance renewals
@@ -2375,21 +2435,19 @@ exports.nightlyChecks = functions.pubsub
       .where('status','==','active')
       .where('renewsAt','<=', now).get();
     for (const doc of expiring.docs) {
-      const plan   = CFG.insurance[doc.data().planId];
-      const uSnap  = await db.collection('users').doc(doc.data().userId).get();
-      const walBal = uSnap.data()?.wallet?.available || 0;
-      if (plan && walBal >= plan.premium) {
+      const plan  = CFG.insurance[doc.data().planId];
+      const u     = await resolveUserRef(doc.data().userId);
+      const walBal = u?.data?.wallet?.available || 0;
+      if (plan && u && walBal >= plan.premium) {
         const newExp = new Date(now);
         newExp.setMonth(newExp.getMonth() + 1);
         await doc.ref.update({ expiresAt: newExp, renewsAt: newExp });
-        await db.collection('users').doc(doc.data().userId).update({
+        await u.ref.update({
           'wallet.available': admin.firestore.FieldValue.increment(-plan.premium),
         });
       } else {
         await doc.ref.update({ status: 'lapsed' });
-        await db.collection('users').doc(doc.data().userId).update({
-          'insurance.status': 'lapsed',
-        });
+        if (u) await u.ref.update({ 'insurance.status': 'lapsed' });
       }
     }
 
