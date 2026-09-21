@@ -70,6 +70,7 @@ class Api {
     return this.req("POST", "/fintech/pay-later/repay",
       isTxId ? { userId, payLaterTxId: amountOrTxId } : { userId, amount: amountOrTxId });
   }
+  getPayLaterHistory(uid)                        { return this.req("GET", `/fintech/pay-later/history/${uid}`); }
   requestWithdrawal(userId, amount, momoPhone)   { return this.req("POST", "/wallet/withdraw", { userId, amount, momoPhone }); }
 
   // ── Fintech ────────────────────────────────────────
