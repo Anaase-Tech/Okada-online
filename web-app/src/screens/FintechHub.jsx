@@ -116,7 +116,6 @@ export function FintechHub({user,role,dark}) {
       ]);
       setLoading(false);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id, role]);
 
   const tabs=[
