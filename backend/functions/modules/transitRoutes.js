@@ -211,6 +211,7 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
           if (!journeySnap.exists) continue;
 
           const journey = journeySnap.data();
+          if (['COMPLETED', 'CANCELLED'].includes(String(journey.status || '').toUpperCase())) continue;
           if (String(journey.paymentStatus || '').toUpperCase() !== 'PAID') continue;
 
           const legs = Array.isArray(journey.legs) ? journey.legs : [];
