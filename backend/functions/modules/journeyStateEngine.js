@@ -71,6 +71,15 @@ function buildOperationalState({
   if (cancelled) {
     base.operationalIssue = 'SEGMENT_CANCELLED';
     base.operationalIssueSequence = cancelled.sequence;
+    base.currentSegmentSequence = cancelled.sequence;
+    base.nextSegmentSequence = cancelled.sequence < segmentRows.length ? cancelled.sequence + 1 : null;
+    base.nextAction = 'MONITOR';
+    if (cancelled.sequence < segmentRows.length) {
+      base.status = 'CONNECTION_PENDING';
+      base.reason = 'SEGMENT_CANCELLED_REQUIRES_ATTENTION';
+      base.changed = base.status !== currentJourneyStatus;
+      return base;
+    }
   }
 
   const eventRow = eventTripId
