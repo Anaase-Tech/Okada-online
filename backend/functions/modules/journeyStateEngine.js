@@ -16,6 +16,7 @@ function buildOperationalState({
   paymentStatus,
   legs = [],
   trips = [],
+  finalMile = null,
   eventTripId = null,
   eventType = null,
 }) {
@@ -123,7 +124,11 @@ function buildOperationalState({
   const firstIncomplete = segmentRows.find((row) => !isCompletedTrip(row.trip) && row.tripStatus !== 'CANCELLED');
 
   if (!firstIncomplete) {
-    if (normalizedLegs.length && normalizedLegs[normalizedLegs.length - 1]?.finalMileRequired) {
+    const hasFinalMile = finalMile === true
+      || (finalMile && typeof finalMile === 'object' && Object.keys(finalMile).length > 0);
+    const finalMileCompleted = finalMile && typeof finalMile === 'object'
+      && normalize(finalMile.status) === 'COMPLETED';
+    if (hasFinalMile && !finalMileCompleted) {
       base.status = 'FINAL_MILE';
       base.nextAction = 'FINAL_MILE';
       base.reason = 'TRANSIT_COMPLETED_FINAL_MILE_PENDING';
