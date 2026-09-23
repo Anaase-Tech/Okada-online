@@ -13,7 +13,7 @@ test('marks a connection feasible when recorded arrival leaves required buffer',
     hub: 'Koforidua',
     fromLegStatus: 'COMPLETED',
     toLegStatus: 'SCHEDULED',
-    arrivalAt: '2026-09-23T10:00:00Z',
+    actualArrivalAt: '2026-09-23T10:00:00Z',
     nextDepartureAt: '2026-09-23T10:45:00Z',
     minimumBufferMinutes: 30,
   });
