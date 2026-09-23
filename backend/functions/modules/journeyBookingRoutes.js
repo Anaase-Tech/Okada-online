@@ -62,23 +62,340 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
     } catch (e) { return fail(res, 400, e.message || 'Unable to create journey booking'); }
   });
 
-  router.post('/:journeyId/confirm-payment', requireAuth, async (req, res) => {
+  router.post('/:journeyId/confirm', requireAuth, async (req, res) => {
     try {
       const ref = db.collection('journeys').doc(text(req.params.journeyId, 120));
+      const snap = await ref.get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+      if (journey.paymentStatus !== 'PAID') {
+        return fail(res, 409, 'Journey payment has not been verified');
+      }
+      if (journey.status === 'PENDING_PAYMENT') {
+        await ref.update({
+          status: 'CONFIRMED',
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      const fresh = await ref.get();
+      return ok(res, { journey: { id: ref.id, ...fresh.data() } });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to confirm journey');
+    }
+  });
+
+  router.post('/:journeyId/confirm-payment', requireAuth, async (req, res) => {
+    // Backward-compatible alias. Payment must already be verified by the trusted payment webhook.
+    req.url = `/${req.params.journeyId}/confirm`;
+    req.params.journeyId = text(req.params.journeyId, 120);
+    return res.redirect(307, `/journeys/${req.params.journeyId}/confirm`);
+  });
+
+  router.post('/:journeyId/pay', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const ref = db.collection('journeys').doc(journeyId);
+      const snap = await ref.get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid) return fail(res, 403, 'Payment access denied');
+      if (journey.paymentStatus === 'PAID') {
+        return ok(res, {
+          journeyId,
+          journeyCode: journey.journeyCode || null,
+          status: journey.status,
+          paymentStatus: 'PAID',
+          alreadyPaid: true,
+        });
+      }
+      if (!['PENDING_PAYMENT'].includes(journey.status)) {
+        return fail(res, 409, 'Journey is not awaiting payment');
+      }
+
+      const configuredSecret = typeof functions !== 'undefined' ? functions.config?.().paystack?.secret : null;
+      if (!configuredSecret) {
+        return fail(res, 503, 'Journey payments are not configured');
+      }
+
+      const amount = Number(journey.totalFare || 0);
+      if (!Number.isFinite(amount) || amount <= 0) return fail(res, 400, 'Journey has no payable amount');
+
+      const email = text(req.body?.email, 160);
+      const phone = text(req.body?.phone, 40);
+      const fallbackEmail = phone ? `${phone.replace(/[^0-9]/g, '')}@okadaonline.com` : `${req.uid}@okadaonline.com`;
+      const reference = `journey_${journeyId}_${Date.now()}`;
+
+      const axios = require('axios');
+      const response = await axios.post(
+        'https://api.paystack.co/transaction/initialize',
+        {
+          email: email || fallbackEmail,
+          amount: Math.round(amount * 100),
+          currency: 'GHS',
+          reference,
+          callback_url: 'https://okada-online.vercel.app/payment/callback',
+          metadata: {
+            journeyId,
+            journeyCode: text(journey.journeyCode, 80),
+            passengerId: req.uid,
+          },
+        },
+        { headers: { Authorization: `Bearer ${configuredSecret}` } }
+      );
+
+      await db.collection('payments').add({
+        journeyId,
+        passengerId: req.uid,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        provider: 'paystack',
+        reference: response.data.data.reference,
+        status: 'pending',
+        purpose: 'journey',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await ref.update({
+        paymentProvider: 'paystack',
+        paymentReference: response.data.data.reference,
+        paymentStatus: 'PENDING',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return ok(res, {
+        journeyId,
+        journeyCode: journey.journeyCode || null,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        paymentProvider: 'paystack',
+        paymentStatus: 'PENDING',
+        reference: response.data.data.reference,
+        authorizationUrl: response.data.data.authorization_url,
+        accessCode: response.data.data.access_code || null,
+      });
+    } catch (e) {
+      return fail(res, 502, e.response?.data?.message || e.message || 'Unable to initialize journey payment');
+    }
+  });
+
+  router.get('/:journeyId/pass', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const journeyRef = db.collection('journeys').doc(journeyId);
+      const journeySnap = await journeyRef.get();
+      if (!journeySnap.exists) return fail(res, 404, 'Journey not found');
+      const journey = journeySnap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+      if (journey.paymentStatus !== 'PAID') return fail(res, 409, 'Journey Pass is available after verified payment');
+
+      const bookingIds = Array.isArray(journey.bookingIds) ? journey.bookingIds : [];
+      const bookings = [];
+      for (const bookingId of bookingIds) {
+        const b = await db.collection('transitBookings').doc(text(bookingId, 120)).get();
+        if (b.exists) bookings.push({ id: b.id, ...b.data() });
+      }
+
+      const bookingById = new Map(bookings.map((b) => [b.id, b]));
+      const legs = Array.isArray(journey.legs) ? journey.legs : [];
+      const segments = [];
+      for (let i = 0; i < legs.length; i += 1) {
+        const leg = legs[i];
+        const booking = leg.tripId ? bookings.find((b) => b.tripId === leg.tripId && b.pickupStop === leg.origin && b.dropoffStop === leg.destination) : null;
+        let trip = null;
+        let route = null;
+        if (leg.tripId) {
+          const tripSnap = await db.collection('transitTrips').doc(text(leg.tripId, 120)).get();
+          if (tripSnap.exists) {
+            trip = { id: tripSnap.id, ...tripSnap.data() };
+            if (trip.routeId) {
+              const routeSnap = await db.collection('transitRoutes').doc(text(trip.routeId, 120)).get();
+              if (routeSnap.exists) route = { id: routeSnap.id, ...routeSnap.data() };
+            }
+          }
+        }
+        segments.push({
+          sequence: i + 1,
+          mode: text(leg.mode || (booking?.serviceClass === 'VIP' ? 'VIP_TRANSIT' : 'TRANSIT'), 40).toUpperCase(),
+          origin: text(leg.origin, 160),
+          destination: text(leg.destination, 160),
+          tripId: leg.tripId || null,
+          ticketCode: booking?.ticketCode || null,
+          qrPayload: booking ? `okada://transit/ticket/${booking.id}` : null,
+          bookingStatus: booking?.status || null,
+          tripStatus: trip?.status || null,
+          departureAt: trip?.departureAt || null,
+          estimatedDurationMinutes: route?.estimatedDurationMinutes ?? null,
+          vehicleId: trip?.vehicleId || null,
+          operatorId: trip?.operatorId || route?.operatorId || null,
+        });
+      }
+
+      let passenger = null;
+      const userSnap = await db.collection('users').where('firebaseUid', '==', journey.passengerId).limit(1).get();
+      if (!userSnap.empty) {
+        const u = userSnap.docs[0].data();
+        passenger = { name: text(u.name, 160) || null, phone: text(u.phone, 40) || null };
+      }
+
+      return ok(res, {
+        pass: {
+          journeyId,
+          journeyCode: journey.journeyCode,
+          passenger,
+          origin: journey.origin,
+          destination: journey.destination,
+          serviceClass: journey.serviceClass,
+          pickup: journey.pickup || null,
+          transitLegs: segments,
+          finalMile: journey.finalMile || null,
+          paymentStatus: journey.paymentStatus,
+          journeyStatus: journey.status,
+          paymentReference: journey.paymentReference || null,
+          qrPayload: `okada://journey/${journey.journeyCode}`,
+          issuedAt: journey.confirmedAt || journey.updatedAt || journey.createdAt || null,
+        },
+      });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to generate Journey Pass');
+    }
+  });
+
+  router.get('/:journeyId/status', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const journeyRef = db.collection('journeys').doc(journeyId);
+      const snap = await journeyRef.get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+
+      const legs = Array.isArray(journey.legs) ? journey.legs : [];
+      const segments = [];
+      let activeSequence = null;
+      let nextSequence = null;
+
+      for (let i = 0; i < legs.length; i += 1) {
+        const leg = legs[i];
+        let trip = null;
+        let booking = null;
+
+        if (leg.tripId) {
+          const tripSnap = await db.collection('transitTrips').doc(text(leg.tripId, 120)).get();
+          if (tripSnap.exists) trip = { id: tripSnap.id, ...tripSnap.data() };
+          const bookingSnap = await db.collection('transitBookings')
+            .where('journeyId', '==', journeyId)
+            .where('tripId', '==', leg.tripId)
+            .where('passengerId', '==', journey.passengerId)
+            .limit(1)
+            .get();
+          if (!bookingSnap.empty) booking = { id: bookingSnap.docs[0].id, ...bookingSnap.docs[0].data() };
+        }
+
+        const bookingStatus = booking?.status || null;
+        const tripStatus = trip?.status || null;
+        let segmentStatus = 'PLANNING';
+        if (bookingStatus === 'CANCELLED') segmentStatus = 'CANCELLED';
+        else if (bookingStatus === 'BOARDED') segmentStatus = 'IN_TRANSIT';
+        else if (tripStatus === 'DEPARTED' || tripStatus === 'IN_TRANSIT') segmentStatus = 'IN_TRANSIT';
+        else if (tripStatus === 'ARRIVING') segmentStatus = 'ARRIVING';
+        else if (tripStatus === 'BOARDING') segmentStatus = 'BOARDING';
+        else if (tripStatus === 'DELAYED') segmentStatus = 'DELAYED';
+        else if (tripStatus === 'COMPLETED') segmentStatus = 'COMPLETED';
+        else if (tripStatus === 'SCHEDULED') segmentStatus = 'SCHEDULED';
+
+        if (!activeSequence && ['SCHEDULED', 'BOARDING', 'DELAYED', 'IN_TRANSIT', 'ARRIVING'].includes(segmentStatus)) activeSequence = i + 1;
+        if (!nextSequence && activeSequence && i + 1 > activeSequence && segmentStatus === 'SCHEDULED') nextSequence = i + 1;
+
+        segments.push({
+          sequence: i + 1,
+          mode: text(leg.mode || 'TRANSIT', 40).toUpperCase(),
+          origin: text(leg.origin, 160),
+          destination: text(leg.destination, 160),
+          tripId: leg.tripId || null,
+          bookingId: booking?.id || null,
+          bookingStatus,
+          tripStatus,
+          segmentStatus,
+          currentStop: trip?.currentStop || null,
+          currentLocation: trip?.currentLocation || null,
+          departureAt: trip?.departureAt || null,
+          liveLocationAvailable: !!trip?.currentLocation,
+        });
+      }
+
+      if (journey.status === 'CONFIRMED' && activeSequence === null && segments.length) nextSequence = 1;
+      if (journey.status === 'COMPLETED') activeSequence = null;
+
+      return ok(res, {
+        status: {
+          journeyId,
+          journeyCode: journey.journeyCode || null,
+          journeyStatus: journey.status,
+          paymentStatus: journey.paymentStatus,
+          activeSequence,
+          nextSequence,
+          liveDataAvailable: segments.some((s) => s.liveLocationAvailable),
+          etaAvailable: false,
+          note: 'Status reflects recorded booking/trip data. ETA is not guaranteed unless supported by live operational data.',
+          segments,
+          updatedAt: journey.updatedAt || null,
+        },
+      });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to load journey status');
+    }
+  });
+
+  router.post('/:journeyId/cancel', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const journeyRef = db.collection('journeys').doc(journeyId);
       const result = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
+        const snap = await tx.get(journeyRef);
         if (!snap.exists) throw new Error('Journey not found');
         const journey = snap.data();
-        if (journey.passengerId !== req.uid && req.isAdmin !== true) throw new Error('Payment confirmation denied');
-        if (journey.paymentStatus === 'PAID') return journey;
-        if (req.body?.verified !== true) throw new Error('Payment must be verified before confirmation');
-        const paymentReference = text(req.body?.paymentReference, 160);
-        if (!paymentReference) throw new Error('Verified payment reference is required');
-        tx.update(ref, { paymentStatus: 'PAID', paymentReference, status: 'CONFIRMED', confirmedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        return { ...journey, paymentStatus: 'PAID', status: 'CONFIRMED', paymentReference };
+        if (journey.passengerId !== req.uid && req.isAdmin !== true) throw new Error('Access denied');
+        if (journey.status === 'CANCELLED') return { status: 'CANCELLED', paymentStatus: journey.paymentStatus, alreadyCancelled: true };
+        if (['BOARDING', 'IN_TRANSIT', 'FINAL_MILE', 'COMPLETED'].includes(journey.status)) {
+          throw new Error('Journey cannot be cancelled at this stage');
+        }
+
+        const bookingIds = Array.isArray(journey.bookingIds) ? journey.bookingIds : [];
+        const bookingRefs = bookingIds.map((id) => db.collection('transitBookings').doc(text(id, 120)));
+        const bookingSnaps = await Promise.all(bookingRefs.map((ref) => tx.get(ref)));
+
+        for (let i = 0; i < bookingSnaps.length; i += 1) {
+          const bSnap = bookingSnaps[i];
+          if (!bSnap.exists) continue;
+          const b = bSnap.data();
+          if (b.status === 'BOARDED') throw new Error('A journey segment has already boarded');
+          if (b.status === 'CONFIRMED') {
+            tx.update(bookingRefs[i], {
+              status: 'CANCELLED',
+              cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+
+        const cancellationReason = text(req.body?.reason, 240) || 'Passenger requested cancellation';
+        const refundStatus = journey.paymentStatus === 'PAID' ? 'REQUIRES_REVIEW' : 'NOT_APPLICABLE';
+        tx.update(journeyRef, {
+          status: 'CANCELLED',
+          cancellationReason,
+          refundStatus,
+          cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return { status: 'CANCELLED', paymentStatus: journey.paymentStatus, refundStatus, alreadyCancelled: false };
       });
-      return ok(res, { journey: { id: ref.id, ...result } });
-    } catch (e) { return fail(res, 400, e.message || 'Unable to confirm payment'); }
+
+      return ok(res, { journeyId, ...result });
+    } catch (e) {
+      return fail(res, 400, e.message || 'Unable to cancel journey');
+    }
   });
 
   router.get('/:journeyId', requireAuth, async (req, res) => {
