@@ -1,10 +1,18 @@
 import { useState } from "react";
 import { X, Shield, ChevronRight } from "lucide-react";
-import { api } from "../api";
 import { T } from "../theme";
 import { COUNTRIES } from "../constants";
 import { Toast } from "../components/Toast";
 
+// This screen only ever COLLECTS identity data during onboarding — it
+// used to also call api.verifyGhanaCard/verifyPassport directly here,
+// but that happens before any real account exists (KYC runs before
+// phone verification in the signup flow), so there was never a real
+// userId to submit against, and the arguments passed didn't even match
+// those methods' signatures (a photo File ended up in the `role` slot).
+// The actual backend submission now happens in AuthScreen, right after
+// a real account is created, using the real user id. onVerified just
+// hands the collected {type, docNumber, country} back up for that.
 export function KycVerify({role, onVerified, dark}) {
   const t = T(dark);
   const [docType,setDocType]   = useState("ghana");
@@ -31,14 +39,14 @@ export function KycVerify({role, onVerified, dark}) {
 
   const submit=async()=>{
     setStep("processing");
-    try{
-      if(isIntl) await api.verifyPassport(passNum,country,docPhoto,selfie);
-      else await api.verifyGhanaCard(cardNum,docPhoto,selfie);
-    }catch(err){ console.warn("Error:",err); }
+    // NOTE: docPhoto/selfie stay local-only for now (in-memory File
+    // objects) — uploading them to Firebase Storage and attaching the
+    // resulting URLs to the KYC submission is the next piece of real
+    // work needed here; today only the document number is submitted.
     setTimeout(()=>{
       setStep("done");
       setTimeout(()=>onVerified({type:docType,docNumber:isIntl?passNum:cardNum,country:isIntl?country:"Ghana",verified:true}),1500);
-    },3000);
+    },1500);
   };
 
   const accentColor = isIntl?"#7c3aed":"#2563eb";
@@ -245,16 +253,16 @@ export function KycVerify({role, onVerified, dark}) {
         {step==="processing"&&(
           <div style={{textAlign:"center",padding:"48px 0"}}>
             <div style={{width:64,height:64,border:`4px solid ${accentColor}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 20px"}}/>
-            <p className={`font-black text-lg ${t.text}`}>Verifying Identity…</p>
-            <p className={`text-xs mt-2 ${t.sub}`}>{isIntl?"Checking international document database":"Checking with NIA Ghana"}</p>
+            <p className={`font-black text-lg ${t.text}`}>Preparing Your Details…</p>
+            <p className={`text-xs mt-2 ${t.sub}`}>This will be verified once your account is created</p>
           </div>
         )}
 
         {step==="done"&&(
           <div style={{textAlign:"center",padding:"48px 0"}}>
             <div style={{fontSize:64,marginBottom:16}}>✅</div>
-            <p className={`font-black text-xl ${t.text}`}>Verification Submitted!</p>
-            <p className={`text-sm mt-2 ${t.sub}`}>Review within 24 hours — SMS confirmation sent.</p>
+            <p className={`font-black text-xl ${t.text}`}>Details Saved!</p>
+            <p className={`text-sm mt-2 ${t.sub}`}>Verify your phone number next to finish creating your account.</p>
             {isIntl&&<p className={`text-xs mt-2 ${t.sub}`}>Welcome to Ghana 🇬🇭 Enjoy your visit!</p>}
           </div>
         )}
