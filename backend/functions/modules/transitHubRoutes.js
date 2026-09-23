@@ -51,7 +51,9 @@ function createTransitHubRouter({ express, db, admin, requireAuth, ok, fail, san
       const snap = await ref.get();
       if (!snap.exists) return fail(res, 404, 'Journey not found');
       const journey = snap.data();
-      if (journey.userId && journey.userId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
+      const ownerId = journey.passengerId || journey.userId || null;
+      if (ownerId && ownerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
+      if (!ownerId && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
       await ref.update({ pickup: { ...pickup, source: pickup.source || 'OKADA_ONLINE', attachedAt: admin.firestore.FieldValue.serverTimestamp() }, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
       return ok(res, { journeyId, pickupAttached: true });
     } catch (_e) { return fail(res, 500, 'Unable to attach pickup'); }
@@ -66,7 +68,9 @@ function createTransitHubRouter({ express, db, admin, requireAuth, ok, fail, san
       const snap = await ref.get();
       if (!snap.exists) return fail(res, 404, 'Journey not found');
       const journey = snap.data();
-      if (journey.userId && journey.userId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
+      const ownerId = journey.passengerId || journey.userId || null;
+      if (ownerId && ownerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
+      if (!ownerId && req.isAdmin !== true) return fail(res, 403, 'Journey access denied');
       await ref.update({ finalMile: { ...finalMile, source: finalMile.source || 'OKADA_ONLINE', attachedAt: admin.firestore.FieldValue.serverTimestamp() }, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
       return ok(res, { journeyId, finalMileAttached: true });
     } catch (_e) { return fail(res, 500, 'Unable to attach final mile'); }
