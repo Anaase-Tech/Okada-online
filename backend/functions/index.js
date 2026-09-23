@@ -1597,11 +1597,14 @@ app.post('/insurance/claim', requireAuth, async (req, res) => {
 
 app.get('/insurance/policy/:userId', requireAuth, async (req, res) => {
   try {
+    const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Insurance policy access denied');
     const snap = await db.collection('insurance_policies')
-      .where('userId','==', sanitize(req.params.userId))
+      .where('userId','==', profile.ref.id)
       .where('status','==','active').limit(1).get();
     const claims = await db.collection('insurance_claims')
-      .where('userId','==', sanitize(req.params.userId))
+      .where('userId','==', profile.ref.id)
       .orderBy('submittedAt','desc').limit(5).get();
     return ok(res, {
       policy: snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() },
@@ -1681,8 +1684,9 @@ app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
       const txRef  = db.collection('pay_later').doc(sanitize(payLaterTxId));
       const txSnap = await txRef.get();
       if (!txSnap.exists) return fail(res, 404, 'Record not found');
+      if (txSnap.data().userId !== sanitize(userId)) return fail(res,403,'Pay Later record access denied');
       if (txSnap.data().status === 'paid') return ok(res, { message: 'Already paid' });
-      const amt = txSnap.data().amount;
+      const amt = Number(txSnap.data().amount);
       await txRef.update({ status: 'paid',
         paidAt: admin.firestore.FieldValue.serverTimestamp() });
       await u.ref.update({
@@ -2521,7 +2525,7 @@ app.get('/admin/maas/stats', requireAdmin, async (req,res) => {
 });
 
 // MaaS scheduled dispatch endpoint (called by cron)
-app.post('/maas/schedule/dispatch', async (_req,res) => {
+app.post('/maas/schedule/dispatch', requireAdmin, async (_req,res) => {
   try {
     const now    = new Date();
     const soon   = new Date(now.getTime()+30*60*1000);
