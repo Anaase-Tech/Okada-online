@@ -1722,49 +1722,91 @@ app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
     if (!u) return fail(res, 404, 'User not found');
 
     if (payLaterTxId) {
-      const txRef  = db.collection('pay_later').doc(sanitize(payLaterTxId));
-      const txSnap = await txRef.get();
-      if (!txSnap.exists) return fail(res, 404, 'Record not found');
-      if (txSnap.data().userId !== sanitize(userId)) return fail(res,403,'Pay Later record access denied');
-      if (txSnap.data().status === 'paid') return ok(res, { message: 'Already paid' });
-      const amt = Number(txSnap.data().amount);
-      await txRef.update({ status: 'paid',
-        paidAt: admin.firestore.FieldValue.serverTimestamp() });
-      await u.ref.update({
-        'payLater.used': admin.firestore.FieldValue.increment(-amt),
+      const txRef = db.collection('pay_later').doc(sanitize(payLaterTxId));
+      const result = await db.runTransaction(async (trx) => {
+        const [txSnap, userSnap] = await Promise.all([trx.get(txRef), trx.get(u.ref)]);
+        if (!txSnap.exists) throw new Error('Record not found');
+        if (!userSnap.exists) throw new Error('User not found');
+
+        const record = txSnap.data();
+        if (record.userId !== u.ref.id) throw new Error('Pay Later record access denied');
+        if (String(record.status || '').toLowerCase() === 'paid') {
+          return { alreadyPaid: true, amount: 0 };
+        }
+
+        const outstanding = Number(record.amount);
+        if (!Number.isFinite(outstanding) || outstanding <= 0) throw new Error('Invalid Pay Later record');
+
+        const used = Number(userSnap.data()?.payLater?.used || 0);
+        if (!Number.isFinite(used) || used < outstanding) throw new Error('Pay Later balance is inconsistent');
+
+        trx.update(txRef, {
+          status: 'paid',
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        trx.update(u.ref, {
+          'payLater.used': admin.firestore.FieldValue.increment(-outstanding),
+          'payLater.suspended': false,
+        });
+        return { alreadyPaid: false, amount: outstanding };
       });
-      return ok(res, { repaid: amt, status: 'paid' });
+
+      if (result.alreadyPaid) return ok(res, { message: 'Already paid' });
+      return ok(res, { repaid: result.amount, status: 'paid' });
     }
 
-    if (!userId || !amount)
-      return fail(res, 400, 'userId and amount, or payLaterTxId, required');
-
-    let remaining = parseFloat(amount);
-    const pending = await db.collection('pay_later')
-      .where('userId','==', sanitize(userId))
-      .where('status','in',['deferred','overdue'])
-      .orderBy('createdAt','asc').get();
-
-    let totalRepaid = 0;
-    const batch = db.batch();
-    for (const doc of pending.docs) {
-      if (remaining <= 0) break;
-      const amt = doc.data().amount;
-      batch.update(doc.ref, { status: 'paid',
-        paidAt: admin.firestore.FieldValue.serverTimestamp() });
-      remaining   -= amt;
-      totalRepaid += amt;
+    const repaymentAmount = Number(amount);
+    if (!Number.isFinite(repaymentAmount) || repaymentAmount <= 0) {
+      return fail(res, 400, 'A positive repayment amount is required');
     }
-    if (totalRepaid === 0) return fail(res, 400, 'No outstanding Pay Later balance found');
 
-    await batch.commit();
-    await u.ref.update({
-      'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
-      'payLater.suspended': false,
+    const result = await db.runTransaction(async (trx) => {
+      const userSnap = await trx.get(u.ref);
+      if (!userSnap.exists) throw new Error('User not found');
+
+      const pending = await trx.get(
+        db.collection('pay_later')
+          .where('userId','==',u.ref.id)
+          .where('status','in',['deferred','overdue'])
+          .orderBy('createdAt','asc')
+      );
+
+      let remaining = repaymentAmount;
+      let totalRepaid = 0;
+
+      for (const doc of pending.docs) {
+        if (remaining <= 0) break;
+        const outstanding = Number(doc.data().amount);
+        if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
+        // Never settle more debt than the caller requested.
+        if (outstanding > remaining) continue;
+
+        trx.update(doc.ref, {
+          status: 'paid',
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        remaining -= outstanding;
+        totalRepaid += outstanding;
+      }
+
+      if (totalRepaid <= 0) throw new Error('No outstanding Pay Later balance matched the repayment amount');
+
+      const used = Number(userSnap.data()?.payLater?.used || 0);
+      if (!Number.isFinite(used) || used < totalRepaid) throw new Error('Pay Later balance is inconsistent');
+
+      trx.update(u.ref, {
+        'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
+        'payLater.suspended': false,
+      });
+
+      return +totalRepaid.toFixed(2);
     });
-    return ok(res, { repaid: +totalRepaid.toFixed(2), status: 'paid' });
+
+    return ok(res, { repaid: result, status: 'paid' });
   } catch (e) {
-    return fail(res, 500, e.message);
+    return fail(res, 400, e.message);
   }
 });
 
