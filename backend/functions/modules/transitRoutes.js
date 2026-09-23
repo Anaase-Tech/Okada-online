@@ -24,6 +24,14 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
     return [route.origin, ...(route.stops || []), route.destination];
   }
 
+  function isActivePaymentHold(booking) {
+    if (String(booking?.status || '').toUpperCase() !== 'PAYMENT_PENDING') return true;
+    const expiry = booking?.paymentExpiresAt?.toDate
+      ? booking.paymentExpiresAt.toDate()
+      : new Date(booking?.paymentExpiresAt || 0);
+    return !Number.isNaN(expiry.getTime()) && expiry.getTime() > Date.now();
+  }
+
   router.get('/stations', async (_req, res) => {
     try {
       const snap = await db.collection('stations').where('active', '==', true).limit(100).get();
@@ -349,10 +357,11 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
           const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(route.fare);
           const bookingSnap = await db.collection('transitBookings')
             .where('tripId', '==', tripDoc.id)
-            .where('status', 'in', ['CONFIRMED', 'BOARDED'])
+            .where('status', 'in', ['PAYMENT_PENDING', 'CONFIRMED', 'BOARDED'])
             .get();
           const used = bookingSnap.docs.reduce((sum, bookingDoc) => {
             const b = bookingDoc.data();
+            if (!isActivePaymentHold(b)) return sum;
             const bf = stops.map(norm).indexOf(norm(b.pickupStop));
             const bt = stops.map(norm).indexOf(norm(b.dropoffStop));
             return bf >= 0 && bt >= 0 && bf < segment.toIndex && segment.fromIndex < bt
