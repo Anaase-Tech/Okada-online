@@ -95,7 +95,7 @@ IMPORTANT CURRENT LIMITATIONS
      npm against the repository checkout because the checkout/node_modules are
      not available here and outbound package installation is unavailable.
   2. A Node-compatible audit harness executed the current pure V4 tests:
-     27 functional test cases, 0 failures.
+     26 functional test cases, 0 failures.
   3. A complete production Firebase/Paystack transaction was not executed in
      this audit. Paystack credentials and webhook registration must be verified
      in the Firebase/Paystack consoles before launch.
