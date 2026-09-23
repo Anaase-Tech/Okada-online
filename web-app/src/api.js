@@ -114,6 +114,19 @@ class Api {
   trackDelivery(code)                    { return this.req("GET", `/delivery/track/${code}`); }
   getDeliveryHistory(uid)                { return this.req("GET", `/delivery/history/${uid}`); }
 
+  // ── Okada Transit V1 ───────────────────────────────
+  getTransitRoutes(from = "", to = "") {
+    const q = new URLSearchParams();
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    return this.req("GET", `/transit/routes${q.toString() ? "?" + q.toString() : ""}`);
+  }
+  getTransitStations()                  { return this.req("GET", "/transit/stations"); }
+  searchTransit(routeId, date)          { return this.req("GET", `/transit/search?routeId=${encodeURIComponent(routeId)}&date=${encodeURIComponent(date)}`); }
+  bookTransit(data)                     { return this.req("POST", "/transit/book", data); }
+  getTransitBooking(id)                 { return this.req("GET", `/transit/bookings/${encodeURIComponent(id)}`); }
+  cancelTransitBooking(id, reason)      { return this.req("POST", `/transit/bookings/${encodeURIComponent(id)}/cancel`, { reason }); }
+
   // ── Admin ──────────────────────────────────────────
   getMaasStats()                         { return this.req("GET", "/admin/maas/stats"); }
 }
