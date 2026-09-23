@@ -8,6 +8,7 @@ import { Toast } from "../components/Toast";
 import { Badge } from "../components/Badge";
 import { StatCard } from "../components/StatCard";
 import { MaasAdminView } from "./MaasAdminView";
+import { TransitOperations } from "./TransitOperations";
 
 export function AdminApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
@@ -65,7 +66,7 @@ export function AdminApp({user,onLogout,dark,setDark}) {
     {name:"Yaw Mensah",  amount:1200,remaining:0, purpose:"Veh. Repair", status:"paid",   rate:"—"},
   ];
   const statusColor={ongoing:"green",searching:"blue",matched:"yellow",completed:"gray"};
-  const tabs=[["overview","📊","Overview"],["rides","🏍️","Rides"],["drivers","👥","Drivers"],["fintech","💎","Fintech"],["maas","🚗","MaaS"],["kyc","🪪","KYC"]];
+  const tabs=[["overview","📊","Overview"],["rides","🏍️","Rides"],["drivers","👥","Drivers"],["fintech","💎","Fintech"],["maas","🚗","MaaS"],["transit","🚌","Transit"],["kyc","🪪","KYC"]];
 
   return (
     <div className={`max-w-md mx-auto min-h-screen ${t.bg}`}>
@@ -231,6 +232,12 @@ export function AdminApp({user,onLogout,dark,setDark}) {
                 ))}
               </div>
             ))}
+          </div>
+        )}
+
+        {view==="transit"&&(
+          <div style={{padding:16}}>
+            <TransitOperations dark={dark} t={t}/>
           </div>
         )}
 
