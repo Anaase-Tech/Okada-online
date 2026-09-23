@@ -17,6 +17,17 @@ function createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitiz
     return routeSnap.exists && routeSnap.data().operatorId === req.uid;
   }
 
+  async function canCreateOperatorResource(req) {
+    if (req.isAdmin === true) return true;
+    const snap = await db.collection('trotroOperators')
+      .where('createdBy', '==', req.uid)
+      .where('verificationStatus', '==', 'APPROVED')
+      .where('active', '==', true)
+      .limit(1)
+      .get();
+    return !snap.empty;
+  }
+
   router.get('/routes', async (_req, res) => {
     try {
       const snap = await db.collection('trotroRoutes').where('active', '==', true).limit(100).get();
@@ -26,6 +37,7 @@ function createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitiz
 
   router.post('/routes', requireAuth, async (req, res) => {
     try {
+      if (!(await canCreateOperatorResource(req))) return fail(res, 403, 'An approved active trotro operator account is required');
       const name = clean(req.body?.name, 120);
       const origin = clean(req.body?.origin, 120);
       const destination = clean(req.body?.destination, 120);
@@ -56,6 +68,7 @@ function createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitiz
       const routeSnap = await db.collection('trotroRoutes').doc(routeId).get();
       if (!routeSnap.exists || routeSnap.data().active !== true) return fail(res, 404, 'Route not found');
       const route = routeSnap.data();
+      if (req.isAdmin !== true && !(await canCreateOperatorResource(req))) return fail(res, 403, 'An approved active trotro operator account is required');
       if (route.operatorId && route.operatorId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'You are not authorized to schedule trips on this route');
       const ref = await db.collection('trotroTrips').add({
         routeId, vehicleId: vehicleId || null, departureTime: parsed, capacity,
