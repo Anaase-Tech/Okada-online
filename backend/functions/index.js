@@ -27,6 +27,10 @@ const {
   settleSuccessfulJourneyPayment,
   settleFailedJourneyPayment,
 } = require('./modules/journeyPaymentService');
+const {
+  settleRidePayment,
+  markRidePaymentFailed,
+} = require('./modules/legacyPaymentService');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -1683,37 +1687,139 @@ app.post('/wallet/withdraw', requireAuth, async (req, res) => {
 
 app.post('/payments/initialize', requireAuth, async (req, res) => {
   try {
-    const { rideId, amount, email, phone } = req.body;
-    if (!rideId || !amount) return fail(res, 400, 'rideId, amount required');
+    const { rideId, email, phone } = req.body;
+    if (!rideId) return fail(res, 400, 'rideId required');
+
+    const rideRef = db.collection('rides').doc(sanitize(rideId));
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) return fail(res, 404, 'Ride not found');
+    const ride = rideSnap.data();
+
+    const rider = await resolveUserRef(ride.userId);
+    if (!rider || (rider.data?.firebaseUid !== req.uid && rider.ref.id !== req.uid)) {
+      return fail(res, 403, 'Payment access denied');
+    }
+
+    const amount = Number(ride.fare?.total);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return fail(res, 400, 'Ride does not have a payable stored fare');
+    }
+
     const paystackSecret = functions.config().paystack?.secret;
     if (!paystackSecret) {
-      console.error('Paystack secret is not configured — run: firebase functions:config:set paystack.secret="sk_..."');
+      console.error('Paystack secret is not configured');
       return fail(res, 500, 'Payments are not configured yet');
     }
+
     const r = await axios.post(
       'https://api.paystack.co/transaction/initialize',
       {
-        email: sanitize(email) || `${sanitize(phone||'').replace('+','')}@okadaonline.com`,
-        amount: Math.round(parseFloat(amount) * 100),
+        email: sanitize(email) || `${sanitize(phone || '').replace('+','')}@okadaonline.com`,
+        amount: Math.round(amount * 100),
         currency: 'GHS',
         reference: `ride_${sanitize(rideId)}_${Date.now()}`,
         callback_url: 'https://okada-online.vercel.app/payment/callback',
-        metadata: { rideId: sanitize(rideId), phone: sanitize(phone||'') },
+        metadata: { rideId: sanitize(rideId), phone: sanitize(phone || '') },
       },
       { headers: { Authorization: `Bearer ${paystackSecret}` } }
     );
+
     await db.collection('payments').add({
-      rideId: sanitize(rideId), amount: parseFloat(amount), currency: 'GHS',
-      provider: 'paystack', reference: r.data.data.reference, status: 'pending',
+      rideId: sanitize(rideId),
+      passengerId: req.uid,
+      amount: +amount.toFixed(2),
+      currency: 'GHS',
+      provider: 'paystack',
+      reference: r.data.data.reference,
+      status: 'pending',
+      purpose: 'ride',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
     return ok(res, {
       authorizationUrl: r.data.data.authorization_url,
-      reference:        r.data.data.reference,
+      reference: r.data.data.reference,
+      amount: +amount.toFixed(2),
+      currency: 'GHS',
     });
   } catch (e) {
     console.error('payment init error:', e.response?.data || e.message);
-    return fail(res, 500, e.message);
+    return fail(res, 500, e.response?.data?.message || e.message);
+  }
+});
+
+app.get('/payments/verify/:ref', requireAuth, async (req, res) => {
+  try {
+    const reference = sanitize(req.params.ref, 160);
+    const paymentSnap = await db.collection('payments')
+      .where('reference', '==', reference).limit(1).get();
+    if (paymentSnap.empty) return fail(res, 404, 'Payment record not found');
+
+    const payment = paymentSnap.docs[0].data();
+    if (payment.purpose === 'journey' && payment.journeyId) {
+      const journeySnap = await db.collection('journeys').doc(sanitize(payment.journeyId)).get();
+      if (!journeySnap.exists) return fail(res, 404, 'Journey not found');
+      if (journeySnap.data().passengerId !== req.uid && !await (async()=>{const a=await db.collection('admins').doc(req.uid).get();return a.exists;})()) {
+        return fail(res, 403, 'Payment access denied');
+      }
+    } else if (payment.rideId) {
+      const rideSnap = await db.collection('rides').doc(sanitize(payment.rideId)).get();
+      if (!rideSnap.exists) return fail(res, 404, 'Ride not found');
+      const rider = await resolveUserRef(rideSnap.data().userId);
+      if (!rider || (rider.data?.firebaseUid !== req.uid && rider.ref.id !== req.uid)) {
+        return fail(res, 403, 'Payment access denied');
+      }
+    } else {
+      return fail(res, 400, 'Unsupported payment record');
+    }
+
+    const paystackSecret = functions.config().paystack?.secret;
+    if (!paystackSecret) return fail(res, 500, 'Payments are not configured yet');
+
+    const response = await axios.get(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      { headers: { Authorization: `Bearer ${paystackSecret}` } }
+    );
+
+    const data = response.data?.data || {};
+    const providerStatus = String(data.status || '').toLowerCase();
+
+    if (payment.purpose === 'journey' && payment.journeyId) {
+      if (providerStatus === 'success') {
+        const settled = await settleSuccessfulJourneyPayment({
+          db, admin, journeyId: payment.journeyId, reference, providerData: data,
+        });
+        return ok(res, { reference, verified: true, outcome: settled.outcome || 'SUCCESS' });
+      }
+      if (['failed', 'abandoned'].includes(providerStatus)) {
+        const settled = await settleFailedJourneyPayment({
+          db, admin, journeyId: payment.journeyId, reference,
+          failureReason: `Paystack transaction status: ${providerStatus}`,
+          paymentStatus: 'FAILED',
+        });
+        return ok(res, { reference, verified: false, outcome: 'FAILED', ...settled });
+      }
+    } else if (payment.rideId) {
+      if (providerStatus === 'success') {
+        const settled = await settleRidePayment({ db, admin, reference, providerData: data });
+        return ok(res, { reference, verified: true, outcome: settled.idempotent ? 'ALREADY_PAID' : 'SUCCESS' });
+      }
+      if (['failed', 'abandoned'].includes(providerStatus)) {
+        const settled = await markRidePaymentFailed({
+          db, admin, reference, reason: `Paystack transaction status: ${providerStatus}`,
+        });
+        return ok(res, { reference, verified: false, outcome: 'FAILED', ...settled });
+      }
+    }
+
+    return ok(res, {
+      reference,
+      verified: false,
+      outcome: 'PENDING',
+      providerStatus: providerStatus || 'unknown',
+    });
+  } catch (e) {
+    return fail(res, 502, e.response?.data?.message || e.message || 'Unable to verify payment');
   }
 });
 
@@ -1723,7 +1829,7 @@ app.post('/payments/webhook', async (req, res) => {
     const sig = req.headers['x-paystack-signature'] || '';
     const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body));
     const expected = crypto.createHmac('sha512', paystackSecret).update(body).digest('hex');
-    const sigBuf = Buffer.from(sig, 'utf8');
+    const sigBuf = Buffer.from(String(sig), 'utf8');
     const expBuf = Buffer.from(expected, 'utf8');
     const sigValid = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
     if (!paystackSecret || !sigValid) return fail(res, 401, 'Invalid signature');
@@ -1731,29 +1837,20 @@ app.post('/payments/webhook', async (req, res) => {
     if (req.body.event === 'charge.success') {
       const data = req.body.data || {};
       const reference = sanitize(data.reference || '');
-      const metadata = data.metadata || {};
-      const q = await db.collection('payments').where('reference', '==', reference).limit(1).get();
+      if (!reference) return fail(res, 400, 'Payment reference missing');
 
+      const q = await db.collection('payments').where('reference', '==', reference).limit(1).get();
       if (!q.empty) {
-        const paymentRef = q.docs[0].ref;
         const payment = q.docs[0].data();
 
         if (payment.purpose === 'journey' && payment.journeyId) {
           await settleSuccessfulJourneyPayment({
-            db,
-            admin,
-            journeyId: payment.journeyId,
-            reference,
-            providerData: data,
+            db, admin, journeyId: payment.journeyId, reference, providerData: data,
           });
-        } else {
-          await paymentRef.update({
-            status: 'completed',
-            completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        } else if (payment.rideId) {
+          await settleRidePayment({
+            db, admin, reference, providerData: data,
           });
-          if (metadata?.rideId) {
-            await db.collection('rides').doc(metadata.rideId).update({ paymentStatus: 'paid' });
-          }
         }
       }
     }
