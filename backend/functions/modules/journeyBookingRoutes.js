@@ -293,6 +293,56 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
     }
   });
 
+  router.get('/:journeyId/events', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const journeySnap = await db.collection('journeys').doc(journeyId).get();
+      if (!journeySnap.exists) return fail(res, 404, 'Journey not found');
+
+      const journey = journeySnap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+
+      const legs = Array.isArray(journey.legs) ? journey.legs : [];
+      const events = [];
+
+      for (let i = 0; i < legs.length; i += 1) {
+        const leg = legs[i];
+        if (!leg?.tripId) continue;
+
+        const snap = await db.collection('transitTripEvents')
+          .where('tripId', '==', text(leg.tripId, 120))
+          .orderBy('recordedAt', 'desc')
+          .limit(50)
+          .get();
+
+        for (const doc of snap.docs) {
+          events.push({
+            id: doc.id,
+            sequence: i + 1,
+            origin: text(leg.origin, 160),
+            destination: text(leg.destination, 160),
+            ...doc.data(),
+          });
+        }
+      }
+
+      events.sort((a, b) => {
+        const ta = a.recordedAt?.toDate ? a.recordedAt.toDate().getTime() : new Date(a.recordedAt || 0).getTime();
+        const tb = b.recordedAt?.toDate ? b.recordedAt.toDate().getTime() : new Date(b.recordedAt || 0).getTime();
+        return tb - ta;
+      });
+
+      return ok(res, {
+        journeyId,
+        journeyCode: journey.journeyCode || null,
+        events: events.slice(0, 100),
+        source: 'RECORDED_OPERATIONAL_EVENTS',
+      });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to load journey events');
+    }
+  });
+
   router.get('/:journeyId/connections', requireAuth, async (req, res) => {
     try {
       const journeyId = text(req.params.journeyId, 120);
