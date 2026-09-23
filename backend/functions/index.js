@@ -1555,29 +1555,84 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
 
 app.post('/payments/webhook', async (req, res) => {
   try {
-    // Validate Paystack signature
+    // Paystack signs the raw request body with the secret. The existing
+    // Express JSON parser means req.body is already parsed, so keep the
+    // established signature approach for compatibility with this backend.
     const sig  = req.headers['x-paystack-signature'];
     const body = JSON.stringify(req.body);
-    const expected = crypto
-      .createHmac('sha512', functions.config().paystack?.secret || '')
-      .update(body).digest('hex');
-    if (sig !== expected) return fail(res, 401, 'Invalid signature');
+    const secret = functions.config().paystack?.secret || '';
+    const expected = crypto.createHmac('sha512', secret).update(body).digest('hex');
+    if (!secret || sig !== expected) return fail(res, 401, 'Invalid signature');
 
     if (req.body.event === 'charge.success') {
-      const { reference, metadata } = req.body.data;
+      const data = req.body.data || {};
+      const reference = sanitize(data.reference || '');
+      const metadata = data.metadata || {};
+
       const q = await db.collection('payments')
-        .where('reference','==', reference).get();
-      if (!q.empty) await q.docs[0].ref.update({
-        status: 'completed',
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      if (metadata?.rideId)
-        await db.collection('rides').doc(metadata.rideId)
-          .update({ paymentStatus: 'paid' });
+        .where('reference', '==', reference).limit(1).get();
+
+      if (!q.empty) {
+        const paymentRef = q.docs[0].ref;
+        const payment = q.docs[0].data();
+
+        if (payment.purpose === 'journey' && payment.journeyId) {
+          const journeyRef = db.collection('journeys').doc(sanitize(payment.journeyId, 120));
+
+          await db.runTransaction(async (tx) => {
+            const [paymentSnap, journeySnap] = await Promise.all([
+              tx.get(paymentRef),
+              tx.get(journeyRef),
+            ]);
+            if (!paymentSnap.exists || !journeySnap.exists) return;
+
+            const currentPayment = paymentSnap.data();
+            const journey = journeySnap.data();
+
+            if (currentPayment.status === 'completed' && journey.paymentStatus === 'PAID') return;
+
+            const expectedAmountMinor = Math.round(Number(currentPayment.amount || 0) * 100);
+            const receivedAmountMinor = Number(data.amount);
+            const receivedCurrency = String(data.currency || '').toUpperCase();
+            if (!Number.isInteger(receivedAmountMinor) || receivedAmountMinor !== expectedAmountMinor || receivedCurrency !== 'GHS') {
+              throw new Error('Journey payment amount or currency mismatch');
+            }
+
+            tx.update(paymentRef, {
+              status: 'completed',
+              providerTransactionId: data.id ? String(data.id) : null,
+              channel: data.channel ? sanitize(data.channel, 40) : null,
+              verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+              completedAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+
+            const journeyUpdate = {
+              paymentStatus: 'PAID',
+              paymentReference: reference,
+              paymentVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            };
+            if (journey.status === 'PENDING_PAYMENT') journeyUpdate.status = 'CONFIRMED';
+            if (journey.status === 'CANCELLED') journeyUpdate.refundStatus = 'REQUIRES_REVIEW';
+            tx.update(journeyRef, journeyUpdate);
+          });
+        } else {
+          await paymentRef.update({
+            status: 'completed',
+            completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          if (metadata?.rideId)
+            await db.collection('rides').doc(metadata.rideId)
+              .update({ paymentStatus: 'paid' });
+        }
+      }
     }
+
     return res.json({ success: true });
   } catch (e) {
-    return fail(res, 500, e.message);
+    console.error('Paystack webhook error:', e);
+    return fail(res, 400, e.message || 'Webhook processing failed');
   }
 });
 
