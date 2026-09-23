@@ -4,10 +4,16 @@ const functions = require('firebase-functions');
 const axios = require('axios');
 const { makeJourneyCode, validateConnectedLegs } = require('./journeyBookingEngine');
 const { buildConnectionMonitor } = require('./journeyConnectionEngine');
+const {
+  holdExpiryTimestamp,
+  settleSuccessfulJourneyPayment,
+  settleFailedJourneyPayment,
+} = require('./journeyPaymentService');
 
 function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok }) {
   const router = express.Router();
   const text = (v, max = 160) => String(v == null ? '' : v).trim().slice(0, max);
+  const PAYMENT_HOLD_MINUTES = 15;
 
   router.post('/book', requireAuth, async (req, res) => {
     try {
@@ -49,9 +55,18 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           const from = stops.map(norm).indexOf(norm(leg.origin));
           const to = stops.map(norm).indexOf(norm(leg.destination));
           if (from < 0 || to < 0 || from >= to) throw new Error(`Invalid transit segment: ${leg.origin} → ${leg.destination}`);
-          const active = await tx.get(db.collection('transitBookings').where('tripId', '==', leg.tripId).where('status', 'in', ['CONFIRMED', 'BOARDED']));
+          const active = await tx.get(
+            db.collection('transitBookings')
+              .where('tripId', '==', leg.tripId)
+              .where('status', 'in', ['PAYMENT_PENDING', 'CONFIRMED', 'BOARDED'])
+          );
+          const now = new Date();
           const overlapping = active.docs.filter((d) => {
             const b = d.data();
+            if (String(b.status || '').toUpperCase() === 'PAYMENT_PENDING') {
+              const expiry = b.paymentExpiresAt?.toDate ? b.paymentExpiresAt.toDate() : new Date(b.paymentExpiresAt || 0);
+              if (Number.isNaN(expiry.getTime()) || expiry.getTime() <= now.getTime()) return false;
+            }
             const bf = stops.map(norm).indexOf(norm(b.pickupStop));
             const bt = stops.map(norm).indexOf(norm(b.dropoffStop));
             return bf >= 0 && bt >= 0 && bf < to && from < bt;
@@ -64,7 +79,15 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           bookingRefs.push(bookingRef);
           const chargedFare = +(configuredFare * seatCount).toFixed(2);
           trustedLegFares.push(chargedFare);
-          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: chargedFare, currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
+          tx.update(
+            db.collection('transitTrips').doc(leg.tripId),
+            {
+              inventoryVersion: admin.firestore.FieldValue.increment(1),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }
+          );
+          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: chargedFare, currency: 'GHS', status: 'PAYMENT_PENDING', paymentStatus: 'PENDING', paymentExpiresAt, journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         const pickupFare = Number(req.body?.pickup?.fare || 0);
         const finalMileFare = Number(req.body?.finalMile?.fare || 0);
@@ -72,8 +95,9 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           throw new Error('Pickup and final-mile fares must be priced by a trusted backend quote before charging');
         }
         const totalFare = trustedLegFares.reduce((sum, fare) => sum + Number(fare || 0), 0);
-        tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2) };
+        const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
+        tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', paymentExpiresAt, legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2), paymentExpiresAt };
       });
       return ok(res, { journeyId: journeyRef.id, journeyCode, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', ...result }, 201);
     } catch (e) { return fail(res, 400, e.message || 'Unable to create journey booking'); }
@@ -126,13 +150,16 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
   });
 
   router.post('/:journeyId/pay', requireAuth, async (req, res) => {
+    let journeyId = null;
     try {
-      const journeyId = text(req.params.journeyId, 120);
+      journeyId = text(req.params.journeyId, 120);
       const ref = db.collection('journeys').doc(journeyId);
+
       const snap = await ref.get();
       if (!snap.exists) return fail(res, 404, 'Journey not found');
-      const journey = snap.data();
+      let journey = snap.data();
       if (journey.passengerId !== req.uid) return fail(res, 403, 'Payment access denied');
+
       if (journey.paymentStatus === 'PAID') {
         return ok(res, {
           journeyId,
@@ -142,72 +169,272 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           alreadyPaid: true,
         });
       }
-      if (!['PENDING_PAYMENT'].includes(journey.status)) {
+
+      if (journey.status !== 'PENDING_PAYMENT') {
         return fail(res, 409, 'Journey is not awaiting payment');
       }
 
       const configuredSecret = typeof functions !== 'undefined' ? functions.config?.().paystack?.secret : null;
-      if (!configuredSecret) {
-        return fail(res, 503, 'Journey payments are not configured');
-      }
+      if (!configuredSecret) return fail(res, 503, 'Journey payments are not configured');
 
       const amount = Number(journey.totalFare || 0);
       if (!Number.isFinite(amount) || amount <= 0) return fail(res, 400, 'Journey has no payable amount');
 
+      const existingExpiry = journey.paymentExpiresAt?.toDate ? journey.paymentExpiresAt.toDate() : new Date(journey.paymentExpiresAt || 0);
+      if (Number.isFinite(existingExpiry.getTime()) && existingExpiry.getTime() <= Date.now()) {
+        await settleFailedJourneyPayment({
+          db, admin, journeyId,
+          failureReason: 'Journey payment hold expired before payment initialization',
+          paymentStatus: 'EXPIRED',
+        });
+        return fail(res, 409, 'Journey payment window has expired. Please create a new Journey.');
+      }
+
+      // Serialize payment initialization on the Journey document. The reference
+      // is written before contacting Paystack so concurrent /pay requests cannot
+      // create multiple provider transactions for the same payment attempt.
+      let init = null;
+      await db.runTransaction(async (tx) => {
+        const freshSnap = await tx.get(ref);
+        if (!freshSnap.exists) throw new Error('Journey not found');
+        const fresh = freshSnap.data();
+
+        if (fresh.passengerId !== req.uid) throw new Error('Payment access denied');
+        if (fresh.paymentStatus === 'PAID') return;
+
+        if (fresh.paymentStatus === 'PAYMENT_PENDING') {
+          if (fresh.paymentReference && fresh.paymentAuthorizationUrl) {
+            init = {
+              existing: true,
+              reference: fresh.paymentReference,
+              authorizationUrl: fresh.paymentAuthorizationUrl,
+              accessCode: fresh.paymentAccessCode || null,
+            };
+            return;
+          }
+          throw new Error('Payment initialization already in progress');
+        }
+
+        if (fresh.status !== 'PENDING_PAYMENT') throw new Error('Journey is not awaiting payment');
+
+        const expiry = fresh.paymentExpiresAt?.toDate ? fresh.paymentExpiresAt.toDate() : new Date(fresh.paymentExpiresAt || 0);
+        if (Number.isFinite(expiry.getTime()) && expiry.getTime() <= Date.now()) {
+          throw new Error('Journey payment window has expired');
+        }
+
+        const attempt = Number(fresh.paymentAttempt || 0) + 1;
+        const reference = `journey_${journeyId}_${attempt}`;
+        const paymentRef = db.collection('payments').doc();
+        const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
+
+        // Refresh the Journey hold from the moment payment is initialized.
+        const bookingIds = Array.isArray(fresh.bookingIds) ? fresh.bookingIds : [];
+        const bookingRefs = bookingIds.map((id) => db.collection('transitBookings').doc(String(id)));
+        const bookingSnaps = await Promise.all(bookingRefs.map((bookingRef) => tx.get(bookingRef)));
+
+        for (const bookingSnap of bookingSnaps) {
+          if (!bookingSnap.exists) throw new Error('Journey inventory hold is missing');
+          const booking = bookingSnap.data();
+          if (!['PAYMENT_PENDING', 'CONFIRMED'].includes(String(booking.status || '').toUpperCase())) {
+            throw new Error('Journey inventory hold is no longer available');
+          }
+          if (String(booking.status || '').toUpperCase() === 'CONFIRMED' && fresh.paymentStatus !== 'PAID') {
+            throw new Error('Journey inventory is in an invalid unpaid state');
+          }
+          if (String(booking.status || '').toUpperCase() === 'PAYMENT_PENDING') {
+            tx.update(bookingSnap.ref, {
+              paymentExpiresAt,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+
+        tx.update(ref, {
+          paymentStatus: 'PAYMENT_PENDING',
+          paymentAttempt: attempt,
+          paymentReference: reference,
+          paymentStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+          paymentExpiresAt,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(paymentRef, {
+          journeyId,
+          passengerId: req.uid,
+          amount: +amount.toFixed(2),
+          currency: 'GHS',
+          provider: 'paystack',
+          reference,
+          status: 'initializing',
+          purpose: 'journey',
+          paymentAttempt: attempt,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        init = { existing: false, reference, paymentDocId: paymentRef.id, attempt };
+      });
+
+      if (init?.existing) {
+        return ok(res, {
+          journeyId,
+          journeyCode: journey.journeyCode || null,
+          amount: +amount.toFixed(2),
+          currency: 'GHS',
+          paymentProvider: 'paystack',
+          paymentStatus: 'PAYMENT_PENDING',
+          reference: init.reference,
+          authorizationUrl: init.authorizationUrl,
+          accessCode: init.accessCode,
+          alreadyInitialized: true,
+        });
+      }
+
       const email = text(req.body?.email, 160);
       const phone = text(req.body?.phone, 40);
       const fallbackEmail = phone ? `${phone.replace(/[^0-9]/g, '')}@okadaonline.com` : `${req.uid}@okadaonline.com`;
-      const reference = `journey_${journeyId}_${Date.now()}`;
 
-      const response = await axios.post(
-        'https://api.paystack.co/transaction/initialize',
-        {
-          email: email || fallbackEmail,
-          amount: Math.round(amount * 100),
-          currency: 'GHS',
-          reference,
-          callback_url: 'https://okada-online.vercel.app/payment/callback',
-          metadata: {
-            journeyId,
-            journeyCode: text(journey.journeyCode, 80),
-            passengerId: req.uid,
+      try {
+        const response = await axios.post(
+          'https://api.paystack.co/transaction/initialize',
+          {
+            email: email || fallbackEmail,
+            amount: Math.round(amount * 100),
+            currency: 'GHS',
+            reference: init.reference,
+            callback_url: 'https://okada-online.vercel.app/payment/callback',
+            metadata: {
+              journeyId,
+              journeyCode: text(journey.journeyCode, 80),
+              passengerId: req.uid,
+            },
           },
-        },
+          { headers: { Authorization: `Bearer ${configuredSecret}` } }
+        );
+
+        const data = response.data?.data || {};
+        if (!data.authorization_url) throw new Error('Paystack did not return an authorization URL');
+
+        await db.collection('payments').doc(init.paymentDocId).update({
+          status: 'pending',
+          authorizationUrl: data.authorization_url,
+          accessCode: data.access_code || null,
+          providerResponse: {
+            status: response.data?.status === true,
+            message: text(response.data?.message, 200) || null,
+          },
+          initializedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        await ref.update({
+          paymentAuthorizationUrl: data.authorization_url,
+          paymentAccessCode: data.access_code || null,
+          paymentStatus: 'PAYMENT_PENDING',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        return ok(res, {
+          journeyId,
+          journeyCode: journey.journeyCode || null,
+          amount: +amount.toFixed(2),
+          currency: 'GHS',
+          paymentProvider: 'paystack',
+          paymentStatus: 'PAYMENT_PENDING',
+          reference: init.reference,
+          authorizationUrl: data.authorization_url,
+          accessCode: data.access_code || null,
+        });
+      } catch (e) {
+        await settleFailedJourneyPayment({
+          db, admin, journeyId, reference: init.reference,
+          failureReason: e.response?.data?.message || e.message || 'Unable to initialize payment',
+          paymentStatus: 'FAILED',
+        });
+        throw e;
+      }
+    } catch (e) {
+      return fail(res, 502, e.response?.data?.message || e.message || 'Unable to initialize journey payment');
+    }
+  });
+
+  router.post('/:journeyId/payment/verify', requireAuth, async (req, res) => {
+    const journeyId = text(req.params.journeyId, 120);
+    try {
+      const journeyRef = db.collection('journeys').doc(journeyId);
+      const snap = await journeyRef.get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid) return fail(res, 403, 'Payment access denied');
+
+      if (journey.paymentStatus === 'PAID') {
+        return ok(res, {
+          journeyId,
+          paymentStatus: 'PAID',
+          journeyStatus: journey.status,
+          verified: true,
+        });
+      }
+
+      const configuredSecret = typeof functions !== 'undefined' ? functions.config?.().paystack?.secret : null;
+      if (!configuredSecret) return fail(res, 503, 'Journey payments are not configured');
+
+      const storedReference = text(journey.paymentReference, 160);
+      const suppliedReference = text(req.body?.reference, 160);
+      if (!storedReference || (suppliedReference && suppliedReference !== storedReference)) {
+        return fail(res, 400, 'Payment reference does not match this Journey');
+      }
+
+      const response = await axios.get(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(storedReference)}`,
         { headers: { Authorization: `Bearer ${configuredSecret}` } }
       );
 
-      await db.collection('payments').add({
-        journeyId,
-        passengerId: req.uid,
-        amount: +amount.toFixed(2),
-        currency: 'GHS',
-        provider: 'paystack',
-        reference: response.data.data.reference,
-        status: 'pending',
-        purpose: 'journey',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      const providerData = response.data?.data || {};
+      const providerStatus = String(providerData.status || '').toLowerCase();
 
-      await ref.update({
-        paymentProvider: 'paystack',
-        paymentReference: response.data.data.reference,
-        paymentStatus: 'PENDING',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      if (providerStatus === 'success') {
+        const settled = await settleSuccessfulJourneyPayment({
+          db, admin, journeyId,
+          reference: storedReference,
+          providerData,
+        });
+        const fresh = await journeyRef.get();
+        return ok(res, {
+          journeyId,
+          verified: true,
+          outcome: settled.outcome || 'SUCCESS',
+          journeyStatus: fresh.data()?.status || null,
+          paymentStatus: fresh.data()?.paymentStatus || null,
+        });
+      }
+
+      if (['failed', 'abandoned'].includes(providerStatus)) {
+        const settled = await settleFailedJourneyPayment({
+          db, admin, journeyId,
+          reference: storedReference,
+          failureReason: `Paystack transaction status: ${providerStatus}`,
+          paymentStatus: 'FAILED',
+        });
+        return ok(res, {
+          journeyId,
+          verified: false,
+          outcome: 'FAILED',
+          journeyStatus: settled.journeyStatus,
+          paymentStatus: settled.paymentStatus,
+        });
+      }
 
       return ok(res, {
         journeyId,
-        journeyCode: journey.journeyCode || null,
-        amount: +amount.toFixed(2),
-        currency: 'GHS',
-        paymentProvider: 'paystack',
-        paymentStatus: 'PENDING',
-        reference: response.data.data.reference,
-        authorizationUrl: response.data.data.authorization_url,
-        accessCode: response.data.data.access_code || null,
+        verified: false,
+        outcome: 'PENDING',
+        journeyStatus: journey.status,
+        paymentStatus: journey.paymentStatus,
+        providerStatus: providerStatus || 'unknown',
       });
     } catch (e) {
-      return fail(res, 502, e.response?.data?.message || e.message || 'Unable to initialize journey payment');
+      return fail(res, 502, e.response?.data?.message || e.message || 'Unable to verify journey payment');
     }
   });
 
@@ -283,6 +510,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           finalMile: journey.finalMile || null,
           paymentStatus: journey.paymentStatus,
           journeyStatus: journey.status,
+          paymentExpiresAt: journey.paymentExpiresAt || null,
           currentSegmentSequence: journey.currentSegmentSequence || null,
           nextSegmentSequence: journey.nextSegmentSequence || null,
           nextAction: journey.nextAction || null,
@@ -465,6 +693,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           journeyCode: journey.journeyCode || null,
           journeyStatus: journey.status,
           paymentStatus: journey.paymentStatus,
+          paymentExpiresAt: journey.paymentExpiresAt || null,
           currentSegmentSequence: journey.currentSegmentSequence || activeSequence,
           nextSegmentSequence: journey.nextSegmentSequence || nextSequence,
           nextAction: journey.nextAction || null,
