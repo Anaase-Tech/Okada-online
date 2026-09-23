@@ -140,6 +140,7 @@ export function JourneyApp({ user, dark, onBack }) {
         const p = await api.getJourneyPass(id);
         setPass(p.pass || null);
         localStorage.removeItem("okada_pending_journey");
+        localStorage.removeItem("okada_pending_journey_payment");
       }
     } catch (e) {
       setMessage({ type: "error", text: e.message || "Unable to refresh Journey." });
@@ -148,9 +149,20 @@ export function JourneyApp({ user, dark, onBack }) {
 
   useEffect(() => {
     const pending = localStorage.getItem("okada_pending_journey");
+    const pendingReference = localStorage.getItem("okada_pending_journey_payment");
     if (pending && !journeyId) {
       setJourneyId(pending);
-      refreshJourney(pending);
+      refreshJourney(pending).then(async () => {
+        if (pendingReference) {
+          try {
+            await api.verifyJourneyPayment(pending, pendingReference);
+            await refreshJourney(pending);
+          } catch (_e) {
+            // The webhook can still complete the payment; callback-time
+            // verification is a recovery attempt, not a client success signal.
+          }
+        }
+      });
     }
   }, []);
 
@@ -198,6 +210,7 @@ export function JourneyApp({ user, dark, onBack }) {
       localStorage.setItem("okada_pending_journey", result.journeyId);
 
       const payment = await api.payJourney(result.journeyId, user.email || "", user.phone || "");
+      if (payment.reference) localStorage.setItem("okada_pending_journey_payment", payment.reference);
       if (!payment.authorizationUrl) {
         throw new Error("Payment authorization was not returned by the server.");
       }
@@ -548,7 +561,7 @@ export function JourneyApp({ user, dark, onBack }) {
             <span className={`font-bold ${t.sub}`}>{selectedLegs.length} leg{selectedLegs.length > 1 ? "s" : ""} · {seatCount} seat{seatCount > 1 ? "s" : ""}</span>
             <strong style={{ fontSize: 18, color: "#16a34a" }}>GH₵{estimatedFare.toFixed(2)}</strong>
           </div>
-          <p className={`text-xs ${t.sub}`} style={{ marginTop: 4 }}>Estimated from configured transit fares. The server recalculates the final charge.</p>
+          <p className={`text-xs ${t.sub}`} style={{ marginTop: 4 }}>Displayed from the latest configured server fares. The backend recalculates and authorizes the final charge.</p>
           <button onClick={book} disabled={loading || (usesTwoLegs && !selected2)}
             style={{ marginTop: 9, width: "100%", background: "#111827", color: "#fff", borderRadius: 14, padding: 13, fontWeight: 900, display: "flex", justifyContent: "center", alignItems: "center", gap: 8, opacity: loading || (usesTwoLegs && !selected2) ? 0.55 : 1 }}>
             {loading ? <Spin /> : <CreditCard style={{ width: 16, height: 16 }} />}
