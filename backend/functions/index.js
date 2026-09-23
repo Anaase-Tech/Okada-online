@@ -2524,6 +2524,43 @@ exports.applySavingsInterest = functions.pubsub
     console.log(`✅ Applied interest to ${count} accounts`);
   });
 
+// Expire unpaid Journey inventory holds.
+// A Journey is a payment-backed reservation intent; until payment is verified,
+// its underlying transit bookings remain PAYMENT_PENDING and must not become
+// permanent inventory consumption.
+exports.expireJourneyPaymentHolds = functions.pubsub
+  .schedule('every 5 minutes').timeZone('Africa/Accra')
+  .onRun(async () => {
+    const now = new Date();
+    const snap = await db.collection('journeys')
+      .where('status', '==', 'PENDING_PAYMENT')
+      .where('paymentExpiresAt', '<=', now)
+      .limit(100)
+      .get();
+
+    let expired = 0;
+    for (const doc of snap.docs) {
+      const journey = doc.data();
+      if (!['PENDING', 'PAYMENT_PENDING'].includes(String(journey.paymentStatus || '').toUpperCase())) continue;
+
+      try {
+        await settleFailedJourneyPayment({
+          db,
+          admin,
+          journeyId: doc.id,
+          reference: journey.paymentReference || null,
+          failureReason: 'Journey payment hold expired',
+          paymentStatus: 'EXPIRED',
+        });
+        expired += 1;
+      } catch (e) {
+        console.error(`Journey payment expiry failed for ${doc.id}:`, e.message);
+      }
+    }
+
+    console.log(`Journey payment holds expired: ${expired}`);
+  });
+
 // Nightly checks — defaults, overdue, renewals
 
 // MaaS dispatch — every 5 minutes
