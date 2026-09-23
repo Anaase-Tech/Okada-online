@@ -90,12 +90,23 @@ function buildOperationalState({
   const effectiveEventType = normalize(eventType);
   const storedSequence = Number(currentSegmentSequence);
 
-  if (eventRow && Number.isInteger(storedSequence) && storedSequence > 0 && eventRow.sequence < storedSequence) {
-    base.currentSegmentSequence = storedSequence;
-    base.nextSegmentSequence = storedSequence < segmentRows.length ? storedSequence + 1 : null;
-    base.nextAction = currentJourneyStatus === 'FINAL_MILE' ? 'FINAL_MILE' : 'MONITOR';
-    base.reason = 'STALE_OPERATIONAL_EVENT';
-    return base;
+  if (eventRow && Number.isInteger(storedSequence) && storedSequence > 0) {
+    const earlierSegment = eventRow.sequence < storedSequence;
+    const duplicateBoardingAfterDeparture =
+      eventRow.sequence === storedSequence
+      && currentJourneyStatus === 'IN_TRANSIT'
+      && effectiveEventType === 'BOARDING';
+    const sameSegmentAfterConnection =
+      eventRow.sequence === storedSequence
+      && currentJourneyStatus === 'CONNECTION_PENDING';
+
+    if (earlierSegment || duplicateBoardingAfterDeparture || sameSegmentAfterConnection) {
+      base.currentSegmentSequence = storedSequence;
+      base.nextSegmentSequence = storedSequence < segmentRows.length ? storedSequence + 1 : null;
+      base.nextAction = currentJourneyStatus === 'FINAL_MILE' ? 'FINAL_MILE' : 'MONITOR';
+      base.reason = 'STALE_OPERATIONAL_EVENT';
+      return base;
+    }
   }
 
   // An arrival at an intermediate hub means the customer's next task is the
@@ -135,7 +146,9 @@ function buildOperationalState({
 
   if (!firstIncomplete) {
     const hasFinalMile = finalMile === true
-      || (finalMile && typeof finalMile === 'object' && Object.keys(finalMile).length > 0);
+      || (finalMile && typeof finalMile === 'object'
+        && finalMile.required !== false
+        && Object.keys(finalMile).length > 0);
     const finalMileCompleted = finalMile && typeof finalMile === 'object'
       && normalize(finalMile.status) === 'COMPLETED';
     base.currentSegmentSequence = segmentRows.length;
