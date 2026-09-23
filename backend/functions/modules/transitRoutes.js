@@ -64,6 +64,8 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
       const middleStops = Array.isArray(req.body?.stops) ? req.body.stops.map((s) => clean(s, 120)) : [];
       const stops = validateStops([origin, ...middleStops, destination]);
       const serviceClass = validateServiceClass(req.body?.serviceClass || 'STANDARD');
+      const fare = Number(req.body?.fare);
+      if (!Number.isFinite(fare) || fare < 0) return fail(res, 400, 'Configured route fare is required');
       const ref = await db.collection('transitRoutes').add({
         name: clean(req.body?.name, 160) || `${stops[0]} → ${stops[stops.length - 1]}`,
         origin: stops[0], destination: stops[stops.length - 1], stops: stops.slice(1, -1),
@@ -71,6 +73,7 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
         operatorId: clean(req.body?.operatorId, 120) || null,
         active: true, createdBy: req.uid,
         estimatedDurationMinutes: Number.isInteger(Number(req.body?.estimatedDurationMinutes)) ? Number(req.body.estimatedDurationMinutes) : null,
+        fare: +fare.toFixed(2),
         fareRules: req.body?.fareRules || null,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -97,12 +100,15 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
       if (!route) return fail(res, 404, 'Transit route not found');
       const departure = new Date(req.body?.departureAt);
       const capacity = Number(req.body?.capacity);
+      const requestedFare = Number(req.body?.fare);
+      const fare = Number.isFinite(requestedFare) ? requestedFare : Number(route.fare);
       const serviceClass = validateServiceClass(req.body?.serviceClass || route.serviceClass || 'STANDARD');
       if (Number.isNaN(departure.getTime()) || departure.getTime() <= Date.now()) return fail(res, 400, 'Valid future departureAt is required');
       if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) return fail(res, 400, 'Valid capacity is required');
+      if (!Number.isFinite(fare) || fare < 0) return fail(res, 400, 'Configured trip fare is required');
       const ref = await db.collection('transitTrips').add({
         routeId, operatorId: route.operatorId || null, vehicleId: clean(req.body?.vehicleId, 120) || null,
-        departureAt: departure, capacity, serviceClass, status: 'SCHEDULED', active: true,
+        departureAt: departure, capacity, fare: +fare.toFixed(2), serviceClass, status: 'SCHEDULED', active: true,
         currentStop: route.origin, currentLocation: null,
         createdBy: req.uid, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -130,11 +136,29 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
           if (serviceClass && String(trip.serviceClass || route.serviceClass || 'STANDARD').toUpperCase() !== serviceClass) continue;
           const departure = trip.departureAt?.toDate ? trip.departureAt.toDate() : new Date(trip.departureAt);
           if (Number.isNaN(departure.getTime()) || departure.getTime() <= Date.now()) continue;
+
+          const capacity = Number(trip.capacity || 0);
+          const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(route.fare);
+          const bookingSnap = await db.collection('transitBookings')
+            .where('tripId', '==', tripDoc.id)
+            .where('status', 'in', ['CONFIRMED', 'BOARDED'])
+            .get();
+          const used = bookingSnap.docs.reduce((sum, bookingDoc) => {
+            const b = bookingDoc.data();
+            const bf = stops.map(norm).indexOf(norm(b.pickupStop));
+            const bt = stops.map(norm).indexOf(norm(b.dropoffStop));
+            return bf >= 0 && bt >= 0 && bf < segment.toIndex && segment.fromIndex < bt
+              ? sum + Number(b.seatCount || 0)
+              : sum;
+          }, 0);
+
           results.push({
             tripId: tripDoc.id, routeId: routeDoc.id, route, trip,
             pickupStop: from, dropoffStop: to,
             segmentStops: segment.stops,
-            seatsAvailable: Math.max(0, Number(trip.capacity || 0)),
+            seatsAvailable: Math.max(0, capacity - used),
+            fare: Number.isFinite(configuredFare) ? +configuredFare.toFixed(2) : null,
+            fareConfigured: Number.isFinite(configuredFare),
           });
         }
       }
