@@ -1797,7 +1797,7 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
         email: sanitize(email) || `${sanitize(phone || '').replace('+','')}@okadaonline.com`,
         amount: Math.round(amount * 100),
         currency: 'GHS',
-        reference: `ride_${sanitize(rideId)}_${Date.now()}`,
+        reference: `ride-${sanitize(rideId)}-${Date.now()}`,
         callback_url: 'https://okada-online.vercel.app/payment/callback',
         metadata: { rideId: sanitize(rideId), phone: sanitize(phone || '') },
       },
