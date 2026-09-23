@@ -138,6 +138,8 @@ function buildOperationalState({
       || (finalMile && typeof finalMile === 'object' && Object.keys(finalMile).length > 0);
     const finalMileCompleted = finalMile && typeof finalMile === 'object'
       && normalize(finalMile.status) === 'COMPLETED';
+    base.currentSegmentSequence = segmentRows.length;
+    base.nextSegmentSequence = null;
     if (hasFinalMile && !finalMileCompleted) {
       base.status = 'FINAL_MILE';
       base.nextAction = 'FINAL_MILE';
