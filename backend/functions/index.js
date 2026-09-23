@@ -2273,8 +2273,10 @@ app.post('/maas/share/create', requireAuth, async (req,res) => {
   try {
     const { creatorId,pickupAddress,destAddress,vehicleType,
             departTime,departDate,maxPassengers,farePerPerson } = req.body;
+    const creatorProfile = await resolveUserRef(creatorId, req);
+    if (!creatorProfile) return fail(res,403,'Shared trip creator access denied');
     const ref = await db.collection('shared_trips').add({
-      creatorId:sanitize(creatorId), pickupAddress:sanitize(pickupAddress),
+      creatorId:creatorProfile.ref.id, pickupAddress:sanitize(pickupAddress),
       destAddress:sanitize(destAddress), vehicleType:sanitize(vehicleType),
       departTime:sanitize(departTime), departDate:sanitize(departDate),
       maxPassengers:maxPassengers||4, farePerPerson:parseFloat(farePerPerson),
@@ -2292,9 +2294,12 @@ app.post('/maas/share/:shareId/join', requireAuth, async (req,res) => {
     if(!snap.exists) return fail(res,404,'Shared trip not found');
     const t = snap.data();
     if(t.status!=='open')              return fail(res,400,'Trip is no longer open');
-    if(t.passengers.includes(req.body.userId)) return fail(res,400,'Already joined');
+    const joiner = await resolveAuthenticatedProfile(req);
+    if (!joiner) return fail(res,403,'User profile not found');
+    const joinerId = joiner.ref.id;
+    if(t.passengers.includes(joinerId)) return fail(res,400,'Already joined');
     if(t.passengers.length>=t.maxPassengers)   return fail(res,400,'Trip is full');
-    const newP   = [...t.passengers, sanitize(req.body.userId)];
+    const newP   = [...t.passengers, joinerId];
     const status = newP.length>=t.maxPassengers?'full':'open';
     await ref.update({ passengers:newP, status });
     return ok(res, { shareId:req.params.shareId, passengers:newP.length, status, farePerPerson:t.farePerPerson });
@@ -2341,6 +2346,10 @@ app.get('/maas/corporate/stats/:orgId', requireAuth, async (req,res) => {
   try {
     const snap = await db.collection('corporate_accounts').doc(req.params.orgId).get();
     if(!snap.exists) return fail(res,404,'Account not found');
+    const account = snap.data();
+    const memberProfile = await resolveAuthenticatedProfile(req);
+    const isMember = memberProfile && Array.isArray(account.members) && account.members.includes(memberProfile.ref.id);
+    if (!req.isAdmin && account.createdByUid !== req.uid && !isMember) return fail(res,403,'Corporate account access denied');
     const rides = await db.collection('rides')
       .where('corporateAccountId','==',req.params.orgId)
       .orderBy('createdAt','desc').limit(50).get();
@@ -2389,6 +2398,8 @@ app.post('/delivery/request', requireAuth, async (req,res) => {
             packageDesc,weightKg,recipientName,recipientPhone,urgent,payMethod } = req.body;
     if(!senderId||!pickupAddress||!deliveryAddress||!vehicleType)
       return fail(res,400,'Missing required fields');
+    const senderProfile = await resolveUserRef(senderId, req);
+    if (!senderProfile) return fail(res,403,'Delivery sender access denied');
     const pricing = MAAS_PRICING.delivery[sanitize(vehicleType)]||MAAS_PRICING.delivery.motorcycle;
     const weight  = parseFloat(weightKg||0);
     let fare      = pricing.flag + 5*pricing.perKm;
@@ -2398,7 +2409,7 @@ app.post('/delivery/request', requireAuth, async (req,res) => {
     fare = +fare.toFixed(2);
     const trackingCode = 'DLV-'+Date.now().toString(36).toUpperCase();
     const ref = await db.collection('deliveries').add({
-      senderId:sanitize(senderId), pickupAddress:sanitize(pickupAddress),
+      senderId:senderProfile.ref.id, pickupAddress:sanitize(pickupAddress),
       deliveryAddress:sanitize(deliveryAddress), vehicleType:sanitize(vehicleType),
       packageDesc:sanitize(packageDesc||'Package'), weightKg:weight,
       recipientName:sanitize(recipientName), recipientPhone:sanitize(recipientPhone),
@@ -2414,12 +2425,40 @@ app.post('/delivery/request', requireAuth, async (req,res) => {
 app.put('/delivery/:id/status', requireAuth, async (req,res) => {
   try {
     const { status, driverId, proofPhoto } = req.body;
+    const deliveryRef = db.collection('deliveries').doc(sanitize(req.params.id));
+    const deliverySnap = await deliveryRef.get();
+    if (!deliverySnap.exists) return fail(res,404,'Delivery not found');
+    const delivery = deliverySnap.data();
+
+    let authorized = req.isAdmin === true;
+    if (!authorized) {
+      const senderProfile = await resolveUserRef(delivery.senderId, req);
+      const assignedDriver = delivery.driverId
+        ? await db.collection('drivers').doc(sanitize(delivery.driverId)).get()
+        : null;
+      const driverOwnsDelivery = assignedDriver?.exists
+        && (assignedDriver.data()?.firebaseUid === req.uid || assignedDriver.id === req.uid);
+      authorized = !!senderProfile || driverOwnsDelivery;
+    }
+    if (!authorized) return fail(res,403,'Delivery update access denied');
+
+    if (driverId && !req.isAdmin) {
+      const requestedDriver = await db.collection('drivers').doc(sanitize(driverId)).get();
+      if (!requestedDriver.exists
+          || (requestedDriver.data()?.firebaseUid !== req.uid && requestedDriver.id !== req.uid)) {
+        return fail(res,403,'Driver identity does not match the authenticated user');
+      }
+      if (delivery.driverId && String(delivery.driverId) !== String(driverId)) {
+        return fail(res,403,'Only the assigned driver can update this delivery');
+      }
+    }
+
     const updates = { status:sanitize(status) };
     if(driverId)   updates.driverId = sanitize(driverId);
     if(proofPhoto) updates.proofOfDelivery = sanitize(proofPhoto);
     if(status==='picked_up')  updates.pickedUpAt  = admin.firestore.FieldValue.serverTimestamp();
     if(status==='delivered')  updates.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
-    await db.collection('deliveries').doc(req.params.id).update(updates);
+    await deliveryRef.update(updates);
     const snap = await db.collection('deliveries').doc(req.params.id).get();
     const d    = snap.data();
     const msgs = {
@@ -2448,8 +2487,11 @@ app.get('/delivery/track/:code', async (req,res) => {
 
 app.get('/delivery/history/:userId', requireAuth, async (req,res) => {
   try {
+    const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Delivery history access denied');
     const snap = await db.collection('deliveries')
-      .where('senderId','==',sanitize(req.params.userId))
+      .where('senderId','==',profile.ref.id)
       .orderBy('createdAt','desc').limit(20).get();
     return ok(res, { deliveries:snap.docs.map(d=>({id:d.id,...d.data()})) });
   } catch(e) { return fail(res,500,e.message); }
