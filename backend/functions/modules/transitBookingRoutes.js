@@ -9,7 +9,15 @@ const {
 function createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok, sanitize }) {
   const router = express.Router();
   const clean = (v, max = 160) => sanitize(String(v == null ? '' : v).trim()).slice(0, max);
-  const ACTIVE_STATUSES = ['CONFIRMED', 'BOARDED'];
+  const ACTIVE_STATUSES = ['PAYMENT_PENDING', 'CONFIRMED', 'BOARDED'];
+
+  function isActivePaymentHold(booking) {
+    if (String(booking?.status || '').toUpperCase() !== 'PAYMENT_PENDING') return true;
+    const expiry = booking?.paymentExpiresAt?.toDate
+      ? booking.paymentExpiresAt.toDate()
+      : new Date(booking?.paymentExpiresAt || 0);
+    return !Number.isNaN(expiry.getTime()) && expiry.getTime() > Date.now();
+  }
 
   function ticketCode(id) {
     return `OKV-${id.slice(0, 10).toUpperCase()}`;
@@ -53,6 +61,7 @@ function createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok,
             .where('status', 'in', ACTIVE_STATUSES)
         );
         const overlapping = bookingSnap.docs.map((d) => d.data()).filter((b) => {
+          if (!isActivePaymentHold(b)) return false;
           const bSeg = validateSegment(stops, b.pickupStop, b.dropoffStop);
           return bSeg.fromIndex < segment.toIndex && segment.fromIndex < bSeg.toIndex;
         });
@@ -61,9 +70,18 @@ function createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok,
           throw new Error(`Not enough seats for ${pickupStop} → ${dropoffStop}`);
         }
 
-        const totalFare = Number(req.body?.fare);
-        if (!Number.isFinite(totalFare) || totalFare < 0) throw new Error('A valid fare is required');
+        const configuredFare = Number.isFinite(Number(trip.fare))
+          ? Number(trip.fare)
+          : Number(route.fare);
+        if (!Number.isFinite(configuredFare) || configuredFare < 0) {
+          throw new Error('Transit trip has no configured fare');
+        }
+        const totalFare = +(configuredFare * seatCount).toFixed(2);
         const code = ticketCode(bookingRef.id);
+        tx.update(tripRef, {
+          inventoryVersion: admin.firestore.FieldValue.increment(1),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         tx.set(bookingRef, {
           tripId: tripRef.id,
           routeId: route.id || trip.routeId,
@@ -72,7 +90,7 @@ function createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok,
           dropoffStop,
           seatCount,
           serviceClass: tripClass,
-          fare: +totalFare.toFixed(2),
+          fare: totalFare,
           currency: 'GHS',
           status: 'CONFIRMED',
           ticketCode: code,
@@ -177,11 +195,15 @@ function createTransitBookingRouter({ express, db, admin, requireAuth, fail, ok,
       if (!routeSnap.exists) return fail(res, 404, 'Transit route not found');
       const route = routeSnap.data();
       const stops = [route.origin, ...(route.stops || []), route.destination];
-      const bookings = await db.collection('transitBookings').where('tripId', '==', tripSnap.id).where('status', 'in', ACTIVE_STATUSES).get();
+      const bookingSnap = await db.collection('transitBookings').where('tripId', '==', tripSnap.id).where('status', 'in', ACTIVE_STATUSES).get();
+      const activeBookings = bookingSnap.docs
+        .map((d) => d.data())
+        .filter(isActivePaymentHold);
       return ok(res, {
         tripId: tripSnap.id,
         capacity: Number(trip.capacity || 0),
-        bookings: bookings.docs.map((d) => ({ pickupStop: d.data().pickupStop, dropoffStop: d.data().dropoffStop, seatCount: d.data().seatCount })),
+        bookings: activeBookings.map((b) => ({ pickupStop: b.pickupStop, dropoffStop: b.dropoffStop, seatCount: b.seatCount, status: b.status })),
+
         routeStops: stops,
       });
     } catch (_e) { return fail(res, 500, 'Unable to load transit availability'); }
