@@ -223,7 +223,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         }
 
         const attempt = Number(fresh.paymentAttempt || 0) + 1;
-        const reference = `journey_${journeyId}_${attempt}`;
+        const reference = `journey-${journeyId}-${attempt}`;
         const paymentRef = db.collection('payments').doc();
         const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
 
