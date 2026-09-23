@@ -75,6 +75,20 @@ This prevents an estimate from being presented as an operational guarantee.
 
 The existing segment status remains authoritative for each underlying trip.
 
+## Operational events
+
+The transit operations layer now accepts controlled admin-recorded events through:
+
+`POST /transit/trips/:tripId/events`
+
+Supported events include `BOARDING`, `DEPARTED`, `STATION_ARRIVAL`, `DEPARTED_STATION`, `TRAFFIC_DELAY`, `ACCIDENT_REPORTED`, `ROAD_CLOSURE`, `MECHANICAL_DELAY`, `ARRIVING`, `COMPLETED`, and `CANCELLED`.
+
+These events update the underlying trip record and are exposed to the passenger through:
+
+`GET /journeys/:journeyId/events`
+
+The Journey status endpoint also incorporates the resulting trip state.
+
 ## Current limitations
 
 The connection engine does not yet have:
