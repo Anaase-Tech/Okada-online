@@ -31,6 +31,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(trip.status) || trip.active === false) throw new Error(`Transit trip ${leg.tripId} is not accepting bookings`);
         }
         const bookingRefs = [];
+        const trustedLegFares = [];
         const routeSnapshots = new Map();
         for (const leg of legs) {
           if (!leg.tripId) continue;
@@ -62,6 +63,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           const bookingRef = db.collection('transitBookings').doc();
           bookingRefs.push(bookingRef);
           const chargedFare = +(configuredFare * seatCount).toFixed(2);
+          trustedLegFares.push(chargedFare);
           tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: chargedFare, currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         const pickupFare = Number(req.body?.pickup?.fare || 0);
@@ -69,16 +71,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         if ((Number.isFinite(pickupFare) && pickupFare !== 0) || (Number.isFinite(finalMileFare) && finalMileFare !== 0)) {
           throw new Error('Pickup and final-mile fares must be priced by a trusted backend quote before charging');
         }
-        const totalFare = bookingRefs.reduce((sum, ref) => {
-          const index = bookingRefs.indexOf(ref);
-          const leg = legs[index];
-          const trip = leg?.tripId ? trips.get(leg.tripId)?.data() : null;
-          const routeId = trip?.routeId;
-          const routeSnap = routeId ? routeSnapshots.get(routeId) : null;
-          const routeData = routeSnap?.data?.() || null;
-          const configured = Number.isFinite(Number(trip?.fare)) ? Number(trip.fare) : Number(routeData?.fare);
-          return sum + (Number.isFinite(configured) ? configured * seatCount : 0);
-        }, 0);
+        const totalFare = trustedLegFares.reduce((sum, fare) => sum + Number(fare || 0), 0);
         tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2) };
       });
