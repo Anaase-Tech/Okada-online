@@ -123,6 +123,9 @@ class Api {
   bookJourney(data)                          { return this.req("POST", "/journeys/book", data); }
   getJourney(journeyId)                      { return this.req("GET", `/journeys/${journeyId}`); }
   payJourney(journeyId, email, phone)        { return this.req("POST", `/journeys/${journeyId}/pay`, { email, phone }); }
+  verifyJourneyPayment(journeyId, reference = "") {
+    return this.req("POST", `/journeys/${journeyId}/payment/verify`, reference ? { reference } : {});
+  }
   confirmJourney(journeyId)                  { return this.req("POST", `/journeys/${journeyId}/confirm`, {}); }
   getJourneyPass(journeyId)                  { return this.req("GET", `/journeys/${journeyId}/pass`); }
   getJourneyStatus(journeyId)                { return this.req("GET", `/journeys/${journeyId}/status`); }
