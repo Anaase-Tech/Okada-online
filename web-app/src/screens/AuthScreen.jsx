@@ -100,6 +100,15 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
       }
     }
 
+    // True demo mode is allowed only for non-admin roles. Admin access
+    // must always be backed by a real Firebase identity; never manufacture an
+    // admin session in the UI when Firebase authentication is unavailable.
+    if (role === "admin") {
+      toast$("Admin login requires successful Firebase phone verification.", "error");
+      setLoading(false);
+      return;
+    }
+
     // True demo mode — reached only when there was never a real Firebase
     // challenge to confirm in the first place (e.g. OTP send itself failed).
     onLogin({
