@@ -138,6 +138,13 @@ function createTrotroRouter({ express, db, admin, requireAuth, fail, ok, sanitiz
         const candidate = { tripId, passengerId: req.uid, pickupStop, dropoffStop, seatCount }; const check = checkSeatAvailability(stops, trip.capacity, bookingSnap.docs.map((d) => d.data()), candidate);
         if (!check.canBook) throw new Error(`Not enough seats for ${pickupStop} → ${dropoffStop}`);
         const bookingCode = `OKT-${newBookingRef.id.slice(0, 8).toUpperCase()}`;
+        // Touch the shared trip document inside the same transaction as the
+        // inventory check. Concurrent bookings on this trip therefore conflict
+        // and Firestore retries the transaction instead of overselling.
+        tx.update(tripRef, {
+          inventoryVersion: admin.firestore.FieldValue.increment(1),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         tx.set(newBookingRef, { ...candidate, status: 'CONFIRMED', bookingCode, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         return check;
       });
