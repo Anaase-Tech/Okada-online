@@ -37,7 +37,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           const trip = trips.get(leg.tripId).data();
           const routeSnap = routeSnapshots.get(trip.routeId) || await tx.get(db.collection('transitRoutes').doc(trip.routeId));
           if (!routeSnap.exists) throw new Error(`Route not found for trip ${leg.tripId}`);
-          routeSnapshots.set(trip.routeId, routeSnap.data());
+          routeSnapshots.set(trip.routeId, routeSnap);
           const route = routeSnap.data();
           const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(route.fare);
           if (!Number.isFinite(configuredFare) || configuredFare < 0) {
@@ -73,7 +73,8 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           const leg = legs[index];
           const trip = leg?.tripId ? trips.get(leg.tripId)?.data() : null;
           const routeId = trip?.routeId;
-          const routeData = routeId ? routeSnapshots.get(routeId) : null;
+          const routeSnap = routeId ? routeSnapshots.get(routeId) : null;
+          const routeData = routeSnap?.data?.() || null;
           const configured = Number.isFinite(Number(trip?.fare)) ? Number(trip.fare) : Number(routeData?.fare);
           return sum + (Number.isFinite(configured) ? configured : 0);
         }, 0);
