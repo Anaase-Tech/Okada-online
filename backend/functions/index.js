@@ -23,6 +23,7 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
+const { createTransitRouter } = require('./transit');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -2333,6 +2334,9 @@ app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found' }));
 // ════════════════════════════════════════════════════════════
 // EXPORTS
 // ════════════════════════════════════════════════════════════
+// Okada Transit V1 — additive scheduled/intercity transport API
+app.use('/transit', createTransitRouter({ db, admin, requireAuth, requireAdmin }));
+
 exports.api = functions.https.onRequest(app);
 
 // Reset daily earnings — midnight Accra time
