@@ -114,6 +114,21 @@ class Api {
   trackDelivery(code)                    { return this.req("GET", `/delivery/track/${code}`); }
   getDeliveryHistory(uid)                { return this.req("GET", `/delivery/history/${uid}`); }
 
+  // ── Journey / Transit ─────────────────────────────
+  searchTransit(from, to, serviceClass = "") {
+    const params = new URLSearchParams({ from, to });
+    if (serviceClass) params.set("serviceClass", serviceClass);
+    return this.req("GET", `/transit/search?${params.toString()}`);
+  }
+  bookJourney(data)                          { return this.req("POST", "/journeys/book", data); }
+  getJourney(journeyId)                      { return this.req("GET", `/journeys/${journeyId}`); }
+  payJourney(journeyId, email, phone)        { return this.req("POST", `/journeys/${journeyId}/pay`, { email, phone }); }
+  confirmJourney(journeyId)                  { return this.req("POST", `/journeys/${journeyId}/confirm`, {}); }
+  getJourneyPass(journeyId)                  { return this.req("GET", `/journeys/${journeyId}/pass`); }
+  getJourneyStatus(journeyId)                { return this.req("GET", `/journeys/${journeyId}/status`); }
+  getJourneyConnections(journeyId)           { return this.req("GET", `/journeys/${journeyId}/connections`); }
+  cancelJourney(journeyId, reason)            { return this.req("POST", `/journeys/${journeyId}/cancel`, { reason }); }
+
   // ── Admin ──────────────────────────────────────────
   getMaasStats()                         { return this.req("GET", "/admin/maas/stats"); }
 }
