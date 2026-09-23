@@ -17,6 +17,7 @@ function buildOperationalState({
   legs = [],
   trips = [],
   finalMile = null,
+  currentSegmentSequence = null,
   eventTripId = null,
   eventType = null,
 }) {
@@ -87,6 +88,15 @@ function buildOperationalState({
     ? segmentRows.find((row) => String(row.leg?.tripId || '') === String(eventTripId))
     : null;
   const effectiveEventType = normalize(eventType);
+  const storedSequence = Number(currentSegmentSequence);
+
+  if (eventRow && Number.isInteger(storedSequence) && storedSequence > 0 && eventRow.sequence < storedSequence) {
+    base.currentSegmentSequence = storedSequence;
+    base.nextSegmentSequence = storedSequence < segmentRows.length ? storedSequence + 1 : null;
+    base.nextAction = currentJourneyStatus === 'FINAL_MILE' ? 'FINAL_MILE' : 'MONITOR';
+    base.reason = 'STALE_OPERATIONAL_EVENT';
+    return base;
+  }
 
   // An arrival at an intermediate hub means the customer's next task is the
   // connection, but the journey is not considered completed until the segment
