@@ -31,12 +31,18 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(trip.status) || trip.active === false) throw new Error(`Transit trip ${leg.tripId} is not accepting bookings`);
         }
         const bookingRefs = [];
+        const routeSnapshots = new Map();
         for (const leg of legs) {
           if (!leg.tripId) continue;
           const trip = trips.get(leg.tripId).data();
-          const routeSnap = await tx.get(db.collection('transitRoutes').doc(trip.routeId));
+          const routeSnap = routeSnapshots.get(trip.routeId) || await tx.get(db.collection('transitRoutes').doc(trip.routeId));
           if (!routeSnap.exists) throw new Error(`Route not found for trip ${leg.tripId}`);
+          routeSnapshots.set(trip.routeId, routeSnap.data());
           const route = routeSnap.data();
+          const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(route.fare);
+          if (!Number.isFinite(configuredFare) || configuredFare < 0) {
+            throw new Error(`Transit trip ${leg.tripId} has no configured fare`);
+          }
           const stops = [route.origin, ...(route.stops || []), route.destination];
           const norm = (x) => text(x).toLowerCase();
           const from = stops.map(norm).indexOf(norm(leg.origin));
@@ -55,9 +61,22 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (used + seatCount > Number(trip.capacity || 0)) throw new Error(`No seats available on ${leg.origin} → ${leg.destination}`);
           const bookingRef = db.collection('transitBookings').doc();
           bookingRefs.push(bookingRef);
-          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: Number(leg.fare || 0), currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: +configuredFare.toFixed(2), currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
-        const totalFare = legs.reduce((sum, l) => sum + Number(l.fare || 0), 0) + Number(req.body?.pickup?.fare || 0) + Number(req.body?.finalMile?.fare || 0);
+        const pickupFare = Number(req.body?.pickup?.fare || 0);
+        const finalMileFare = Number(req.body?.finalMile?.fare || 0);
+        if ((Number.isFinite(pickupFare) && pickupFare !== 0) || (Number.isFinite(finalMileFare) && finalMileFare !== 0)) {
+          throw new Error('Pickup and final-mile fares must be priced by a trusted backend quote before charging');
+        }
+        const totalFare = bookingRefs.reduce((sum, ref) => {
+          const index = bookingRefs.indexOf(ref);
+          const leg = legs[index];
+          const trip = leg?.tripId ? trips.get(leg.tripId)?.data() : null;
+          const routeId = trip?.routeId;
+          const routeData = routeId ? routeSnapshots.get(routeId) : null;
+          const configured = Number.isFinite(Number(trip?.fare)) ? Number(trip.fare) : Number(routeData?.fare);
+          return sum + (Number.isFinite(configured) ? configured : 0);
+        }, 0);
         tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2) };
       });
