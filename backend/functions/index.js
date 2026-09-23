@@ -110,6 +110,8 @@ async function requireAuth(req, res, next) {
   try {
     const decoded = await auth.verifyIdToken(token);
     req.uid = decoded.uid;
+    const adminSnap = await db.collection('admins').doc(req.uid).get();
+    req.isAdmin = adminSnap.exists;
     next();
   } catch (e) {
     console.error('Token verification failed:', e.code || e.message);
@@ -120,8 +122,7 @@ async function requireAuth(req, res, next) {
 // ── Admin-only middleware ───────────────────────────────────
 async function requireAdmin(req, res, next) {
   await requireAuth(req, res, async () => {
-    const snap = await db.collection('admins').doc(req.uid).get();
-    if (!snap.exists) return res.status(403).json({ error: 'Admin access required' });
+    if (!req.isAdmin) return res.status(403).json({ error: 'Admin access required' });
     next();
   });
 }
@@ -139,12 +140,19 @@ function sanitize(str) {
 // which meant they 404'd — or worse, silently wrote a stray new
 // document — for every driver and owner. This resolves the real
 // collection a given userId actually lives in.
-async function resolveUserRef(userId) {
+async function resolveUserRef(userId, req = null) {
   const id = sanitize(userId);
   for (const col of ['users', 'drivers', 'owners']) {
     const ref  = db.collection(col).doc(id);
     const snap = await ref.get();
-    if (snap.exists) return { ref, col, data: snap.data() };
+    if (!snap.exists) continue;
+
+    const data = snap.data();
+    if (req && req.isAdmin !== true && data?.firebaseUid !== req.uid && ref.id !== req.uid) {
+      return null;
+    }
+
+    return { ref, col, data };
   }
   return null;
 }
@@ -1268,7 +1276,7 @@ app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
     const { userId, amount } = req.body;
     if (!userId || !amount || parseFloat(amount) <= 0)
       return fail(res, 400, 'userId, amount required');
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const a = parseFloat(amount);
     await db.collection('savings_transactions').add({
@@ -1292,7 +1300,7 @@ app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
     if (!userId || !amount || !momoPhone)
       return fail(res, 400, 'userId, amount, momoPhone required');
 
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
 
     const bal = u.data?.savings?.balance || 0;
@@ -1316,7 +1324,7 @@ app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
 
 app.get('/fintech/savings/balance/:userId', requireAuth, async (req, res) => {
   try {
-    const u = await resolveUserRef(req.params.userId);
+    const u = await resolveUserRef(req.params.userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const s = u.data?.savings || {};
     const txs = await db.collection('savings_transactions')
@@ -1340,7 +1348,7 @@ app.put('/fintech/savings/rate', requireAuth, async (req, res) => {
     const r = parseFloat(rate);
     if (r < 0 || r > CFG.savings.maxRate)
       return fail(res, 400, `Rate must be 0–${CFG.savings.maxRate}%`);
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     await u.ref.update({ savingsRate: r });
     return ok(res, { savingsRate: r });
@@ -1356,7 +1364,7 @@ app.put('/fintech/savings/rate', requireAuth, async (req, res) => {
 app.get('/fintech/loans/eligibility/:userId', requireAuth, async (req, res) => {
   try {
     const userId  = sanitize(req.params.userId);
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const dd      = u.data;
     const txSnap  = await db.collection('savings_transactions')
@@ -1408,7 +1416,7 @@ app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
     if (!existing.empty)
       return fail(res, 400, 'Repay active loan before applying');
 
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     if (u.data.kycStatus !== 'approved')
       return fail(res, 400, 'KYC approval required');
@@ -1462,7 +1470,7 @@ app.post('/insurance/buy', requireAuth, async (req, res) => {
     const plan = CFG.insurance[sanitize(planId)];
     if (!plan) return fail(res, 400, 'Invalid plan');
 
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
 
     const expiry = new Date();
@@ -1546,7 +1554,7 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   try {
     const { userId, rideId, amount } = req.body;
     if (!userId || !rideId || !amount) return fail(res, 400, 'Missing fields');
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const pl   = u.data?.payLater || {};
     const avail = (pl.limit || CFG.payLater.defaultLimit) - (pl.used || 0);
@@ -1575,7 +1583,7 @@ app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
 // gives it the real thing.
 app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
   try {
-    const u = await resolveUserRef(req.params.userId);
+    const u = await resolveUserRef(req.params.userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const pl = u.data?.payLater || { limit: CFG.payLater.defaultLimit, used: 0, suspended: false };
     const snap = await db.collection('pay_later')
@@ -1600,7 +1608,7 @@ app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
 app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
   try {
     const { userId, payLaterTxId, amount } = req.body;
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
 
     if (payLaterTxId) {
@@ -1658,7 +1666,7 @@ app.post('/wallet/withdraw', requireAuth, async (req, res) => {
     const { userId, amount, momoPhone, network } = req.body;
     if (!userId || !amount || !momoPhone)
       return fail(res, 400, 'userId, amount, momoPhone required');
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
     const avail = u.data?.wallet?.available || 0;
     const a = parseFloat(amount);
@@ -2078,7 +2086,7 @@ app.post('/maas/subscription/create', requireAuth, async (req,res) => {
       return fail(res,400,'Invalid tier');
     const plan   = MAAS_PRICING.subscription[tier];
     const expiry = new Date(); expiry.setMonth(expiry.getMonth()+1);
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
     const wallet = u.data?.wallet?.available||0;
     if(wallet < plan.monthly) return fail(res,400,`Insufficient balance. Need GH₵${plan.monthly}`);
@@ -2104,7 +2112,7 @@ app.post('/maas/subscription/create', requireAuth, async (req,res) => {
 
 app.get('/maas/subscription/status/:userId', requireAuth, async (req,res) => {
   try {
-    const u = await resolveUserRef(req.params.userId);
+    const u = await resolveUserRef(req.params.userId, req);
     if (!u) return fail(res,404,'User not found');
     const subId = u.data?.activeSubscriptionId;
     if(!subId) return ok(res, { subscription:null });
@@ -2126,7 +2134,7 @@ app.post('/maas/rental/book', requireAuth, async (req,res) => {
     if(!plan) return fail(res,400,'Invalid vehicle type or rental period');
     const driverFee  = driverIncluded ? Math.round(plan.price*0.20) : 0;
     const totalPrice = plan.price + driverFee;
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
     if((u.data?.wallet?.available||0) < totalPrice)
       return fail(res,400,`Insufficient balance. Need GH₵${totalPrice}`);
@@ -2246,7 +2254,7 @@ app.post('/maas/corporate/:id/add-member', requireAdmin, async (req,res) => {
     await db.collection('corporate_accounts').doc(req.params.id).update({
       members:admin.firestore.FieldValue.arrayUnion(sanitize(userId)),
     });
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (u) await u.ref.update({ corporateAccountId:req.params.id });
     return ok(res, { message:'Member added' });
   } catch(e) { return fail(res,500,e.message); }
@@ -2273,7 +2281,7 @@ app.post('/maas/events/book', requireAuth, async (req,res) => {
     const pricing   = MAAS_PRICING.scheduled[sanitize(vehicleType)]||MAAS_PRICING.scheduled.car;
     const estFare   = +(pricing.flag + 15*pricing.perKm).toFixed(2);
     const deposit   = +(estFare*(depositPercent||0.30)).toFixed(2);
-    const u = await resolveUserRef(userId);
+    const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
     if((u.data?.wallet?.available||0) < deposit)
       return fail(res,400,`Deposit required: GH₵${deposit}`);
