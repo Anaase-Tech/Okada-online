@@ -253,6 +253,8 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
     const validRoles = ['passenger','driver','owner','admin'];
     if (!validRoles.includes(sanitize(role)))
       return fail(res, 400, 'Invalid role');
+    if (role === 'admin' && !req.isAdmin)
+      return fail(res, 403, 'Admin profile creation is restricted');
 
     // Validate owner code for drivers
     if (role === 'driver' && ownerCode) {
@@ -282,7 +284,7 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
     }
 
     const base = {
-      firebaseUid: sanitize(firebaseUid || req.uid),
+      firebaseUid: req.uid,
       phone:       sanitize(phone),
       name:        sanitize(name),
       role,
@@ -358,6 +360,7 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
 app.get('/auth/profile/:uid', requireAuth, async (req, res) => {
   try {
     const uid = sanitize(req.params.uid);
+    if (!req.isAdmin && uid !== req.uid) return fail(res, 403, 'Profile access denied');
     const cols = ['users','drivers','owners','admins'];
     for (const col of cols) {
       const snap = await db.collection(col)
@@ -384,6 +387,9 @@ app.post('/verify/kyc', requireAuth, async (req, res) => {
     const { userId, role, docType, docNumber, docImageBase64, selfieBase64 } = req.body;
     if (!userId || !docType || !docNumber)
       return fail(res, 400, 'userId, docType, docNumber required');
+
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res, 403, 'KYC target is not owned by the authenticated user');
 
     const validDocs = ['ghana_card','passport','voters_id'];
     if (!validDocs.includes(sanitize(docType)))
@@ -437,6 +443,13 @@ app.post('/verify/license', requireAuth, async (req, res) => {
     if (!userId || !licenseNumber || !licenseClass || !expiryDate)
       return fail(res, 400, 'userId, licenseNumber, licenseClass, expiryDate required');
 
+    const driverRef = db.collection('drivers').doc(sanitize(userId));
+    const driverSnap = await driverRef.get();
+    if (!driverSnap.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driverSnap.data()?.firebaseUid !== req.uid && driverRef.id !== req.uid) {
+      return fail(res, 403, 'License target is not owned by the authenticated user');
+    }
+
     // Check expiry
     const expiry = new Date(expiryDate);
     if (expiry < new Date())
@@ -483,6 +496,13 @@ app.post('/verify/vehicle', requireAuth, async (req, res) => {
     } = req.body;
     if (!userId || !plate || !vehicleType)
       return fail(res, 400, 'userId, plate, vehicleType required');
+
+    const driverRef = db.collection('drivers').doc(sanitize(userId));
+    const driverSnap = await driverRef.get();
+    if (!driverSnap.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driverSnap.data()?.firebaseUid !== req.uid && driverRef.id !== req.uid) {
+      return fail(res, 403, 'Vehicle target is not owned by the authenticated user');
+    }
 
     const sub = await db.collection('vehicle_submissions').add({
       userId:      sanitize(userId),
