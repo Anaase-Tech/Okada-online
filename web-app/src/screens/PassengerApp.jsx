@@ -13,10 +13,11 @@ import { ScheduledTrips } from "./ScheduledTrips";
 import { ShareRide } from "./ShareRide";
 import { RentalHub } from "./RentalHub";
 import { DeliveryApp } from "./DeliveryApp";
+import { JourneyApp } from "./JourneyApp";
 
 export function PassengerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
-  const [view,setView]=useState("home");
+  const [view,setView]=useState(()=>localStorage.getItem("okada_pending_journey") ? "journey" : "home");
   const [pickup,setPickup]=useState("");
   const [dest,setDest]=useState("");
   const [vehicle,setVehicle]=useState("okada");
@@ -98,7 +99,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
 
   if(showKyc) return <KycVerify role="passenger" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
-  const NAV_ITEMS = [["home","🏠","Home"],["maas","📅","Schedule"],["share","🤝","Share"],["rental","🚗","Rental"],["delivery","📦","Deliver"],["fintech","💎","Fintech"],["history","📋","History"],["profile","👤","Me"]];
+  const NAV_ITEMS = [["home","🏠","Home"],["journey","🧭","Journey"],["maas","📅","Schedule"],["share","🤝","Share"],["rental","🚗","Rental"],["delivery","📦","Deliver"],["fintech","💎","Fintech"],["history","📋","History"],["profile","👤","Me"]];
 
   const Nav=()=>(
     <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`}
@@ -124,7 +125,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       </div>
 
       <div style={{paddingBottom:80}}>
-        {view==="fintech"&&<FintechHub user={user} role="passenger" dark={dark}/>}
+        {view==="fintech"&&<FintechHub user={user} role="passenger" dark={dark}/>}\n        {view==="journey"&&<JourneyApp user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="maas"&&<ScheduledTrips user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="share"&&<ShareRide user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="rental"&&<RentalHub user={user} dark={dark} onBack={()=>setView("home")}/>}
