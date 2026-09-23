@@ -40,6 +40,7 @@ export function JourneyApp({ user, dark, onBack }) {
   const [journeyId, setJourneyId] = useState(null);
   const [journey, setJourney] = useState(null);
   const [journeyStatus, setJourneyStatus] = useState(null);
+  const [events, setEvents] = useState([]);
   const [pass, setPass] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -126,12 +127,14 @@ export function JourneyApp({ user, dark, onBack }) {
   async function refreshJourney(id = journeyId) {
     if (!id) return;
     try {
-      const [j, s] = await Promise.all([
+      const [j, s, e] = await Promise.all([
         api.getJourney(id),
         api.getJourneyStatus(id),
+        api.getJourneyEvents(id),
       ]);
       setJourney(j.journey || null);
       setJourneyStatus(s.status || null);
+      setEvents(e.events || []);
 
       if (s.status?.paymentStatus === "PAID") {
         const p = await api.getJourneyPass(id);
@@ -333,6 +336,28 @@ export function JourneyApp({ user, dark, onBack }) {
               </div>
             ))}
           </div>
+
+          {!!events.length && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <Clock3 style={{ width: 15, height: 15 }} />
+                <h3 className={`font-black ${t.text}`}>Operational timeline</h3>
+              </div>
+              <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
+                {events.slice(0, 8).map((event) => (
+                  <div key={event.id} style={{ padding: 10, borderRadius: 12, background: dark ? "#111827" : "#f9fafb", border: `1px solid ${dark ? "#374151" : "#e5e7eb"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <strong style={{ fontSize: 12 }}>{stateLabel(event.type)}</strong>
+                      <span className={`text-xs ${t.sub}`}>{formatTime(event.recordedAt)}</span>
+                    </div>
+                    <p className={`text-xs ${t.sub}`} style={{ marginTop: 4 }}>Leg {event.sequence}: {event.origin} → {event.destination}</p>
+                    {event.currentStop && <p className={`text-xs ${t.sub}`} style={{ marginTop: 3 }}>Stop: {event.currentStop}</p>}
+                    {event.note && <p className={`text-xs ${t.sub}`} style={{ marginTop: 3 }}>{event.note}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {connectionCount > 0 && (
             <div style={{ marginTop: 14 }}>
