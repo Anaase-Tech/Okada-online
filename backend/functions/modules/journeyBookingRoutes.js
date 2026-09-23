@@ -1,5 +1,7 @@
 'use strict';
 
+const functions = require('firebase-functions');
+const axios = require('axios');
 const { makeJourneyCode, validateConnectedLegs } = require('./journeyBookingEngine');
 
 function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok }) {
@@ -87,10 +89,25 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
   });
 
   router.post('/:journeyId/confirm-payment', requireAuth, async (req, res) => {
-    // Backward-compatible alias. Payment must already be verified by the trusted payment webhook.
-    req.url = `/${req.params.journeyId}/confirm`;
-    req.params.journeyId = text(req.params.journeyId, 120);
-    return res.redirect(307, `/journeys/${req.params.journeyId}/confirm`);
+    try {
+      const ref = db.collection('journeys').doc(text(req.params.journeyId, 120));
+      const snap = await ref.get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+      if (journey.paymentStatus !== 'PAID') return fail(res, 409, 'Journey payment has not been verified');
+      if (journey.status === 'PENDING_PAYMENT') {
+        await ref.update({
+          status: 'CONFIRMED',
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      const fresh = await ref.get();
+      return ok(res, { journey: { id: ref.id, ...fresh.data() } });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to confirm journey');
+    }
   });
 
   router.post('/:journeyId/pay', requireAuth, async (req, res) => {
@@ -127,7 +144,6 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
       const fallbackEmail = phone ? `${phone.replace(/[^0-9]/g, '')}@okadaonline.com` : `${req.uid}@okadaonline.com`;
       const reference = `journey_${journeyId}_${Date.now()}`;
 
-      const axios = require('axios');
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
         {
