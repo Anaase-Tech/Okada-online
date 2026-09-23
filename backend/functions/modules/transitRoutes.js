@@ -116,6 +116,121 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
     } catch (_e) { return fail(res, 400, 'Unable to create transit trip'); }
   });
 
+  const EVENT_TYPES = new Set([
+    'BOARDING', 'DEPARTED', 'STOPPED', 'TRAFFIC_DELAY', 'ACCIDENT_REPORTED',
+    'ROAD_CLOSURE', 'MECHANICAL_DELAY', 'STATION_ARRIVAL', 'DEPARTED_STATION',
+    'ARRIVING', 'COMPLETED', 'CANCELLED',
+  ]);
+
+  router.post('/trips/:tripId/events', requireAuth, async (req, res) => {
+    try {
+      if (req.isAdmin !== true) return fail(res, 403, 'Admin access required');
+
+      const tripId = clean(req.params.tripId, 120);
+      const type = clean(req.body?.type, 40).toUpperCase();
+      if (!EVENT_TYPES.has(type)) return fail(res, 400, 'Unsupported transit event type');
+
+      const tripRef = db.collection('transitTrips').doc(tripId);
+      const eventRef = db.collection('transitTripEvents').doc();
+
+      const latitude = Number(req.body?.latitude);
+      const longitude = Number(req.body?.longitude);
+      const hasLocation = Number.isFinite(latitude) && Number.isFinite(longitude);
+      if (hasLocation && (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)) {
+        return fail(res, 400, 'Invalid event coordinates');
+      }
+
+      const currentStop = clean(req.body?.currentStop, 160) || null;
+      const note = clean(req.body?.note, 500) || null;
+
+      const result = await db.runTransaction(async (tx) => {
+        const tripSnap = await tx.get(tripRef);
+        if (!tripSnap.exists) throw new Error('Transit trip not found');
+
+        const trip = tripSnap.data();
+        const tripUpdates = {
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastOperationalEventType: type,
+          lastOperationalEventAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (currentStop) tripUpdates.currentStop = currentStop;
+        if (hasLocation) {
+          tripUpdates.currentLocation = {
+            latitude,
+            longitude,
+            source: 'OPERATIONAL_EVENT',
+            recordedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
+        }
+
+        if (type === 'BOARDING') tripUpdates.status = 'BOARDING';
+        if (type === 'DEPARTED') {
+          tripUpdates.status = 'DEPARTED';
+          tripUpdates.departedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (type === 'STATION_ARRIVAL') {
+          tripUpdates.status = 'ARRIVING';
+          tripUpdates.stationArrivalAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (type === 'DEPARTED_STATION') {
+          tripUpdates.status = 'IN_TRANSIT';
+          tripUpdates.departedStationAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (type === 'ARRIVING') tripUpdates.status = 'ARRIVING';
+        if (['TRAFFIC_DELAY', 'ACCIDENT_REPORTED', 'ROAD_CLOSURE', 'MECHANICAL_DELAY'].includes(type)) {
+          tripUpdates.status = 'DELAYED';
+          tripUpdates.delayReason = note || type;
+          tripUpdates.delayReportedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (type === 'COMPLETED') {
+          tripUpdates.status = 'COMPLETED';
+          tripUpdates.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (type === 'CANCELLED') {
+          tripUpdates.status = 'CANCELLED';
+          tripUpdates.cancelledAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+
+        tx.update(tripRef, tripUpdates);
+        tx.set(eventRef, {
+          tripId,
+          type,
+          currentStop,
+          location: hasLocation ? { latitude, longitude } : null,
+          note,
+          recordedBy: req.uid,
+          source: 'ADMIN_OPERATIONAL_EVENT',
+          recordedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        return { tripId, eventId: eventRef.id, type, status: tripUpdates.status || trip.status };
+      });
+
+      return ok(res, { event: result }, 201);
+    } catch (e) {
+      return fail(res, 400, e.message || 'Unable to record transit event');
+    }
+  });
+
+  router.get('/trips/:tripId/events', requireAuth, async (req, res) => {
+    try {
+      if (req.isAdmin !== true) return fail(res, 403, 'Admin access required');
+      const tripId = clean(req.params.tripId, 120);
+      const snap = await db.collection('transitTripEvents')
+        .where('tripId', '==', tripId)
+        .orderBy('recordedAt', 'desc')
+        .limit(100)
+        .get();
+      return ok(res, {
+        tripId,
+        events: snap.docs.map((d) => ({ id: d.id, ...d.data() })),
+      });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to load transit events');
+    }
+  });
+
   router.get('/search', async (req, res) => {
     try {
       const from = clean(req.query?.from).toLowerCase();
