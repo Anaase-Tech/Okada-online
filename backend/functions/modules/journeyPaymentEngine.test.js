@@ -69,3 +69,18 @@ test('late successful payment becomes paid but requires refund review after hold
   assert.equal(result.journeyStatus, 'CANCELLED');
   assert.equal(result.refundStatus, 'REQUIRES_REVIEW');
 });
+
+
+test('already paid payments are idempotent and do not request a second inventory transition', () => {
+  const result = resolvePaymentOutcome({
+    journeyStatus: 'CONFIRMED',
+    paymentStatus: 'PAID',
+    providerStatus: 'success',
+    bookingStatuses: ['CONFIRMED'],
+    paymentExpiresAt: expiry,
+    now,
+  });
+  assert.equal(result.outcome, 'ALREADY_PAID');
+  assert.equal(result.releaseInventory, false);
+  assert.equal(result.paymentStatus, 'PAID');
+});
