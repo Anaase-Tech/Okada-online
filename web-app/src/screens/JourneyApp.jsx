@@ -276,6 +276,18 @@ export function JourneyApp({ user, dark, onBack }) {
               <Ticket style={{ width: 15, height: 15 }} /> Journey QR payload
             </div>
             <div style={{ marginTop: 7, wordBreak: "break-all", fontFamily: "monospace", fontSize: 11 }}>{pass.qrPayload}</div>
+            <div style={{ marginTop: 9, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <span className={`text-xs ${t.sub}`}>Journey state</span>
+                <div style={{ fontWeight: 900, marginTop: 2 }}>{stateLabel(pass.journeyStatus)}</div>
+              </div>
+              <div>
+                <span className={`text-xs ${t.sub}`}>Current leg</span>
+                <div style={{ fontWeight: 900, marginTop: 2 }}>{pass.currentSegmentSequence || "—"}</div>
+              </div>
+            </div>
+            {pass.nextAction && <div style={{ marginTop: 8, fontWeight: 800 }}>Next action: {stateLabel(pass.nextAction)}</div>}
+            {pass.operationalIssue && <div style={{ marginTop: 8, color: "#dc2626", fontWeight: 800 }}>Operational attention: {stateLabel(pass.operationalIssue)}</div>}
           </div>
         </div>
 
@@ -317,9 +329,30 @@ export function JourneyApp({ user, dark, onBack }) {
               <Clock3 style={{ width: 15, height: 15 }} />
               <strong>Journey status: {stateLabel(journeyStatus?.journeyStatus || journey.status)}</strong>
             </div>
-            <p className={`text-xs ${t.sub}`} style={{ marginTop: 5 }}>
+            <div style={{ marginTop: 9, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <span className={`text-xs ${t.sub}`}>Current leg</span>
+                <div style={{ fontWeight: 900, marginTop: 2 }}>{journeyStatus?.currentSegmentSequence || "—"}</div>
+              </div>
+              <div>
+                <span className={`text-xs ${t.sub}`}>Next action</span>
+                <div style={{ fontWeight: 900, marginTop: 2 }}>{stateLabel(journeyStatus?.nextAction || "MONITOR")}</div>
+              </div>
+            </div>
+            <p className={`text-xs ${t.sub}`} style={{ marginTop: 7 }}>
               {journeyStatus?.liveDataAvailable ? "Live operational data is available for part of this Journey." : "Using recorded Journey and trip data."}
             </p>
+            {journeyStatus?.lastOperationalEventType && (
+              <p className={`text-xs ${t.sub}`} style={{ marginTop: 4 }}>
+                Last operational event: {stateLabel(journeyStatus.lastOperationalEventType)}
+              </p>
+            )}
+            {journeyStatus?.operationalIssue && (
+              <div style={{ marginTop: 8, padding: 9, borderRadius: 10, background: dark ? "#450a0a" : "#fef2f2", color: "#dc2626", fontSize: 12, fontWeight: 800 }}>
+                Operational attention: {stateLabel(journeyStatus.operationalIssue)}
+                {journeyStatus.operationalIssueSequence ? " · Leg " + journeyStatus.operationalIssueSequence : ""}
+              </div>
+            )}
           </div>
 
           <div style={{ marginTop: 14 }}>
