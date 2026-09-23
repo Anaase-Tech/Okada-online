@@ -23,6 +23,10 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
+const {
+  settleSuccessfulJourneyPayment,
+  settleFailedJourneyPayment,
+} = require('./modules/journeyPaymentService');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -1735,47 +1739,12 @@ app.post('/payments/webhook', async (req, res) => {
         const payment = q.docs[0].data();
 
         if (payment.purpose === 'journey' && payment.journeyId) {
-          const journeyRef = db.collection('journeys').doc(sanitize(payment.journeyId));
-
-          await db.runTransaction(async (tx) => {
-            const [paymentSnap, journeySnap] = await Promise.all([
-              tx.get(paymentRef),
-              tx.get(journeyRef),
-            ]);
-            if (!paymentSnap.exists || !journeySnap.exists) return;
-
-            const currentPayment = paymentSnap.data();
-            const journey = journeySnap.data();
-            if (currentPayment.status === 'completed' && journey.paymentStatus === 'PAID') return;
-
-            const expectedAmountMinor = Math.round(Number(currentPayment.amount || 0) * 100);
-            const receivedAmountMinor = Number(data.amount);
-            const receivedCurrency = String(data.currency || '').toUpperCase();
-
-            if (!Number.isInteger(receivedAmountMinor) ||
-                receivedAmountMinor !== expectedAmountMinor ||
-                receivedCurrency !== 'GHS') {
-              throw new Error('Journey payment amount or currency mismatch');
-            }
-
-            tx.update(paymentRef, {
-              status: 'completed',
-              providerTransactionId: data.id ? String(data.id) : null,
-              channel: data.channel ? sanitize(data.channel, 40) : null,
-              verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-              completedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            const journeyUpdate = {
-              paymentStatus: 'PAID',
-              paymentReference: reference,
-              paymentVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            };
-            if (journey.status === 'PENDING_PAYMENT') journeyUpdate.status = 'CONFIRMED';
-            if (journey.status === 'CANCELLED') journeyUpdate.refundStatus = 'REQUIRES_REVIEW';
-            tx.update(journeyRef, journeyUpdate);
+          await settleSuccessfulJourneyPayment({
+            db,
+            admin,
+            journeyId: payment.journeyId,
+            reference,
+            providerData: data,
           });
         } else {
           await paymentRef.update({
