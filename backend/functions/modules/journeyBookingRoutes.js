@@ -61,7 +61,8 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (used + seatCount > Number(trip.capacity || 0)) throw new Error(`No seats available on ${leg.origin} → ${leg.destination}`);
           const bookingRef = db.collection('transitBookings').doc();
           bookingRefs.push(bookingRef);
-          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: +configuredFare.toFixed(2), currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          const chargedFare = +(configuredFare * seatCount).toFixed(2);
+          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: chargedFare, currency: 'GHS', status: 'CONFIRMED', journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         const pickupFare = Number(req.body?.pickup?.fare || 0);
         const finalMileFare = Number(req.body?.finalMile?.fare || 0);
@@ -76,7 +77,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           const routeSnap = routeId ? routeSnapshots.get(routeId) : null;
           const routeData = routeSnap?.data?.() || null;
           const configured = Number.isFinite(Number(trip?.fare)) ? Number(trip.fare) : Number(routeData?.fare);
-          return sum + (Number.isFinite(configured) ? configured : 0);
+          return sum + (Number.isFinite(configured) ? configured * seatCount : 0);
         }, 0);
         tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2) };
