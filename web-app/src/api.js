@@ -126,6 +126,7 @@ class Api {
   confirmJourney(journeyId)                  { return this.req("POST", `/journeys/${journeyId}/confirm`, {}); }
   getJourneyPass(journeyId)                  { return this.req("GET", `/journeys/${journeyId}/pass`); }
   getJourneyStatus(journeyId)                { return this.req("GET", `/journeys/${journeyId}/status`); }
+  getJourneyEvents(journeyId)               { return this.req("GET", `/journeys/${journeyId}/events`); }
   getJourneyConnections(journeyId)           { return this.req("GET", `/journeys/${journeyId}/connections`); }
   cancelJourney(journeyId, reason)            { return this.req("POST", `/journeys/${journeyId}/cancel`, { reason }); }
 
