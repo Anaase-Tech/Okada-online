@@ -786,21 +786,57 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
       }
     }
 
-    // ── Owner DTO (Track B) ──────────────────────────────
+    // ── Owner DTO (Track B) + savings auto-deduct ────────
+    // NOTE: previously the Track B deduction was only ever used to move
+    // the DTO application's progress bar — the owner's actual wallet
+    // credit below still added the FULL fare.owner regardless, so a
+    // Track B owner kept 100% of their pay while "progress" quietly
+    // built up on paper with no real money ever set aside for it. Both
+    // deductions below now actually reduce what the owner is credited,
+    // mirroring how the driver's dtoDeduction/saveAmount already worked.
+    let ownerDtoDeduction = 0;
+    let ownerSaveAmount = 0;
     if (ownerDoc) {
       const ownerDtoSnap = await db.collection('dto_applications')
         .where('userId','==', ownerDoc.id)
         .where('status','==','active').limit(1).get();
       if (!ownerDtoSnap.empty) {
-        const od   = ownerDtoSnap.docs[0];
-        const owDed = +(fare.owner * CFG.dto.trackBRate).toFixed(2);
-        const owPaid = +(od.data().totalPaid + owDed).toFixed(2);
+        const od = ownerDtoSnap.docs[0];
+        ownerDtoDeduction = +(fare.owner * CFG.dto.trackBRate).toFixed(2);
+        const owPaid = +(od.data().totalPaid + ownerDtoDeduction).toFixed(2);
         const owRem  = +(od.data().vehiclePrice * 0.70 - owPaid).toFixed(2);
+        const owComplete = owRem <= 0;
         await od.ref.update({
           totalPaid: owPaid,
           remaining: Math.max(owRem, 0),
-          status:    owRem <= 0 ? 'completed' : 'active',
+          status:    owComplete ? 'completed' : 'active',
           lastPayment: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        if (owComplete) {
+          await ownerDoc.ref.update({ vehicleOwned: true, vehicleDocumentsReleased: true });
+          await db.collection('notifications').add({
+            userId: ownerDoc.id, type: 'dto_completed',
+            message: '🎉 Congratulations! Your vehicle is FULLY PAID OFF! Documents will be released within 48hrs. You OWN your vehicle! 🇬🇭',
+            read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      // Auto-save from the owner's share — same mechanism the driver
+      // already had, just never wired for owners until now.
+      const ownerSaveRate = ownerDoc.data().savingsRate || 0;
+      ownerSaveAmount = ownerSaveRate > 0
+        ? +(fare.owner * ownerSaveRate / 100).toFixed(2) : 0;
+      if (ownerSaveAmount > 0) {
+        await db.collection('savings_transactions').add({
+          userId: ownerDoc.id, rideId: req.params.rideId,
+          type: 'auto_deposit', amount: ownerSaveAmount,
+          status: 'completed',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await ownerDoc.ref.update({
+          'savings.balance': admin.firestore.FieldValue.increment(ownerSaveAmount),
+          'savings.totalDeposited': admin.firestore.FieldValue.increment(ownerSaveAmount),
         });
       }
     }
@@ -825,7 +861,7 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
       }
     }
 
-    // ── Auto savings deduction ───────────────────────────
+    // ── Auto savings deduction (driver) ──────────────────
     const saveRate  = driverData.savingsRate || 0;
     const saveAmount = saveRate > 0
       ? +(fare.driver * saveRate / 100).toFixed(2) : 0;
@@ -854,8 +890,9 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
         admin.firestore.FieldValue.serverTimestamp() });
     }
 
-    // ── Net driver earnings after deductions ─────────────
+    // ── Net earnings after deductions ────────────────────
     const netDriver = +(fare.driver - dtoDeduction - loanDeduction - saveAmount).toFixed(2);
+    const netOwner  = +(fare.owner - ownerDtoDeduction - ownerSaveAmount).toFixed(2);
 
     // ── Update driver ────────────────────────────────────
     await db.collection('drivers').doc(driverId).update({
@@ -871,9 +908,9 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     // ── Update owner ─────────────────────────────────────
     if (ownerDoc) {
       await ownerDoc.ref.update({
-        'earnings.total': admin.firestore.FieldValue.increment(fare.owner),
-        'earnings.today': admin.firestore.FieldValue.increment(fare.owner),
-        'wallet.pending': admin.firestore.FieldValue.increment(fare.owner),
+        'earnings.total': admin.firestore.FieldValue.increment(netOwner),
+        'earnings.today': admin.firestore.FieldValue.increment(netOwner),
+        'wallet.pending': admin.firestore.FieldValue.increment(netOwner),
         'pools.fuel':     admin.firestore.FieldValue.increment(fare.fuel),
         'pools.maintenance': admin.firestore.FieldValue.increment(fare.maintenance),
         totalRides: admin.firestore.FieldValue.increment(1),
@@ -885,8 +922,11 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
       status: 'completed',
       fare,
       dtoDeduction,
+      ownerDtoDeduction,
       loanDeduction,
+      ownerSaveAmount,
       netDriverEarnings: netDriver,
+      netOwnerEarnings: ownerDoc ? netOwner : null,
       earningsReleased: false, // released after 24hr hold
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -900,8 +940,9 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     });
 
     return ok(res, {
-      splits: fare, dtoDeduction, loanDeduction,
+      splits: fare, dtoDeduction, ownerDtoDeduction, loanDeduction,
       netDriverEarnings: netDriver,
+      netOwnerEarnings: ownerDoc ? netOwner : 0,
     });
   } catch (e) {
     console.error('complete-ride error:', e);
@@ -1023,6 +1064,8 @@ app.get('/owners/:id/dashboard', requireAuth, async (req, res) => {
         ...owner.data().earnings,
         pools:        owner.data().pools,
         wallet:       owner.data().wallet,
+        savings:      owner.data().savings,
+        savingsRate:  owner.data().savingsRate || 0,
         ownerCode:    owner.data().ownerCode,
         totalDrivers: drivers.size,
         activeDrivers: drivers.docs.filter(d => d.data().isOnline).length,
@@ -2056,14 +2099,20 @@ app.post('/maas/share/:shareId/join', requireAuth, async (req,res) => {
 
 // ── E. CORPORATE ─────────────────────────────────────────────
 
-app.post('/maas/corporate/create', async (req,res) => {
+// NOTE: previously public with no requireAuth at all — anyone could
+// create arbitrary corporate accounts unauthenticated. Corporate
+// account creation is an admin-facing signup and should be tied to a
+// real, verified user.
+app.post('/maas/corporate/create', requireAuth, async (req,res) => {
   try {
     const { orgName,orgType,contactName,contactPhone,contactEmail,monthlyBudget,maxRidesPerUser } = req.body;
+    if (!orgName || !contactName || !contactPhone) return fail(res,400,'orgName, contactName, contactPhone required');
     const accountCode = 'ORG'+crypto.randomBytes(3).toString('hex').toUpperCase();
     const ref = await db.collection('corporate_accounts').add({
       orgName:sanitize(orgName), orgType:sanitize(orgType),
       contactName:sanitize(contactName), contactPhone:sanitize(contactPhone),
       contactEmail:sanitize(contactEmail||''), accountCode,
+      createdByUid: req.uid,
       monthlyBudget:parseFloat(monthlyBudget||0), walletBalance:0,
       maxRidesPerUser:maxRidesPerUser||20, members:[], status:'pending', totalSpent:0,
       createdAt:admin.firestore.FieldValue.serverTimestamp(),
@@ -2312,17 +2361,17 @@ exports.releasePendingEarnings = functions.pubsub
       .where('earningsReleased','==', false).get();
     const b = db.batch();
     for (const doc of rides.docs) {
-      const { driverId, ownerId, netDriverEarnings, fare } = doc.data();
+      const { driverId, ownerId, netDriverEarnings, netOwnerEarnings, fare } = doc.data();
       if (driverId && netDriverEarnings) {
         b.update(db.collection('drivers').doc(driverId), {
           'wallet.available': admin.firestore.FieldValue.increment(netDriverEarnings),
           'wallet.pending':   admin.firestore.FieldValue.increment(-netDriverEarnings),
         });
       }
-      if (ownerId && fare?.owner) {
+      if (ownerId && netOwnerEarnings) {
         b.update(db.collection('owners').doc(ownerId), {
-          'wallet.available': admin.firestore.FieldValue.increment(fare.owner),
-          'wallet.pending':   admin.firestore.FieldValue.increment(-fare.owner),
+          'wallet.available': admin.firestore.FieldValue.increment(netOwnerEarnings),
+          'wallet.pending':   admin.firestore.FieldValue.increment(-netOwnerEarnings),
         });
       }
       b.update(doc.ref, { earningsReleased: true });
