@@ -673,8 +673,10 @@ app.post('/rides/request', requireAuth, async (req, res) => {
     if (!userId || !pickupLocation || !destination)
       return fail(res, 400, 'userId, pickupLocation, destination required');
 
-    const userDoc = await db.collection('users').doc(sanitize(userId)).get();
-    if (!userDoc.exists) return fail(res, 404, 'User not found');
+    const userProfile = await resolveUserRef(userId, req);
+    if (!userProfile) return fail(res, 403, 'Ride requester is not owned by the authenticated user');
+    const userDoc = userProfile.ref.get ? await userProfile.ref.get() : null;
+    if (!userDoc?.exists) return fail(res, 404, 'User not found');
 
     const km = haversine(
       pickupLocation.latitude, pickupLocation.longitude,
@@ -741,6 +743,8 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
     const driver = await db.collection('drivers').doc(sanitize(req.body.driverId)).get();
     if (!driver.exists || !driver.data().isVerified)
       return fail(res, 403, 'Driver not verified');
+    if (!req.isAdmin && driver.data()?.firebaseUid !== req.uid && driver.id !== req.uid)
+      return fail(res, 403, 'Driver identity does not match the authenticated user');
 
     await rideRef.update({
       driverId:    driver.id,
@@ -776,6 +780,9 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     const rideData  = ride.data();
     const driverId  = rideData.driverId;
     const driverDoc = await db.collection('drivers').doc(driverId).get();
+    if (!driverDoc.exists) return fail(res, 404, 'Assigned driver not found');
+    if (!req.isAdmin && driverDoc.data()?.firebaseUid !== req.uid && driverDoc.id !== req.uid)
+      return fail(res, 403, 'Only the assigned driver can complete this ride');
     const driverData = driverDoc.data();
 
     // Recalculate fare with driver bonuses
@@ -1022,6 +1029,8 @@ function calcFareSplits(rideType, km, driverData) {
 app.get('/rides/history/:userId', requireAuth, async (req, res) => {
   try {
     const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res, 403, 'Ride history access denied');
     const snap = await db.collection('rides')
       .where('userId','==', userId)
       .orderBy('createdAt','desc').limit(20).get();
@@ -1038,8 +1047,13 @@ app.get('/rides/history/:userId', requireAuth, async (req, res) => {
 app.put('/drivers/:id/location', requireAuth, async (req, res) => {
   try {
     const { latitude, longitude, heading } = req.body;
-    if (!latitude || !longitude) return fail(res, 400, 'latitude, longitude required');
-    await db.collection('drivers').doc(req.params.id).update({
+    if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) return fail(res, 400, 'Valid latitude, longitude required');
+    if (Number(latitude) < -90 || Number(latitude) > 90 || Number(longitude) < -180 || Number(longitude) > 180) return fail(res, 400, 'Invalid coordinates');
+    const driverRef = db.collection('drivers').doc(sanitize(req.params.id));
+    const driverSnap = await driverRef.get();
+    if (!driverSnap.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driverSnap.data()?.firebaseUid !== req.uid && driverRef.id !== req.uid) return fail(res, 403, 'Driver access denied');
+    await driverRef.update({
       location: {
         latitude:    parseFloat(latitude),
         longitude:   parseFloat(longitude),
@@ -1055,8 +1069,10 @@ app.put('/drivers/:id/location', requireAuth, async (req, res) => {
 
 app.put('/drivers/:id/status', requireAuth, async (req, res) => {
   try {
-    const driver = await db.collection('drivers').doc(req.params.id).get();
+    const driverRef = db.collection('drivers').doc(sanitize(req.params.id));
+    const driver = await driverRef.get();
     if (!driver.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driver.data()?.firebaseUid !== req.uid && driverRef.id !== req.uid) return fail(res, 403, 'Driver access denied');
     // Only fully verified drivers can go online
     if (req.body.isOnline && !driver.data().isVerified)
       return fail(res, 403, 'Complete KYC, license, and vehicle verification to go online');
@@ -1072,6 +1088,11 @@ app.put('/drivers/:id/status', requireAuth, async (req, res) => {
 
 app.put('/drivers/:id/profile', requireAuth, async (req, res) => {
   try {
+    const driverRef = db.collection('drivers').doc(sanitize(req.params.id));
+    const driverSnap = await driverRef.get();
+    if (!driverSnap.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driverSnap.data()?.firebaseUid !== req.uid && driverRef.id !== req.uid) return fail(res, 403, 'Driver access denied');
+
     const { gender, vehicleType, isEV, savingsRate } = req.body;
     const updates = {};
     if (gender)      updates.gender      = sanitize(gender);
@@ -1082,7 +1103,7 @@ app.put('/drivers/:id/profile', requireAuth, async (req, res) => {
       if (rate < 0 || rate > 30) return fail(res, 400, 'Savings rate must be 0–30%');
       updates.savingsRate = rate;
     }
-    await db.collection('drivers').doc(req.params.id).update(updates);
+    await driverRef.update(updates);
     return ok(res, updates);
   } catch (e) {
     return fail(res, 500, e.message);
@@ -1091,8 +1112,10 @@ app.put('/drivers/:id/profile', requireAuth, async (req, res) => {
 
 app.get('/owners/:id/dashboard', requireAuth, async (req, res) => {
   try {
-    const owner = await db.collection('owners').doc(req.params.id).get();
+    const ownerRef = db.collection('owners').doc(sanitize(req.params.id));
+    const owner = await ownerRef.get();
     if (!owner.exists) return fail(res, 404, 'Owner not found');
+    if (!req.isAdmin && owner.data()?.firebaseUid !== req.uid && ownerRef.id !== req.uid) return fail(res, 403, 'Owner access denied');
     const drivers = await db.collection('drivers')
       .where('ownerCode','==', owner.data().ownerCode).get();
     return ok(res, {
