@@ -3,6 +3,7 @@
 const functions = require('firebase-functions');
 const axios = require('axios');
 const { makeJourneyCode, validateConnectedLegs } = require('./journeyBookingEngine');
+const { buildConnectionMonitor } = require('./journeyConnectionEngine');
 
 function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok }) {
   const router = express.Router();
@@ -278,6 +279,42 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
     }
   });
 
+  router.get('/:journeyId/connections', requireAuth, async (req, res) => {
+    try {
+      const journeyId = text(req.params.journeyId, 120);
+      const snap = await db.collection('journeys').doc(journeyId).get();
+      if (!snap.exists) return fail(res, 404, 'Journey not found');
+      const journey = snap.data();
+      if (journey.passengerId !== req.uid && req.isAdmin !== true) return fail(res, 403, 'Access denied');
+
+      const legs = Array.isArray(journey.legs) ? journey.legs : [];
+      const trips = [];
+      for (const leg of legs) {
+        if (!leg?.tripId) continue;
+        const tripSnap = await db.collection('transitTrips').doc(text(leg.tripId, 120)).get();
+        if (tripSnap.exists) trips.push({ id: tripSnap.id, ...tripSnap.data() });
+      }
+
+      const monitor = buildConnectionMonitor({
+        legs,
+        trips,
+        minimumBufferMinutes: Number(journey.minimumConnectionBufferMinutes || 30),
+      });
+
+      return ok(res, {
+        journeyId,
+        journeyCode: journey.journeyCode || null,
+        journeyStatus: journey.status,
+        connections: monitor.connections,
+        timingCoverage: monitor.timingCoverage,
+        liveDataAvailable: monitor.liveDataAvailable,
+        note: 'Connection state is based only on recorded operational times. Unknown timing is reported as UNKNOWN.',
+      });
+    } catch (_e) {
+      return fail(res, 500, 'Unable to monitor journey connections');
+    }
+  });
+
   router.get('/:journeyId/status', requireAuth, async (req, res) => {
     try {
       const journeyId = text(req.params.journeyId, 120);
@@ -289,6 +326,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
 
       const legs = Array.isArray(journey.legs) ? journey.legs : [];
       const segments = [];
+      const monitorTrips = [];
       let activeSequence = null;
       let nextSequence = null;
 
@@ -300,6 +338,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         if (leg.tripId) {
           const tripSnap = await db.collection('transitTrips').doc(text(leg.tripId, 120)).get();
           if (tripSnap.exists) trip = { id: tripSnap.id, ...tripSnap.data() };
+          if (trip) monitorTrips.push(trip);
           const bookingSnap = await db.collection('transitBookings')
             .where('journeyId', '==', journeyId)
             .where('tripId', '==', leg.tripId)
@@ -344,6 +383,12 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
       if (journey.status === 'CONFIRMED' && activeSequence === null && segments.length) nextSequence = 1;
       if (journey.status === 'COMPLETED') activeSequence = null;
 
+      const connectionMonitor = buildConnectionMonitor({
+        legs,
+        trips: monitorTrips,
+        minimumBufferMinutes: Number(journey.minimumConnectionBufferMinutes || 30),
+      });
+
       return ok(res, {
         status: {
           journeyId,
@@ -356,6 +401,8 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           etaAvailable: false,
           note: 'Status reflects recorded booking/trip data. ETA is not guaranteed unless supported by live operational data.',
           segments,
+          connections: connectionMonitor.connections,
+          connectionTimingCoverage: connectionMonitor.timingCoverage,
           updatedAt: journey.updatedAt || null,
         },
       });
