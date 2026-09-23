@@ -120,3 +120,38 @@ test('records a cancelled segment as an issue without cancelling the whole journ
   assert.equal(state.status, 'CONNECTION_PENDING');
   assert.equal(state.operationalIssue, 'SEGMENT_CANCELLED');
 });
+
+
+test('moves to FINAL_MILE after all transit legs complete when final mile is pending', () => {
+  const state = buildOperationalState({
+    ...base,
+    journeyStatus: 'IN_TRANSIT',
+    finalMile: { required: true, status: 'PENDING' },
+    trips: [
+      { id: 'trip-1', status: 'COMPLETED' },
+      { id: 'trip-2', status: 'COMPLETED' },
+    ],
+    eventTripId: 'trip-2',
+    eventType: 'COMPLETED',
+  });
+  assert.equal(state.status, 'FINAL_MILE');
+  assert.equal(state.currentSegmentSequence, 2);
+  assert.equal(state.nextAction, 'FINAL_MILE');
+});
+
+test('does not regress a journey from a later segment when an earlier trip reports a late event', () => {
+  const state = buildOperationalState({
+    ...base,
+    journeyStatus: 'BOARDING',
+    currentSegmentSequence: 2,
+    trips: [
+      { id: 'trip-1', status: 'ARRIVING' },
+      { id: 'trip-2', status: 'BOARDING' },
+    ],
+    eventTripId: 'trip-1',
+    eventType: 'STATION_ARRIVAL',
+  });
+  assert.equal(state.status, 'BOARDING');
+  assert.equal(state.currentSegmentSequence, 2);
+  assert.equal(state.reason, 'STALE_OPERATIONAL_EVENT');
+});
