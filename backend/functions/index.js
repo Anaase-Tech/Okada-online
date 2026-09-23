@@ -1296,9 +1296,10 @@ app.post('/dto/fuel-code/:driverId', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/dto/fuel-code/:code/redeem', async (req, res) => {
+app.post('/dto/fuel-code/:code/redeem', requireAuth, async (req, res) => {
   try {
     const code    = sanitize(req.params.code);
+    if (!code) return fail(res, 400, 'Fuel code required');
     const amount  = parseFloat(req.body.amount);
     const station = sanitize(req.body.stationId || 'unknown');
     if (!amount || amount <= 0) return fail(res, 400, 'amount required');
@@ -1312,6 +1313,7 @@ app.post('/dto/fuel-code/:code/redeem', async (req, res) => {
 
     await codeDoc.ref.update({
       used: true, stationId: station, amountUsed: amount,
+      redeemedByUid: req.uid,
       usedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     await db.collection('drivers').doc(data.driverId).update({
