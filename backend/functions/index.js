@@ -1336,11 +1336,11 @@ app.post('/dto/fuel-code/:code/redeem', requireAuth, async (req, res) => {
 app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
   try {
     const { userId, amount } = req.body;
-    if (!userId || !amount || parseFloat(amount) <= 0)
-      return fail(res, 400, 'userId, amount required');
+    const a = Number(amount);
+    if (!userId || !Number.isFinite(a) || a <= 0)
+      return fail(res, 400, 'userId and a positive amount are required');
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-    const a = parseFloat(amount);
     await db.collection('savings_transactions').add({
       userId: sanitize(userId), type: 'manual_deposit',
       amount: a, status: 'completed',
@@ -1359,26 +1359,31 @@ app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
 app.post('/fintech/savings/withdraw', requireAuth, async (req, res) => {
   try {
     const { userId, amount, momoPhone } = req.body;
-    if (!userId || !amount || !momoPhone)
-      return fail(res, 400, 'userId, amount, momoPhone required');
+    const a = Number(amount);
+    if (!userId || !Number.isFinite(a) || a <= 0 || !momoPhone)
+      return fail(res, 400, 'userId, positive amount, momoPhone required');
 
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
 
-    const bal = u.data?.savings?.balance || 0;
-    const a   = parseFloat(amount);
-    if (bal < a) return fail(res, 400, `Insufficient balance. Available: GH₵${bal}`);
-
-    const tx = await db.collection('savings_transactions').add({
-      userId: sanitize(userId), type: 'withdrawal',
-      amount: a, momoPhone: sanitize(momoPhone),
-      status: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    const tx = await db.runTransaction(async (trx) => {
+      const fresh = await trx.get(u.ref);
+      if (!fresh.exists) throw new Error('User not found');
+      const bal = Number(fresh.data()?.savings?.balance || 0);
+      if (!Number.isFinite(bal) || bal < a) throw new Error(`Insufficient balance. Available: GH₵${bal.toFixed(2)}`);
+      const txRef = db.collection('savings_transactions').doc();
+      trx.set(txRef, {
+        userId: u.ref.id, type: 'withdrawal',
+        amount: a, momoPhone: sanitize(momoPhone),
+        status: 'pending',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      trx.update(u.ref, {
+        'savings.balance': admin.firestore.FieldValue.increment(-a),
+      });
+      return txRef.id;
     });
-    await u.ref.update({
-      'savings.balance': admin.firestore.FieldValue.increment(-a),
-    });
-    return ok(res, { txId: tx.id, withdrawn: a, status: 'pending' });
+    return ok(res, { txId: tx, withdrawn: a, status: 'pending' });
   } catch (e) {
     return fail(res, 500, e.message);
   }
@@ -1407,8 +1412,8 @@ app.get('/fintech/savings/balance/:userId', requireAuth, async (req, res) => {
 app.put('/fintech/savings/rate', requireAuth, async (req, res) => {
   try {
     const { userId, rate } = req.body;
-    const r = parseFloat(rate);
-    if (r < 0 || r > CFG.savings.maxRate)
+    const r = Number(rate);
+    if (!Number.isFinite(r) || r < 0 || r > CFG.savings.maxRate)
       return fail(res, 400, `Rate must be 0–${CFG.savings.maxRate}%`);
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
@@ -1469,8 +1474,9 @@ app.get('/fintech/loans/eligibility/:userId', requireAuth, async (req, res) => {
 app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
   try {
     const { userId, amount, purpose } = req.body;
-    if (!userId || !amount || !purpose)
-      return fail(res, 400, 'userId, amount, purpose required');
+    const requestedAmount = Number(amount);
+    if (!userId || !Number.isFinite(requestedAmount) || requestedAmount <= 0 || !purpose)
+      return fail(res, 400, 'userId, positive amount, purpose required');
 
     const existing = await db.collection('loans')
       .where('userId','==', sanitize(userId))
@@ -1483,7 +1489,7 @@ app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
     if (u.data.kycStatus !== 'approved')
       return fail(res, 400, 'KYC approval required');
 
-    const a   = parseFloat(amount);
+    const a   = requestedAmount;
     const ref = await db.collection('loans').add({
       userId:      sanitize(userId),
       amount:      a,
@@ -1736,26 +1742,36 @@ app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
 app.post('/wallet/withdraw', requireAuth, async (req, res) => {
   try {
     const { userId, amount, momoPhone, network } = req.body;
-    if (!userId || !amount || !momoPhone)
-      return fail(res, 400, 'userId, amount, momoPhone required');
+    const a = Number(amount);
+    if (!userId || !Number.isFinite(a) || a <= 0 || !momoPhone)
+      return fail(res, 400, 'userId, positive amount, momoPhone required');
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-    const avail = u.data?.wallet?.available || 0;
-    const a = parseFloat(amount);
-    if (avail < a)
-      return fail(res, 400, `Insufficient balance. Available: GH₵${avail.toFixed(2)}`);
-    const tx = await db.collection('withdrawal_requests').add({
-      userId:   sanitize(userId),
-      amount:   a,
-      momoPhone: sanitize(momoPhone),
-      network:  sanitize(network || 'MTN'),
-      status:   'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+
+    const txId = await db.runTransaction(async (trx) => {
+      const fresh = await trx.get(u.ref);
+      if (!fresh.exists) throw new Error('User not found');
+      const avail = Number(fresh.data()?.wallet?.available || 0);
+      if (!Number.isFinite(avail) || avail < a) {
+        throw new Error(`Insufficient balance. Available: GH₵${avail.toFixed(2)}`);
+      }
+
+      const txRef = db.collection('withdrawal_requests').doc();
+      trx.set(txRef, {
+        userId: u.ref.id,
+        amount: a,
+        momoPhone: sanitize(momoPhone),
+        network: sanitize(network || 'MTN'),
+        status: 'pending',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      trx.update(u.ref, {
+        'wallet.available': admin.firestore.FieldValue.increment(-a),
+      });
+      return txRef.id;
     });
-    await u.ref.update({
-      'wallet.available': admin.firestore.FieldValue.increment(-a),
-    });
-    return ok(res, { txId: tx.id, amount: a, status: 'pending' });
+
+    return ok(res, { txId, amount: a, status: 'pending' });
   } catch (e) {
     return fail(res, 500, e.message);
   }
