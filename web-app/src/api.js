@@ -127,6 +127,9 @@ class Api {
   getJourneyPass(journeyId)                  { return this.req("GET", `/journeys/${journeyId}/pass`); }
   getJourneyStatus(journeyId)                { return this.req("GET", `/journeys/${journeyId}/status`); }
   getJourneyEvents(journeyId)               { return this.req("GET", `/journeys/${journeyId}/events`); }
+  getTransitTrips(routeId = "")             { return this.req("GET", routeId ? `/transit/trips?routeId=${encodeURIComponent(routeId)}` : "/transit/trips"); }
+  recordTransitEvent(tripId, data)          { return this.req("POST", `/transit/trips/${tripId}/events`, data); }
+  getTransitTripEvents(tripId)              { return this.req("GET", `/transit/trips/${tripId}/events`); }
   getJourneyConnections(journeyId)           { return this.req("GET", `/journeys/${journeyId}/connections`); }
   cancelJourney(journeyId, reason)            { return this.req("POST", `/journeys/${journeyId}/cancel`, { reason }); }
 
