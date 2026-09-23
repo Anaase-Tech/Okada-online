@@ -7,6 +7,7 @@ const {
   isConnectionFeasible,
   buildJourney,
 } = require('./transitEngine');
+const { buildOperationalState } = require('./journeyStateEngine');
 
 function createTransitRouter({ express, db, admin, requireAuth, fail, ok, sanitize }) {
   const router = express.Router();
@@ -192,6 +193,91 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
           tripUpdates.cancelledAt = admin.firestore.FieldValue.serverTimestamp();
         }
 
+        // Reconcile every paid Journey that has a booking on this trip.
+        // Reads happen before writes so the whole operational update remains atomic.
+        const bookingSnap = await tx.get(
+          db.collection('transitBookings').where('tripId', '==', tripId)
+        );
+        const journeyIds = [...new Set(
+          bookingSnap.docs
+            .map((doc) => doc.data()?.journeyId)
+            .filter(Boolean)
+        )];
+        const journeyUpdates = [];
+
+        for (const journeyId of journeyIds) {
+          const journeyRef = db.collection('journeys').doc(String(journeyId));
+          const journeySnap = await tx.get(journeyRef);
+          if (!journeySnap.exists) continue;
+
+          const journey = journeySnap.data();
+          if (String(journey.paymentStatus || '').toUpperCase() !== 'PAID') continue;
+
+          const legs = Array.isArray(journey.legs) ? journey.legs : [];
+          const tripIds = [...new Set(legs.map((leg) => String(leg?.tripId || '')).filter(Boolean))];
+          const tripStates = [];
+
+          for (const legTripId of tripIds) {
+            if (legTripId === tripId) {
+              tripStates.push({ id: tripId, ...trip, ...tripUpdates });
+              continue;
+            }
+            const legTripSnap = await tx.get(db.collection('transitTrips').doc(legTripId));
+            if (legTripSnap.exists) tripStates.push({ id: legTripSnap.id, ...legTripSnap.data() });
+          }
+
+          const operationalState = buildOperationalState({
+            journeyStatus: journey.status,
+            paymentStatus: journey.paymentStatus,
+            legs,
+            trips: tripStates,
+            finalMile: journey.finalMile || null,
+            currentSegmentSequence: journey.currentSegmentSequence || null,
+            eventTripId: tripId,
+            eventType: type,
+          });
+
+          const update = {
+            lastOperationalEventType: type,
+            lastOperationalEventAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastOperationalEventTripId: tripId,
+            lastOperationalEventSequence: operationalState.currentSegmentSequence || null,
+            operationalStateSource: 'TRANSIT_OPERATIONAL_EVENT',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
+
+          if (operationalState.changed && operationalState.status !== journey.status) {
+            update.status = operationalState.status;
+          }
+          if (operationalState.currentSegmentSequence != null) {
+            update.currentSegmentSequence = operationalState.currentSegmentSequence;
+          }
+          if (operationalState.nextSegmentSequence != null) {
+            update.nextSegmentSequence = operationalState.nextSegmentSequence;
+          } else if (operationalState.status === 'COMPLETED' || operationalState.status === 'FINAL_MILE') {
+            update.nextSegmentSequence = null;
+          }
+          if (operationalState.nextAction) update.nextAction = operationalState.nextAction;
+
+          if (operationalState.operationalIssue) {
+            update.operationalIssue = operationalState.operationalIssue;
+            update.operationalIssueSequence = operationalState.operationalIssueSequence;
+            update.operationalIssueAt = admin.firestore.FieldValue.serverTimestamp();
+          }
+
+          tx.update(journeyRef, update);
+
+          journeyUpdates.push({
+            journeyId: String(journeyId),
+            status: update.status || journey.status,
+            currentSegmentSequence: update.currentSegmentSequence ?? journey.currentSegmentSequence ?? null,
+            nextSegmentSequence: update.nextSegmentSequence ?? journey.nextSegmentSequence ?? null,
+            nextAction: update.nextAction || journey.nextAction || null,
+            operationalIssue: update.operationalIssue || journey.operationalIssue || null,
+            reason: operationalState.reason,
+          });
+        }
+
         tx.update(tripRef, tripUpdates);
         tx.set(eventRef, {
           tripId,
@@ -204,7 +290,13 @@ function createTransitRouter({ express, db, admin, requireAuth, fail, ok, saniti
           recordedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        return { tripId, eventId: eventRef.id, type, status: tripUpdates.status || trip.status };
+        return {
+          tripId,
+          eventId: eventRef.id,
+          type,
+          status: tripUpdates.status || trip.status,
+          journeyUpdates,
+        };
       });
 
       return ok(res, { event: result }, 201);
