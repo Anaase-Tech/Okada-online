@@ -13,6 +13,7 @@ import { ScheduledTrips } from "./ScheduledTrips";
 import { ShareRide } from "./ShareRide";
 import { RentalHub } from "./RentalHub";
 import { DeliveryApp } from "./DeliveryApp";
+import { TransitHub } from "./TransitHub";
 
 export function PassengerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
@@ -98,7 +99,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
 
   if(showKyc) return <KycVerify role="passenger" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
-  const NAV_ITEMS = [["home","🏠","Home"],["maas","📅","Schedule"],["share","🤝","Share"],["rental","🚗","Rental"],["delivery","📦","Deliver"],["fintech","💎","Fintech"],["history","📋","History"],["profile","👤","Me"]];
+  const NAV_ITEMS = [["home","🏠","Home"],["transit","🚐","Transit"],["maas","📅","Schedule"],["share","🤝","Share"],["rental","🚗","Rental"],["delivery","📦","Deliver"],["fintech","💎","Fintech"],["history","📋","History"],["profile","👤","Me"]];
 
   const Nav=()=>(
     <div className={`fixed bottom-0 inset-x-0 max-w-md mx-auto ${t.card} border-t ${t.bdr}`}
@@ -124,6 +125,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       </div>
 
       <div style={{paddingBottom:80}}>
+        {view==="transit"&&<TransitHub user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="fintech"&&<FintechHub user={user} role="passenger" dark={dark}/>}
         {view==="maas"&&<ScheduledTrips user={user} dark={dark} onBack={()=>setView("home")}/>}
         {view==="share"&&<ShareRide user={user} dark={dark} onBack={()=>setView("home")}/>}
