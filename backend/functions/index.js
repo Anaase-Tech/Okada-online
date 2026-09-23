@@ -1629,26 +1629,59 @@ app.get('/insurance/policy/:userId', requireAuth, async (req, res) => {
 
 app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   try {
-    const { userId, rideId, amount } = req.body;
-    if (!userId || !rideId || !amount) return fail(res, 400, 'Missing fields');
+    const { userId, rideId } = req.body;
+    if (!userId || !rideId) return fail(res, 400, 'userId and rideId required');
+
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-    const pl   = u.data?.payLater || {};
-    const avail = (pl.limit || CFG.payLater.defaultLimit) - (pl.used || 0);
-    if (pl.suspended) return fail(res, 400, 'Pay Later suspended — contact support');
-    if (parseFloat(amount) > avail)
-      return fail(res, 400, `Pay Later limit exceeded. Available: GH₵${avail}`);
+
+    const rideRef = db.collection('rides').doc(sanitize(rideId));
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) return fail(res, 404, 'Ride not found');
+    const ride = rideSnap.data();
+    if (ride.userId !== u.ref.id) return fail(res, 403, 'Ride does not belong to the authenticated user');
+    if (String(ride.paymentStatus || '').toLowerCase() === 'paid') {
+      return fail(res, 400, 'Ride is already paid');
+    }
+
+    const requestedAmount = ride.fare?.total;
+    const a = Number(requestedAmount);
+    if (!Number.isFinite(a) || a <= 0) return fail(res, 400, 'Ride does not have a valid payable fare');
+
+    const existing = await db.collection('pay_later')
+      .where('rideId','==',rideRef.id)
+      .where('status','in',['deferred','overdue']).limit(1).get();
+    if (!existing.empty) return fail(res, 400, 'Pay Later is already active for this ride');
+
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + CFG.payLater.deferDays);
-    const ref = await db.collection('pay_later').add({
-      userId: sanitize(userId), rideId: sanitize(rideId),
-      amount: parseFloat(amount), status: 'deferred',
-      dueDate, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+
+    const result = await db.runTransaction(async (trx) => {
+      const fresh = await trx.get(u.ref);
+      if (!fresh.exists) throw new Error('User not found');
+
+      const pl = fresh.data()?.payLater || {};
+      const avail = Number(pl.limit || CFG.payLater.defaultLimit) - Number(pl.used || 0);
+      if (!Number.isFinite(avail) || a > avail) {
+        throw new Error(`Pay Later limit exceeded. Available: GH₵${Number.isFinite(avail) ? avail.toFixed(2) : '0.00'}`);
+      }
+
+      const ref = db.collection('pay_later').doc();
+      trx.set(ref, {
+        userId: u.ref.id,
+        rideId: rideRef.id,
+        amount: a,
+        status: 'deferred',
+        dueDate,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      trx.update(u.ref, {
+        'payLater.used': admin.firestore.FieldValue.increment(a),
+      });
+      return ref.id;
     });
-    await u.ref.update({
-      'payLater.used': admin.firestore.FieldValue.increment(parseFloat(amount)),
-    });
-    return ok(res, { payLaterTxId: ref.id, dueDate, amountDeferred: amount });
+
+    return ok(res, { payLaterTxId: result, dueDate, amountDeferred: a });
   } catch (e) {
     return fail(res, 500, e.message);
   }
