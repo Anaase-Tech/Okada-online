@@ -30,10 +30,9 @@ class Api {
   }
 
   // ── Auth / KYC ─────────────────────────────────────
-  // NOTE: real phone auth goes through Firebase client-side
-  // (signInWithPhoneNumber) — AuthScreen calls /auth/create-profile
-  // directly. These two are kept only in case anything still
-  // references them, but the backend has no matching routes.
+  // Production phone authentication is Firebase client-side
+  // (signInWithPhoneNumber). These wrappers are retained for compatibility;
+  // they are not part of the current production authentication path.
   sendOtp(phone, role)                          { return this.req("POST", "/auth/send-otp", { phone, role }); }
   verifyOtp(phone, otp, role, name, ownerCode)  { return this.req("POST", "/auth/verify-otp", { phone, otp, role, name, ownerCode }); }
   // Real KYC path is unified: POST /verify/kyc with docType ('ghana_card'|'passport'|'voters_id')
@@ -56,8 +55,8 @@ class Api {
 
   // ── Payments / Wallet ──────────────────────────────
   initPayment(rideId, amount, email, phone)      { return this.req("POST", "/payments/initialize", { rideId, amount, email, phone }); }
-  // No GET /payments/verify/:ref route exists on the backend yet —
-  // payment status updates arrive via the Paystack webhook instead.
+  // Provider verification is performed server-side against Paystack.
+  // The webhook remains authoritative for asynchronous charge.success events.
   verifyPayment(ref)                             { return this.req("GET", `/payments/verify/${ref}`); }
   payLaterRequest(rideId, userId, amount)        { return this.req("POST", "/fintech/pay-later/request", { userId, rideId, amount }); }
   // FintechHub only ever has a lump "amount owed", not a specific
