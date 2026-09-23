@@ -1559,7 +1559,7 @@ app.post('/payments/webhook', async (req, res) => {
     // Express JSON parser means req.body is already parsed, so keep the
     // established signature approach for compatibility with this backend.
     const sig  = req.headers['x-paystack-signature'];
-    const body = JSON.stringify(req.body);
+    const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body));
     const secret = functions.config().paystack?.secret || '';
     const expected = crypto.createHmac('sha512', secret).update(body).digest('hex');
     if (!secret || sig !== expected) return fail(res, 401, 'Invalid signature');
