@@ -2083,8 +2083,10 @@ app.post('/maas/schedule/create', requireAuth, async (req,res) => {
             departTime,returnTime,days,category,payFromSavings } = req.body;
     if(!userId||!pickupAddress||!destAddress||!vehicleType||!departTime||!days?.length)
       return fail(res,400,'Missing required fields');
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Schedule owner access denied');
     const ref = await db.collection('scheduled_trips').add({
-      userId:sanitize(userId), name:sanitize(name||category||'My Trip'),
+      userId:profile.ref.id, name:sanitize(name||category||'My Trip'),
       pickupAddress:sanitize(pickupAddress), destAddress:sanitize(destAddress),
       vehicleType:sanitize(vehicleType), departTime:sanitize(departTime),
       returnTime:returnTime||null, days, category:sanitize(category||'custom'),
@@ -2104,8 +2106,8 @@ app.put('/maas/schedule/:id/adjust', requireAuth, async (req,res) => {
     const ref  = db.collection('scheduled_trips').doc(req.params.id);
     const snap = await ref.get();
     if(!snap.exists) return fail(res,404,'Schedule not found');
-    if(snap.data().userId !== req.uid && req.body.userId !== snap.data().userId)
-      return fail(res,403,'Not your schedule');
+    const ownerProfile = await resolveUserRef(snap.data().userId, req);
+    if (!ownerProfile) return fail(res,403,'Not your schedule');
     if(skip) {
       await ref.update({ skippedDates:admin.firestore.FieldValue.arrayUnion(date) });
       return ok(res, { message:`Trip on ${date} skipped` });
@@ -2124,6 +2126,8 @@ app.put('/maas/schedule/:id/pause', requireAuth, async (req,res) => {
   try {
     const snap = await db.collection('scheduled_trips').doc(req.params.id).get();
     if(!snap.exists) return fail(res,404,'Schedule not found');
+    const ownerProfile = await resolveUserRef(snap.data().userId, req);
+    if (!ownerProfile) return fail(res,403,'Not your schedule');
     const paused = !snap.data().paused;
     await snap.ref.update({ paused });
     return ok(res, { paused, message:paused?'Schedule paused':'Schedule resumed' });
@@ -2132,9 +2136,12 @@ app.put('/maas/schedule/:id/pause', requireAuth, async (req,res) => {
 
 app.get('/maas/schedule/today/:userId', requireAuth, async (req,res) => {
   try {
+    const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Schedule access denied');
     const today = new Date().getDay();
     const snap  = await db.collection('scheduled_trips')
-      .where('userId','==',sanitize(req.params.userId))
+      .where('userId','==',profile.ref.id)
       .where('active','==',true)
       .where('paused','==',false).get();
     const trips = snap.docs.map(d=>({id:d.id,...d.data()}))
@@ -2238,7 +2245,8 @@ app.post('/maas/rental/:id/log-km', requireAuth, async (req,res) => {
     await ref.update({ kmUsed:newKmUsed, extraKmCharges:extraCharge });
     if(extraCharge > (r.extraKmCharges||0)) {
       const newCharge = extraCharge - (r.extraKmCharges||0);
-      const u = await resolveUserRef(r.userId);
+      const u = await resolveUserRef(r.userId, req);
+      if (!u && !req.isAdmin) return fail(res,403,'Rental access denied');
       if (u) await u.ref.update({
         'wallet.available':admin.firestore.FieldValue.increment(-newCharge),
       });
@@ -2249,6 +2257,9 @@ app.post('/maas/rental/:id/log-km', requireAuth, async (req,res) => {
 
 app.get('/maas/rental/active/:userId', requireAuth, async (req,res) => {
   try {
+    const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Rental access denied');
     const snap = await db.collection('rentals')
       .where('userId','==',sanitize(req.params.userId))
       .where('status','in',['pending','active']).get();
