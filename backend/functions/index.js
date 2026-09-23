@@ -157,6 +157,17 @@ async function resolveUserRef(userId, req = null) {
   return null;
 }
 
+async function resolveAuthenticatedProfile(req) {
+  for (const col of ['users', 'drivers', 'owners']) {
+    const snap = await db.collection(col).where('firebaseUid', '==', req.uid).limit(1).get();
+    if (!snap.empty) {
+      const doc = snap.docs[0];
+      return { ref: doc.ref, col, data: doc.data() };
+    }
+  }
+  return null;
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 const fail = (res, code, msg) =>
   res.status(code).json({ error: msg });
@@ -1146,6 +1157,9 @@ app.post('/dto/apply', requireAuth, async (req, res) => {
     if (!userId || !vehicleType || !track)
       return fail(res, 400, 'userId, vehicleType, track required');
 
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Drive to Own target is not owned by the authenticated user');
+
     const veh = CFG.dto.vehicles[sanitize(vehicleType)];
     if (!veh) return fail(res, 400, 'Invalid vehicle type');
 
@@ -1211,6 +1225,8 @@ app.post('/dto/apply', requireAuth, async (req, res) => {
 app.get('/dto/status/:userId', requireAuth, async (req, res) => {
   try {
     const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Drive to Own status access denied');
     const snap = await db.collection('dto_applications')
       .where('userId','==', userId)
       .orderBy('appliedAt','desc').limit(1).get();
@@ -1259,6 +1275,7 @@ app.post('/dto/fuel-code/:driverId', requireAuth, async (req, res) => {
     const driverId = sanitize(req.params.driverId);
     const driverDoc = await db.collection('drivers').doc(driverId).get();
     if (!driverDoc.exists) return fail(res, 404, 'Driver not found');
+    if (!req.isAdmin && driverDoc.data()?.firebaseUid !== req.uid && driverDoc.id !== req.uid) return fail(res,403,'Fuel code access denied');
 
     const fuelBal = driverDoc.data().pools?.fuel || 0;
     if (fuelBal < 5) return fail(res, 400, 'Insufficient fuel pool (min GH₵5)');
@@ -1486,6 +1503,9 @@ app.post('/fintech/loans/apply', requireAuth, async (req, res) => {
 
 app.get('/fintech/loans/status/:userId', requireAuth, async (req, res) => {
   try {
+    const userId = sanitize(req.params.userId);
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Loan status access denied');
     const snap = await db.collection('loans')
       .where('userId','==', sanitize(req.params.userId))
       .where('status','in',['active','pending']).limit(1).get();
@@ -1545,10 +1565,13 @@ app.post('/insurance/claim', requireAuth, async (req, res) => {
     if (!userId || !claimType || !description)
       return fail(res, 400, 'userId, claimType, description required');
 
-    // Verify active policy
+    const profile = await resolveUserRef(userId, req);
+    if (!profile) return fail(res,403,'Insurance claim access denied');
+
     const pol = await db.collection('insurance_policies').doc(sanitize(policyId || '')).get();
-    if (pol.exists && pol.data().status !== 'active')
-      return fail(res, 400, 'Policy is not active');
+    if (!pol.exists) return fail(res,404,'Insurance policy not found');
+    if (pol.data().userId !== sanitize(userId)) return fail(res,403,'Insurance policy access denied');
+    if (pol.data().status !== 'active') return fail(res,400,'Policy is not active');
 
     const ref = `CLM-${Date.now().toString(36).toUpperCase()}`;
     const claim = await db.collection('insurance_claims').add({
