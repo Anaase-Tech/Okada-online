@@ -75,6 +75,13 @@ test('frontend payment verification helper matches the mounted Journey route', (
   assert.match(api, /\/journeys\/\$\{journeyId\}\/payment\/verify/);
 });
 
+test('Paystack secret uses Secret Manager and not deprecated Runtime Config', () => {
+  assert.match(index, /defineSecret\('PAYSTACK_SECRET'\)/);
+  assert.match(index, /runWith\(\{ secrets: \[PAYSTACK_SECRET\] \}\)/);
+  assert.match(index, /PAYSTACK_SECRET\.value\(\)/);
+  assert.doesNotMatch(index, /functions\.config\(\)/);
+});
+
 test('admin cannot fall back to a manufactured demo session', () => {
   assert.match(authScreen, /if \(role === "admin"\)/);
   assert.match(authScreen, /Admin login requires successful Firebase phone verification/);
