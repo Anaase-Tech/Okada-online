@@ -196,3 +196,18 @@ The next work is deployment verification rather than a new Mobility OS subsystem
 5. Production browser/callback recovery.
 
 A Vercel integration is available to inspect deployment details directly, but it is not currently connected in this workspace. 
+
+
+## Vercel live-deployment verification — 2026-09-24
+
+- The Vercel integration was connected during this verification pass.
+- GitHub reports Vercel status checks on recent commits; the latest verified application status observed earlier was successful.
+- Direct Vercel inspection of the Okada Online project is currently blocked by authorization scope, not by a diagnosed application error.
+- The Vercel connector identified the project team scope as `yaw-annor-s-projects` with team ID `team_eL4axgpzjI9qg66Av0YnKx4I`, but access to that scope currently returns HTTP 403 and requests re-authentication for that team.
+- Fetching `https://okada-online.vercel.app` through the connected Vercel access path also returned an access-denied result for the deployment.
+- Therefore the exact Vercel build/deployment logs and protected deployment behavior cannot be independently audited from this workspace yet.
+- This is recorded as an external access gate. No Vercel project setting, environment variable, domain, or deployment was changed during this pass.
+
+## Certification effect
+
+The GitHub source-control verification gate remains passed. Vercel status evidence exists, but direct deployment inspection is blocked by the connected-account scope. Firebase and Paystack live-service verification remain outstanding as previously documented.
