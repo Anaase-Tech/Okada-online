@@ -15,7 +15,7 @@ The high-risk Journey payment, transit inventory, VIP Journey bypass, legacy ide
 
 The branch is **not certified as production-deployable yet** because Firebase deployment, a real Paystack transaction/webhook, production callback behavior, and a live Firestore-emulator contention test remain outstanding. GitHub Actions has now provided direct runner evidence for dependency installation, backend tests, deployment-structure checks, the forbidden-artifact check, and a CRA production build. The first successful frontend verification used a CI-generated synchronized lockfile; the repository lockfile was synchronized afterward and the workflow was restored to strict committed-lock verification.
 
-A second deployment concern is configuration technology: the active functions package still uses functions.config(). Firebase currently documents that interface as deprecated and says new deployments using it will fail after March 2027. This was intentionally documented rather than silently migrating the entire production configuration during the audit.
+A second deployment concern is now partially closed: the active API has been migrated from functions.config() to a bound Secret Manager secret named PAYSTACK_SECRET. The source migration is complete, but the actual secret value has not been set and the migrated Functions have not yet been deployed and exercised against Paystack.
 
 ## What was found correct
 
@@ -360,7 +360,7 @@ These need to be run from the actual deployment environment.
 
 ## Known production limitations
 
-1. functions.config() is still used for Paystack configuration. Firebase currently marks functions.config() deprecated and says new deployments using it will fail after March 2027. Migrate to parameterized configuration / Secret Manager before that deadline.
+1. Paystack configuration is now sourced from the Secret Manager parameter PAYSTACK_SECRET; the active JavaScript source contains no functions.config() calls. The remaining gate is to set the secret in the Firebase project, deploy the Functions, and verify real Paystack flows before retiring the old Runtime Config value.
 
 2. The rate limiter is in-memory and instance-local. It is not a distributed/global abuse-control layer.
 
@@ -439,3 +439,32 @@ No new major Mobility OS subsystem should be treated as production-ready until t
 - Current combined GitHub commit status for the current tip reports **Vercel: success**.
 - Therefore the source-control CI and current Vercel status are green. Firebase deployment, deployed API smoke tests, Firestore concurrency/emulator testing, live Paystack payment/webhook testing, and production callback testing remain external gates.
 
+
+
+## Paystack Secret Manager migration — 2026-09-24
+
+The deprecated Firebase Runtime Config dependency for Paystack was removed from the active API.
+
+Source changes:
+- `defineSecret('PAYSTACK_SECRET')` is declared in `backend/functions/index.js`.
+- `PAYSTACK_SECRET` is bound to the `api` HTTP function.
+- Paystack initialization, verification, and webhook signature validation read `PAYSTACK_SECRET.value()`.
+- The active JavaScript source no longer uses `functions.config()`.
+
+Verification hardening:
+- The GitHub Actions workflow now fails if active JavaScript source contains `functions.config()`.
+- Retained backup files are excluded from this specific source guard, so historical backup text does not create a false failure.
+
+Source-control commits:
+- `34710602e08a406d50cce0ab8d19584dd26b1b1b` — runtime Secret Manager migration.
+- `35c1a8dceabf211354ceb5550c27f7b16ecac07b` — CI guard against deprecated Runtime Config.
+- `a200aacb8a56b3ee8572934c6cc43ce2fe3f9389` — migration documentation.
+
+External work still required:
+- set `PAYSTACK_SECRET` in the Firebase project;
+- deploy Functions;
+- run Paystack initialization/verification/webhook tests;
+- confirm production callback/recovery behavior;
+- retire the old Paystack Runtime Config only after the migrated deployment is confirmed.
+
+No new Mobility OS feature was added by this migration.
