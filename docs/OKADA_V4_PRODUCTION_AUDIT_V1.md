@@ -4,7 +4,7 @@
 
 - Repository: Anaase-Tech/Okada-online
 - Branch: v4-mobility-os
-- Audited branch HEAD at the strict-CI preparation snapshot: 5e254ff34c6ee06ada17cc992d405a2a3cab679a
+- Audited branch HEAD at the current documented verification snapshot: 3a5448c0f4cb3ff404aaefa0f73d1264c9c84ed6
 - Baseline used for the stabilization pass: b856344c79e0a7141880bd053372f52cfaa3860c
 - Current branch relation to main at audit close: ahead of main, 0 commits behind
 - V4 remains an extension layer over the legacy Express application through v4Entry.js.
@@ -427,3 +427,15 @@ The next gate is not another subsystem. The strict committed-lock CI gate is now
 7. deploy Functions and verify the deployed /api behavior
 
 No new major Mobility OS subsystem should be treated as production-ready until those external checks pass.
+
+
+## Current verification snapshot — 2026-09-24
+
+- Current branch tip: 3a5448c0f4cb3ff404aaefa0f73d1264c9c84ed6.
+- Branch relation to `main`: 138 commits ahead, 0 behind.
+- GitHub Actions run #10 (verification of documentation parent commit d5bd240b24e99f95109c746389fa2a725d6a65bc): **success**.
+- GitHub Actions run #11 (verification of documentation parent commit b8788545f7ce6d1ada816caf5fcaa42217df3104): **success**.
+- The commit chain from the strict verified application snapshot through the current tip consists only of documentation/audit-log reconciliation commits after the runtime verification gate.
+- Current combined GitHub commit status for the current tip reports **Vercel: success**.
+- Therefore the source-control CI and current Vercel status are green. Firebase deployment, deployed API smoke tests, Firestore concurrency/emulator testing, live Paystack payment/webhook testing, and production callback testing remain external gates.
+
