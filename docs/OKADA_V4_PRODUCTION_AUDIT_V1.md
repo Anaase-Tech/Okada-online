@@ -431,7 +431,7 @@ No new major Mobility OS subsystem should be treated as production-ready until t
 
 ## Current verification snapshot — 2026-09-24
 
-- Current branch tip: 3a5448c0f4cb3ff404aaefa0f73d1264c9c84ed6.
+- Current branch tip: 6f4e60a5055a01e6a12fbc5b611ada0545937a80.
 - Branch relation to `main`: 138 commits ahead, 0 behind.
 - GitHub Actions run #10 (verification of documentation parent commit d5bd240b24e99f95109c746389fa2a725d6a65bc): **success**.
 - GitHub Actions run #11 (verification of documentation parent commit b8788545f7ce6d1ada816caf5fcaa42217df3104): **success**.
