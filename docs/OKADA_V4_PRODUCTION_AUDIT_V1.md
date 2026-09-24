@@ -4,7 +4,7 @@
 
 - Repository: Anaase-Tech/Okada-online
 - Branch: v4-mobility-os
-- Audited branch HEAD after stabilization: ddc62168b75b10ff25c6e9fe7f1474a0167c5b70
+- Audited branch HEAD at the strict-CI preparation snapshot: 5e254ff34c6ee06ada17cc992d405a2a3cab679a
 - Baseline used for the stabilization pass: b856344c79e0a7141880bd053372f52cfaa3860c
 - Current branch relation to main at audit close: ahead of main, 0 commits behind
 - V4 remains an extension layer over the legacy Express application through v4Entry.js.
@@ -13,7 +13,7 @@
 
 The high-risk Journey payment, transit inventory, VIP Journey bypass, legacy identity/authorization, and stale deployment-document issues were found and patched. During the verification gate, the two latest frontend-only KYC fixes from main were also merged into V4 via PR #2, preserving the newer onboarding behavior.
 
-The branch is **not certified as production-deployable yet** because this environment could not execute a real Firebase deployment, a real Paystack transaction/webhook, a full CRA production build, or a live Firestore-emulator contention test. The code and configuration are prepared for those final external verification steps.
+The branch is **not certified as production-deployable yet** because Firebase deployment, a real Paystack transaction/webhook, production callback behavior, and a live Firestore-emulator contention test remain outstanding. GitHub Actions has now provided direct runner evidence for dependency installation, backend tests, deployment-structure checks, the forbidden-artifact check, and a CRA production build. The first successful frontend verification used a CI-generated synchronized lockfile; the repository lockfile was synchronized afterward and the workflow was restored to strict committed-lock verification.
 
 A second deployment concern is configuration technology: the active functions package still uses functions.config(). Firebase currently documents that interface as deprecated and says new deployments using it will fail after March 2027. This was intentionally documented rather than silently migrating the entire production configuration during the audit.
 
@@ -334,9 +334,21 @@ The executed 26-case harness used the current GitHub branch source and the same 
 
 ## Verification automation
 
-Not executed here:
+### GitHub Actions evidence
 
-- CRA production build
+- Run #1 — commit 9db278b3b4fd0d102ec34400e5a053a2d15a26d9 — failed on the over-broad forbidden-artifact scan and frontend lockfile synchronization.
+- Run #3 — commit ddc62168b75b10ff25c6e9fe7f1474a0167c5b70 — same two CI defects.
+- Run #4 — commit 138d64fc8b8da4974e570ae4f1d9827e4526b64a — backend install/tests/package/Firebase checks passed; artifact scan failed only because comments and a retained backup contained the word Twilio; frontend npm ci failed because the committed lockfile was stale.
+- Run #5 — commit c48faf435552ac733cd1adb548ccf4066d1cb19a — successful backend verification and successful CRA production build using a temporary CI-generated lockfile reconciliation.
+- Run #6 — commit 352169e1559cb9679bc172f0b8e416725b1ba700 — successful repeat of the same bridge verification.
+- The frontend package lock was then synchronized in source control by c7e1440f97efaa2b9111c7005c57f2bc9aff093c.
+- The workflow was restored to strict committed-lock verification by 5e254ff34c6ee06ada17cc992d405a2a3cab679a.
+
+### Still not executed here
+
+- Firebase deploy
+- Firestore emulator contention test
+- real Paystack sandbox/live payment
 - Firebase deploy
 - Firestore emulator contention test
 - real Paystack sandbox/live payment
@@ -365,6 +377,10 @@ These need to be run from the actual deployment environment.
 
 - 9db278b3b4fd0d102ec34400e5a053a2d15a26d9 — add V4 verification workflow
 - ddc62168b75b10ff25c6e9fe7f1474a0167c5b70 — merge latest main KYC onboarding fixes into V4
+- 352169e1559cb9679bc172f0b8e416725b1ba700 — add chronological V4 verification log
+- c48faf435552ac733cd1adb548ccf4066d1cb19a — refine artifact scan and temporary lockfile bridge
+- c7e1440f97efaa2b9111c7005c57f2bc9aff093c — synchronize frontend package lock
+- 5e254ff34c6ee06ada17cc992d405a2a3cab679a — restore strict committed-lock CI verification
 
 ## Stabilization commits
 
@@ -397,9 +413,9 @@ Key commits from the stabilization pass include:
 
 ## Final audit status
 
-**Stabilized in source control, but not yet externally production-certified.**
+**Stabilized in source control; CI verification evidence is now substantially stronger, but external production certification is still pending.**
 
-The next gate is not another subsystem. It is the real deployment verification pass:
+The next gate is not another subsystem. It is the strict committed-lock CI run followed by the real deployment verification pass:
 
 1. install dependencies from the actual repository checkout
 2. run literal npm test
