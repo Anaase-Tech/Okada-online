@@ -77,26 +77,7 @@ jobs:
           cache: npm
           cache-dependency-path: web-app/package-lock.json
 
-      - name: Regenerate frontend lockfile for verification
-        run: npm install --legacy-peer-deps --package-lock-only
-
-      - name: Report frontend lockfile drift
-        run: |
-          if git diff --quiet -- web-app/package-lock.json; then
-            echo 'Frontend package-lock.json is synchronized with package.json'
-          else
-            echo 'Frontend package-lock.json is out of sync with package.json; CI generated a synchronized lockfile for this verification run.'
-            git diff --stat -- web-app/package-lock.json
-          fi
-
-      - name: Upload generated frontend lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: okada-v4-generated-frontend-lockfile
-          path: web-app/package-lock.json
-          if-no-files-found: error
-
-      - name: Install frontend dependencies from generated lockfile
+      - name: Install frontend dependencies
         run: npm ci --legacy-peer-deps
 
       - name: Build web app
