@@ -18,6 +18,8 @@
 // ╚══════════════════════════════════════════════════════════════════╝
 
 const functions = require('firebase-functions');
+const { defineSecret } = require('firebase-functions/params');
+const PAYSTACK_SECRET = defineSecret('PAYSTACK_SECRET');
 const admin     = require('firebase-admin');
 const express   = require('express');
 const cors      = require('cors');
@@ -1876,7 +1878,7 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
       return fail(res, 400, 'Ride does not have a payable stored fare');
     }
 
-    const paystackSecret = functions.config().paystack?.secret;
+    const paystackSecret = PAYSTACK_SECRET.value();
     if (!paystackSecret) {
       console.error('Paystack secret is not configured');
       return fail(res, 500, 'Payments are not configured yet');
@@ -1944,7 +1946,7 @@ app.get('/payments/verify/:ref', requireAuth, async (req, res) => {
       return fail(res, 400, 'Unsupported payment record');
     }
 
-    const paystackSecret = functions.config().paystack?.secret;
+    const paystackSecret = PAYSTACK_SECRET.value();
     if (!paystackSecret) return fail(res, 500, 'Payments are not configured yet');
 
     const response = await axios.get(
@@ -1996,7 +1998,7 @@ app.get('/payments/verify/:ref', requireAuth, async (req, res) => {
 
 app.post('/payments/webhook', async (req, res) => {
   try {
-    const paystackSecret = functions.config().paystack?.secret || '';
+    const paystackSecret = PAYSTACK_SECRET.value() || '';
     const sig = req.headers['x-paystack-signature'] || '';
     const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body));
     const expected = crypto.createHmac('sha512', paystackSecret).update(body).digest('hex');
@@ -2676,7 +2678,9 @@ app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found' }));
 // ════════════════════════════════════════════════════════════
 // EXPORTS
 // ════════════════════════════════════════════════════════════
-exports.api = functions.https.onRequest(app);
+exports.api = functions
+  .runWith({ secrets: [PAYSTACK_SECRET] })
+  .https.onRequest(app);
 
 // Reset daily earnings — midnight Accra time
 exports.resetDailyEarnings = functions.pubsub
