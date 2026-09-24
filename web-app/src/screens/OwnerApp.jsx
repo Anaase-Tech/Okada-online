@@ -14,15 +14,34 @@ import { DriveToOwn } from "./DriveToOwn";
 export function OwnerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState("dashboard");
-  const [stats,setStats]=useState({todayRevenue:450,weekRevenue:2850,totalRevenue:18200,activeDrivers:2,totalDrivers:3,fuelPool:180,maintenancePool:120});
-  const [wallet,setWallet]=useState({available:8540,pending:1820});
+  const [stats,setStats]=useState({today:0,week:0,total:0,activeDrivers:0,totalDrivers:0,pools:{fuel:0,maintenance:0}});
+  const [wallet,setWallet]=useState({available:0,pending:0});
   const [showCode,setShowCode]=useState(false);
   const [showWithdraw,setShowWithdraw]=useState(false);
-  const [showKyc,setShowKyc]=useState(!user.kycData&&!user.ghanaCard);
+  // Real accounts carry kycStatus ('pending'|'submitted'|'approved'|
+  // 'rejected'); only demo accounts carry kycData/ghanaCard. The old
+  // check here (!user.kycData && !user.ghanaCard) is always true for a
+  // real account regardless of actual status, since those fields never
+  // exist on one — meaning every real owner got sent back through the
+  // full KYC flow on every single login, even after being approved.
+  const [showKyc,setShowKyc]=useState(
+    user.kycStatus ? user.kycStatus==="pending" : !(user.kycData||user.ghanaCard)
+  );
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
-  useEffect(()=>{api.getOwnerDash(user.id).then(r=>setStats(r.data||stats)).catch(()=>{});},[]);
+  useEffect(()=>{
+    api.getOwnerDash(user.id).then(r=>{
+      const d = r.data||{};
+      setStats({
+        today: d.today||0, week: d.week||0, total: d.total||0,
+        activeDrivers: d.activeDrivers||0, totalDrivers: d.totalDrivers||0,
+        verifiedDrivers: d.verifiedDrivers||0,
+        pools: d.pools||{fuel:0,maintenance:0},
+      });
+      setWallet(d.wallet||{available:0,pending:0});
+    }).catch(err=>console.warn("Owner dashboard fetch failed:",err));
+  },[user.id]);
 
   if(showKyc) return <KycVerify role="owner" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
@@ -88,14 +107,14 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
               )}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <StatCard icon="💰" label="Today (50%)" value={"GH₵"+stats.todayRevenue} color="green" dark={dark}/>
-              <StatCard icon="📅" label="This Week" value={"GH₵"+stats.weekRevenue} color="blue" dark={dark}/>
-              <StatCard icon="🏆" label="Total Earned" value={"GH₵"+stats.totalRevenue} color="purple" dark={dark}/>
+              <StatCard icon="💰" label="Today (50%)" value={"GH₵"+stats.today.toFixed(2)} color="green" dark={dark}/>
+              <StatCard icon="📅" label="This Week" value={"GH₵"+stats.week.toFixed(2)} color="blue" dark={dark}/>
+              <StatCard icon="🏆" label="Total Earned" value={"GH₵"+stats.total.toFixed(2)} color="purple" dark={dark}/>
               <StatCard icon="👥" label="Drivers" value={`${stats.activeDrivers}/${stats.totalDrivers}`} sub="Online/Total" color="yellow" dark={dark}/>
             </div>
             <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
-              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH₵{stats.totalRevenue})</h3>
-              {[["Your share (50%)","GH₵"+(stats.totalRevenue*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH₵"+(stats.totalRevenue*0.25).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH₵"+(stats.totalRevenue*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH₵"+(stats.totalRevenue*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
+              <h3 className={`font-bold mb-3 ${t.text}`}>Revenue Split (GH₵{stats.total.toFixed(2)})</h3>
+              {[["Your share (50%)","GH₵"+(stats.total*0.50).toFixed(0),"#16a34a"],["Driver earnings (25%)","GH₵"+(stats.total*0.25).toFixed(0),"#2563eb"],["Fuel pool (5%)","GH₵"+(stats.total*0.05).toFixed(0),"#ca8a04"],["Maintenance (5%)","GH₵"+(stats.total*0.05).toFixed(0),"#ea580c"],["Platform (15%)","GH₵"+(stats.total*0.15).toFixed(0),"#9ca3af"]].map(([l,v,c])=>(
                 <div key={l} style={{display:"flex",justifyContent:"space-between",paddingBottom:8,borderBottom:`1px solid ${dark?"#374151":"#e5e7eb"}`,marginBottom:8,fontSize:13}}>
                   <span className={t.sub}>{l}</span><span style={{fontWeight:700,color:c}}>{v}</span>
                 </div>
@@ -109,7 +128,12 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
         {view==="fleet"&&(
           <div style={{padding:16}}>
             <h2 className={`font-black text-lg mb-4 ${t.text}`}>🚗 My Fleet</h2>
-            {(user.vehicles||[{id:"v1",type:"okada",plate:"ER-1234-26"},{id:"v2",type:"car",plate:"ER-5678-26"}]).map(v=>(
+            {(user.vehicles||[]).length===0?(
+              <div style={{textAlign:"center",padding:"48px 0"}}>
+                <div style={{fontSize:48,marginBottom:12}}>🚗</div>
+                <p className={t.sub}>No vehicles added yet</p>
+              </div>
+            ):(user.vehicles||[]).map(v=>(
               <div key={v.id} className={`${t.card} rounded-2xl p-4 border ${t.bdr} mb-3`}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
                   <span style={{fontSize:32}}>{VEHICLES.find(x=>x.id===v.type)?.icon||"🏍️"}</span>
@@ -123,13 +147,13 @@ export function OwnerApp({user,onLogout,dark,setDark}) {
         {view==="pools"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
             <h2 className={`font-black text-lg ${t.text}`}>⛽ Fuel & Maintenance Pools</h2>
-            {[{icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.fuelPool,color:"#ca8a04",border:"border-yellow-500",items:["🔒 Locked — fuel stations only","⛽ Driver code at pump","📊 Full transaction log"]},
-              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.maintenancePool,color:"#ea580c",border:"border-orange-500",items:["🔧 Service due alerts","✅ You approve payments","📱 Direct to garages"]}
+            {[{icon:<Fuel style={{width:20,height:20,color:"#ca8a04"}}/>,label:"Fuel Pool",val:stats.pools.fuel,color:"#ca8a04",border:"border-yellow-500",items:["🔒 Locked — fuel stations only","⛽ Driver code at pump","📊 Full transaction log"]},
+              {icon:<Wrench style={{width:20,height:20,color:"#ea580c"}}/>,label:"Maintenance Pool",val:stats.pools.maintenance,color:"#ea580c",border:"border-orange-500",items:["🔧 Service due alerts","✅ You approve payments","📱 Direct to garages"]}
             ].map(p=>(
               <div key={p.label} className={`${t.card} rounded-2xl p-4 border-2 ${p.border}`}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>{p.icon}<span className={`font-black ${t.text}`}>{p.label}</span></div>
-                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH₵{p.val}</span>
+                  <span style={{fontSize:22,fontWeight:900,color:p.color}}>GH₵{p.val.toFixed(2)}</span>
                 </div>
                 <div className={`rounded-xl p-3 text-xs ${dark?"bg-gray-700":"bg-gray-50"}`}>
                   {p.items.map(i=><p key={i} className={t.text} style={{marginBottom:3}}>{i}</p>)}
