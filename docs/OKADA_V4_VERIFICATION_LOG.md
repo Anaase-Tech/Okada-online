@@ -211,3 +211,29 @@ A Vercel integration is available to inspect deployment details directly, but it
 ## Certification effect
 
 The GitHub source-control verification gate remains passed. Vercel status evidence exists, but direct deployment inspection is blocked by the connected-account scope. Firebase and Paystack live-service verification remain outstanding as previously documented.
+
+
+## Paystack Secret Manager migration — 2026-09-24
+
+### Source change
+- Commit: `34710602e08a406d50cce0ab8d19584dd26b1b1b`
+- Result: **source migration committed**
+- Replaced all active `functions.config().paystack.secret` reads with the Secret Manager parameter `PAYSTACK_SECRET`.
+- Bound `PAYSTACK_SECRET` to the exported HTTP API function.
+- Preserved the existing Paystack initialization, verification, webhook, and Journey settlement behavior.
+
+### CI guard
+- Commit: `35c1a8dceabf211354ceb5550c27f7b16ecac07b`
+- Added a source check that fails when active JavaScript files contain `functions.config()`.
+- Backup files remain excluded from the check to avoid matching retained historical copies.
+
+### Documentation
+- Commit: `a200aacb8a56b3ee8572934c6cc43ce2fe3f9389`
+- Added `docs/OKADA_V4_PAYSTACK_SECRET_MIGRATION.md` with the operator procedure and production validation requirements.
+
+### External verification status
+- The new Secret Manager value has **not** been set by this workspace.
+- Firebase Functions have **not** been deployed after the migration.
+- A real Paystack transaction and signed webhook have **not** been executed.
+- The old Runtime Config value must remain available until the migrated deployment and smoke tests are confirmed.
+
