@@ -53,8 +53,11 @@ This log records external verification results separately from the production au
 ### Run #5
 - Workflow: Okada Online V4 Verification
 - Commit: c48faf435552ac733cd1adb548ccf4066d1cb19a
-- At the time of this log entry: queued
-- Required follow-up evidence: backend artifact scan result, frontend lock generation/install result, frontend production build result, and generated lockfile artifact.
+- Result: **success**
+- Backend verification passed.
+- Frontend lockfile regeneration, dependency installation, and CRA production build passed.
+- Artifact: `okada-v4-generated-frontend-lockfile` (artifact ID 10790576455).
+- This was a temporary verification bridge because the committed frontend lockfile was still stale at that point.
 
 ## Other verified source-control evidence
 
@@ -75,3 +78,68 @@ This log records external verification results separately from the production au
 
 A successful source audit alone does not certify production readiness. Certification remains blocked until the repository has a clean verification run and the external deployment/payment gates listed in the production audit are completed.
 
+
+
+## 2026-09-24 — Strict CI gate closed
+
+### Run #6
+- Workflow: Okada Online V4 Verification
+- Commit: 352169e1559cb9679bc172f0b8e416725b1ba700
+- Result: **success**
+- Both backend verification and the bridge frontend production build passed.
+
+### Run #7
+- Workflow: Okada Online V4 Verification
+- Commit: c7e1440f97efaa2b9111c7005c57f2bc9aff093c
+- Result: **success**
+- Both backend verification and the bridge frontend production build passed.
+- The run confirmed that the source-controlled synchronized frontend lockfile could be used in the bridge workflow.
+
+### Frontend dependency reconciliation
+- Commit: c7e1440f97efaa2b9111c7005c57f2bc9aff093c
+- Synchronized `web-app/package-lock.json` with the `@react-google-maps/api` dependency graph reported by npm.
+- No application feature behavior was intentionally changed by this commit.
+
+### Strict workflow restore
+- Commit: 5e254ff34c6ee06ada17cc992d405a2a3cab679a
+- Restored strict frontend `npm ci --legacy-peer-deps` verification.
+- Removed the temporary CI lockfile-generation bridge.
+
+### Run #8 — final source-control CI verification
+- Workflow: Okada Online V4 Verification
+- Commit: 5e254ff34c6ee06ada17cc992d405a2a3cab679a
+- Result: **success**
+- Backend:
+  - dependency installation: passed
+  - `npm test`: passed
+  - Functions package validation: passed
+  - Firebase deployment structure validation: passed
+  - forbidden legacy payment/auth artifact check: passed
+- Frontend:
+  - committed-lock `npm ci --legacy-peer-deps`: passed
+  - CRA production build: passed
+
+This is the first clean verification result using the committed repository lockfile rather than a CI-generated replacement.
+
+### Security scan correction
+- Runs #1/#3/#4 initially failed because the guard matched explanatory comments containing the word Twilio and the retained `index.js.bak2` backup.
+- The guard was narrowed to actual runtime imports, environment assignments, secret-key literals, and package dependencies. The refined guard passed in Runs #5–#8.
+
+### Dependency audit observation
+- Backend dependency installation reported 31 npm audit findings in the runner: 3 low, 14 moderate, 12 high, and 2 critical.
+- This is recorded as an audit observation only. No automatic `npm audit fix` or breaking dependency upgrade was applied during stabilization.
+
+## Current certification state
+
+The source-control CI gate is **passed** on commit 5e254ff34c6ee06ada17cc992d405a2a3cab679a.
+
+Still outstanding for production certification:
+- Firebase Functions deployment
+- deployed API smoke tests
+- Firestore emulator contention test
+- real Paystack sandbox/live payment
+- real Paystack webhook delivery
+- production browser/callback recovery test
+- eventual migration away from deprecated `functions.config()` before the documented March 2027 deadline
+
+No new major Mobility OS subsystem should be treated as production-ready until those external checks are completed.

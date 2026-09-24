@@ -343,6 +343,7 @@ The executed 26-case harness used the current GitHub branch source and the same 
 - Run #6 — commit 352169e1559cb9679bc172f0b8e416725b1ba700 — successful repeat of the same bridge verification.
 - The frontend package lock was then synchronized in source control by c7e1440f97efaa2b9111c7005c57f2bc9aff093c.
 - The workflow was restored to strict committed-lock verification by 5e254ff34c6ee06ada17cc992d405a2a3cab679a.
+- Strict Run #8 on that commit passed end-to-end: backend verification and the CRA production build both completed successfully.
 
 ### Still not executed here
 
@@ -413,9 +414,9 @@ Key commits from the stabilization pass include:
 
 ## Final audit status
 
-**Stabilized in source control; CI verification evidence is now substantially stronger, but external production certification is still pending.**
+**Stabilized in source control and passed the strict repository CI verification gate; external production certification is still pending.**
 
-The next gate is not another subsystem. It is the strict committed-lock CI run followed by the real deployment verification pass:
+The next gate is not another subsystem. The strict committed-lock CI gate is now passed; the remaining gate is the real deployment and live-service verification pass:
 
 1. install dependencies from the actual repository checkout
 2. run literal npm test
