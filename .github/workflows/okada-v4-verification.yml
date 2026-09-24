@@ -1,0 +1,79 @@
+name: Okada Online V4 Verification
+
+on:
+  push:
+    branches:
+      - v4-mobility-os
+  pull_request:
+    branches:
+      - v4-mobility-os
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend tests + deployment structure
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/functions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Run backend tests
+        run: npm test
+
+      - name: Validate Functions package
+        run: |
+          node -e "const p=require('./package.json'); if(p.main!=='v4Entry.js') process.exit(1); if(p.engines?.node!=='20') process.exit(1); console.log('main=',p.main,'node=',p.engines.node)"
+
+      - name: Validate Firebase deployment structure
+        working-directory: backend
+        run: |
+          node -e "const fs=require('fs'); const f=JSON.parse(fs.readFileSync('firebase.json','utf8')); if(f.functions?.source!=='functions') process.exit(1); if(f.functions?.runtime!=='nodejs20') process.exit(1); if(f.firestore?.rules!=='firestore.rules') process.exit(1); if(f.firestore?.indexes!=='firestore.indexes.json') process.exit(1); console.log('firebase.json structure OK')"
+          node -e "JSON.parse(require('fs').readFileSync('firestore.indexes.json','utf8')); console.log('firestore.indexes.json valid JSON')"
+
+      - name: Check forbidden legacy payment/auth artifacts
+        run: |
+          if grep -RniE 'Twilio|TWILIO|GROQ_API_KEY|sk_(live|test)_' . --exclude-dir=node_modules --exclude='package-lock.json'; then
+            echo 'Forbidden runtime secret/provider artifact detected'
+            exit 1
+          fi
+
+  frontend-build:
+    name: Frontend production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build web app
+        env:
+          CI: "false"
+        run: npm run build
