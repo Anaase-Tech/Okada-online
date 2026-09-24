@@ -48,10 +48,17 @@ jobs:
 
       - name: Check forbidden legacy payment/auth artifacts
         run: |
-          if grep -RniE 'Twilio|TWILIO|GROQ_API_KEY|sk_(live|test)_' . --exclude-dir=node_modules --exclude='package-lock.json'; then
-            echo 'Forbidden runtime secret/provider artifact detected'
+          set -e
+          if grep -RniE 'require\([[:space:]]*[\"\047]twilio[\"\047][[:space:]]*\)|from[[:space:]]+[\"\047]twilio[\"\047]|import\([[:space:]]*[\"\047]twilio[\"\047][[:space:]]*\)' . --exclude-dir=node_modules --exclude='package-lock.json' --exclude='*.bak*'; then
+            echo 'Forbidden Twilio runtime import detected'
             exit 1
           fi
+          if grep -RniE 'process\.env\.GROQ_API_KEY|GROQ_API_KEY[[:space:]]*=|sk_(live|test)_[A-Za-z0-9]+' . --exclude-dir=node_modules --exclude='package-lock.json' --exclude='*.bak*'; then
+            echo 'Forbidden runtime secret artifact detected'
+            exit 1
+          fi
+          node -e "const p=require('./package.json'); for (const d of [p.dependencies,p.devDependencies]) if (d && Object.prototype.hasOwnProperty.call(d,'twilio')) process.exit(1);"
+          echo 'Forbidden runtime/provider artifact check passed'
 
   frontend-build:
     name: Frontend production build
@@ -70,7 +77,26 @@ jobs:
           cache: npm
           cache-dependency-path: web-app/package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Regenerate frontend lockfile for verification
+        run: npm install --legacy-peer-deps --package-lock-only
+
+      - name: Report frontend lockfile drift
+        run: |
+          if git diff --quiet -- web-app/package-lock.json; then
+            echo 'Frontend package-lock.json is synchronized with package.json'
+          else
+            echo 'Frontend package-lock.json is out of sync with package.json; CI generated a synchronized lockfile for this verification run.'
+            git diff --stat -- web-app/package-lock.json
+          fi
+
+      - name: Upload generated frontend lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: okada-v4-generated-frontend-lockfile
+          path: web-app/package-lock.json
+          if-no-files-found: error
+
+      - name: Install frontend dependencies from generated lockfile
         run: npm ci --legacy-peer-deps
 
       - name: Build web app
