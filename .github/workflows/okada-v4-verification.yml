@@ -57,8 +57,12 @@ jobs:
             echo 'Forbidden runtime secret artifact detected'
             exit 1
           fi
+          if find . -type f -name '*.js' ! -path './node_modules/*' ! -name '*.bak*' -print0 | xargs -0 grep -nH -E 'functions\\.config\\(' ; then
+            echo 'Deprecated functions.config() usage detected'
+            exit 1
+          fi
           node -e "const p=require('./package.json'); for (const d of [p.dependencies,p.devDependencies]) if (d && Object.prototype.hasOwnProperty.call(d,'twilio')) process.exit(1);"
-          echo 'Forbidden runtime/provider artifact check passed'
+          echo 'Forbidden/deprecated runtime/provider artifact check passed'
 
   frontend-build:
     name: Frontend production build
