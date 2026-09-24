@@ -143,3 +143,17 @@ Still outstanding for production certification:
 - eventual migration away from deprecated `functions.config()` before the documented March 2027 deadline
 
 No new major Mobility OS subsystem should be treated as production-ready until those external checks are completed.
+
+
+## Final documentation reconciliation — 2026-09-24
+
+- Branch head before this documentation-only push: d5bd240b24e99f95109c746389fa2a725d6a65bc.
+- Commit d5bd240b24e99f95109c746389fa2a725d6a65bc contains only the audit/log documentation update produced after the strict CI verification on 5e254ff34c6ee06ada17cc992d405a2a3cab679a.
+- No application/runtime code was intentionally changed by the d5bd documentation commit.
+- The strict workflow run #9 passed on its parent documentation snapshot f8c3b3648d5e728c61a7181210ba3cf7430fc8e0.
+- The branch was advanced with a Git ref update for documentation reconciliation, so that ref move itself did not emit a new push-triggered workflow run.
+- This final documentation-only push exists to produce a normal push-triggered verification result on the branch tip and close that traceability gap.
+
+Current branch comparison at this point:
+- `v4-mobility-os`: 136 commits ahead of `main`
+- `main`: 0 commits ahead of `v4-mobility-os`
