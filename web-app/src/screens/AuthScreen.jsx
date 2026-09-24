@@ -86,6 +86,22 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
 
     try{
       const res=await api.req("POST","/auth/create-profile",{phone,role,name:name||"User",ownerCode:role==="driver"?owner:undefined});
+
+      // Submit any KYC data collected during onboarding now that a real
+      // account and user id exist. KycVerify only ever collects this
+      // locally — it never had a real userId to submit against before
+      // this account was created, so this is the first point it can
+      // actually reach the backend.
+      if(kycData){
+        try{
+          if(kycData.type==="passport") await api.verifyPassport(res.user.id, role, kycData.docNumber);
+          else await api.verifyGhanaCard(res.user.id, role, kycData.docNumber);
+        }catch(kycErr){
+          console.warn("KYC submission failed:", kycErr);
+          toast$(`Signed in, but KYC submission failed (${kycErr.message}) — resubmit from your profile`,"error");
+        }
+      }
+
       onLogin(res.user,api.token,role);
       setLoading(false);
       return;
@@ -120,7 +136,7 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
   if(step==="kyc"){
     return <KycVerify role={role} dark={dark} onVerified={(data)=>{
       setKycData(data);setStep("phone");
-      toast$(`${data.type==="ghana"?"Ghana Card":"Passport"} submitted ✅ Now get your OTP`);
+      toast$(`${data.type==="ghana"?"Ghana Card":"Passport"} details saved ✅ Now get your OTP`);
     }}/>;
   }
 
