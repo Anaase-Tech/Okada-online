@@ -4,14 +4,14 @@
 
 - Repository: Anaase-Tech/Okada-online
 - Branch: v4-mobility-os
-- Audited branch HEAD after stabilization: 0347fc48d25d71a1fadd77997be62dddf85c7cbb
+- Audited branch HEAD after stabilization: ddc62168b75b10ff25c6e9fe7f1474a0167c5b70
 - Baseline used for the stabilization pass: b856344c79e0a7141880bd053372f52cfaa3860c
 - Current branch relation to main at audit close: ahead of main, 0 commits behind
 - V4 remains an extension layer over the legacy Express application through v4Entry.js.
 
 ## Audit conclusion
 
-The high-risk Journey payment, transit inventory, VIP Journey bypass, legacy identity/authorization, and stale deployment-document issues were found and patched.
+The high-risk Journey payment, transit inventory, VIP Journey bypass, legacy identity/authorization, and stale deployment-document issues were found and patched. During the verification gate, the two latest frontend-only KYC fixes from main were also merged into V4 via PR #2, preserving the newer onboarding behavior.
 
 The branch is **not certified as production-deployable yet** because this environment could not execute a real Firebase deployment, a real Paystack transaction/webhook, a full CRA production build, or a live Firestore-emulator contention test. The code and configuration are prepared for those final external verification steps.
 
@@ -332,7 +332,7 @@ A literal npm test invocation against a checked-out repository could not be perf
 
 The executed 26-case harness used the current GitHub branch source and the same test files' assertions. It is therefore evidence about the checked-in source, but it is not a substitute for a local/emulator npm test run.
 
-## Build/deployment limitation
+## Verification automation
 
 Not executed here:
 
@@ -360,6 +360,11 @@ These need to be run from the actual deployment environment.
 6. A real Firestore emulator contention test remains outstanding.
 
 7. A complete production Paystack payment/webhook transaction remains outstanding.
+
+## Verification-gate commits
+
+- 9db278b3b4fd0d102ec34400e5a053a2d15a26d9 — add V4 verification workflow
+- ddc62168b75b10ff25c6e9fe7f1474a0167c5b70 — merge latest main KYC onboarding fixes into V4
 
 ## Stabilization commits
 
