@@ -28,7 +28,15 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   const [showWithdraw,setShowWithdraw]=useState(false);
   const [showFuelCode,setShowFuelCode]=useState(false);
   const [fuelCode]=useState("FUEL-"+Math.random().toString(36).substr(2,4).toUpperCase()+"-"+Math.random().toString(36).substr(2,4).toUpperCase());
-  const [showKyc,setShowKyc]=useState(!user.kycData&&!user.ghanaCard);
+  // Real accounts carry kycStatus ('pending'|'submitted'|'approved'|
+  // 'rejected'); only demo accounts carry kycData/ghanaCard. The old
+  // check here (!user.kycData && !user.ghanaCard) is always true for a
+  // real account regardless of actual status, since those fields never
+  // exist on one — meaning every real driver got sent back through the
+  // full KYC flow on every single login, even after being approved.
+  const [showKyc,setShowKyc]=useState(
+    user.kycStatus ? user.kycStatus==="pending" : !(user.kycData||user.ghanaCard)
+  );
   const [toast,setToast]=useState(null);
   const toast$=(msg,type="success")=>setToast({msg,type});
 
@@ -383,8 +391,10 @@ export function DriverApp({user,onLogout,dark,setDark}) {
               <h2 className={`text-xl font-black ${t.text}`}>{user.name}</h2>
               <p className={t.sub}>{user.phone}</p>
               <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
-                <Badge color="green">✅ KYC Verified</Badge>
-                <Badge color="blue">🪪 Ghana Card</Badge>
+                <Badge color={user.kycStatus==="approved"?"green":user.kycStatus==="rejected"?"red":"yellow"}>
+                  {user.kycStatus==="approved"?"✅ KYC Verified":user.kycStatus==="rejected"?"❌ KYC Rejected":"⏳ KYC "+(user.kycStatus||"pending")}
+                </Badge>
+                {user.vehicleStatus&&<Badge color={user.vehicleStatus==="approved"?"green":"yellow"}>{user.vehicleStatus==="approved"?"🚗 Vehicle Verified":"🚗 Vehicle "+user.vehicleStatus}</Badge>}
               </div>
               {user.ownerCode&&<p className={`text-xs mt-2 ${t.sub}`}>Owner: <span style={{fontFamily:"monospace",color:"#16a34a"}}>{user.ownerCode}</span></p>}
             </div>
