@@ -32,7 +32,15 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
   const [payMethod,setPayMethod]=useState(null);
   const [momoPhone,setMomoPhone]=useState(user.phone||"+233");
   const [email,setEmail]=useState("");
-  const [showKyc,setShowKyc]=useState(!user.kycData&&!user.ghanaCard);
+  // Real accounts carry kycStatus ('pending'|'submitted'|'approved'|
+  // 'rejected'); only demo accounts carry kycData/ghanaCard. The old
+  // check here (!user.kycData && !user.ghanaCard) is always true for a
+  // real account regardless of actual status, since those fields never
+  // exist on one — meaning every real passenger got sent back through
+  // the full KYC flow on every single login, even after being approved.
+  const [showKyc,setShowKyc]=useState(
+    user.kycStatus ? user.kycStatus==="pending" : !(user.kycData||user.ghanaCard)
+  );
   const toast$=(msg,type="success")=>setToast({msg,type});
 
   // Smart pricing: distance + time + surge + vehicle type
@@ -308,22 +316,41 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   <p className={`text-xs ${t.sub}`}>GH₵{fare.total} deducted from your Pay Later limit. Auto-charged to MoMo in 7 days.</p>
                 </div>
               )}
-              <button disabled={!payMethod} onClick={async()=>{
+              <button disabled={!payMethod||payStatus==="processing"} onClick={async()=>{
                 if(!payMethod) return;
                 if(payMethod==="cash"){
                   setPayStatus("awaiting-driver");
                   setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$("Cash confirmed by driver ✅");setTimeout(()=>setPayStatus("idle"),2500);},4000);
                   return;
                 }
+                // Both real payment paths below now only report success and
+                // reset the ride if the backend call actually succeeded —
+                // previously the error was swallowed and a fake "paid"
+                // toast fired regardless, including when Pay Later's
+                // required `amount` field was missing entirely and the
+                // request always failed server-side.
                 if(payMethod==="paylater"){
-                  try{await api.payLaterRequest("ride_"+Date.now(),user.id);}catch(err){ console.warn("Error:",err); }
-                  setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");
-                  toast$(`GH₵${fare.total} deferred — Pay Later used ⏳`);setTimeout(()=>setPayStatus("idle"),3000);
+                  setPayStatus("processing");
+                  try{
+                    await api.payLaterRequest("ride_"+Date.now(), user.id, fare.total);
+                    setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);
+                    toast$(`GH₵${fare.total} deferred — Pay Later used ⏳`);setTimeout(()=>setPayStatus("idle"),3000);
+                  }catch(err){
+                    toast$(`Pay Later failed: ${err.message}`,"error");
+                    setPayStatus("selecting");
+                  }
                   return;
                 }
                 setPayStatus("processing");
-                try{await api.initPayment("ride_"+Date.now(),fare.total,email||user.phone+"@okada.gh",momoPhone);}catch(err){ console.warn("Error:",err); }
-                setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$(`GH₵${fare.total} paid via ${payMethod.toUpperCase()} ✅`);setTimeout(()=>setPayStatus("idle"),3000);},2500);
+                try{
+                  const res = await api.initPayment("ride_"+Date.now(),fare.total,email||user.phone+"@okada.gh",momoPhone);
+                  if(res?.authorizationUrl) window.open(res.authorizationUrl,"_blank");
+                  setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);
+                  toast$(`GH₵${fare.total} payment started via ${payMethod.toUpperCase()} ✅`);setTimeout(()=>setPayStatus("idle"),3000);
+                }catch(err){
+                  toast$(`Payment failed: ${err.message}`,"error");
+                  setPayStatus("selecting");
+                }
               }} style={{width:"100%",padding:"14px",background:!payMethod?"#9ca3af":"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:!payMethod?0.5:1}}>
                 {payStatus==="processing"?<><Spin/>Processing…</>:payMethod==="cash"?`Notify Driver — GH₵${fare.total} Cash`:payMethod==="paylater"?`Defer GH₵${fare.total} — Pay Later`:`Pay GH₵${fare.total} via Paystack 🔒`}
               </button>
@@ -381,9 +408,11 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
               <h2 className={`text-xl font-black ${t.text}`}>{user.name}</h2>
               <p className={t.sub}>{user.phone}</p>
               <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
-                <Badge color="green">✅ KYC Verified</Badge>
+                <Badge color={user.kycStatus==="approved"?"green":user.kycStatus==="rejected"?"red":"yellow"}>
+                  {user.kycStatus==="approved"?"✅ KYC Verified":user.kycStatus==="rejected"?"❌ KYC Rejected":"⏳ KYC "+(user.kycStatus||"pending")}
+                </Badge>
                 {user.isInternational&&<Badge color="indigo">🌍 {user.passport?.country}</Badge>}
-                {user.payLater?.eligible&&<Badge color="purple">⏳ Pay Later</Badge>}
+                {user.payLater&&!user.payLater.suspended&&<Badge color="purple">⏳ Pay Later</Badge>}
               </div>
             </div>
             <button onClick={onLogout} style={{width:"100%",padding:"12px",border:"1px solid #f87171",color:"#ef4444",borderRadius:16,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
