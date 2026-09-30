@@ -115,7 +115,7 @@ function createTrotroAdminRouter({ express, db, admin, requireAuth, ok, fail, re
     } catch (_e) { return fail(res, 500, 'Unable to update trip status'); }
   });
 
-  router.post('/verify/:type/:id/approve', requireAdmin, async (req, res) => {
+  router.post('/verify/:type/:id/approve', requireAuth, requireAdmin, async (req, res) => {
     try {
       const { type, id } = req.params;
       const collection = { operator: 'trotroOperators', vehicle: 'trotroVehicles' }[type];
