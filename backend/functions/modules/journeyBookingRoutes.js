@@ -1,6 +1,6 @@
 'use strict';
 
-const functions = require('firebase-functions');
+const { defineSecret } = require('firebase-functions/params');
 const axios = require('axios');
 const { makeJourneyCode, validateConnectedLegs } = require('./journeyBookingEngine');
 const { buildConnectionMonitor } = require('./journeyConnectionEngine');
@@ -9,6 +9,19 @@ const {
   settleSuccessfulJourneyPayment,
   settleFailedJourneyPayment,
 } = require('./journeyPaymentService');
+
+// Same Secret Manager parameter index.js declares (defineSecret dedups by
+// name - see firebase-functions/lib/params/index.js's registerParam - so
+// this refers to the identical underlying secret, not a second one).
+// PASS 1/PASS 2/PASS 3 found this file previously read the deprecated
+// Gen-1 runtime config API (the old `functions` object's `.config()`
+// method, accessed as paystack/secret) instead: a mechanism the Secret
+// Manager migration never touched, and a latent single point of failure
+// if that legacy config value were ever cleared. The old `const functions = require('firebase-functions')` import
+// is removed along with it - it was only ever used for that one deprecated
+// call, confirmed by searching this file for every other `functions.` use
+// before removing it.
+const PAYSTACK_SECRET = defineSecret('PAYSTACK_SECRET');
 
 function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok }) {
   const router = express.Router();
@@ -174,7 +187,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         return fail(res, 409, 'Journey is not awaiting payment');
       }
 
-      const configuredSecret = typeof functions !== 'undefined' ? functions.config?.().paystack?.secret : null;
+      const configuredSecret = PAYSTACK_SECRET.value() || null;
       if (!configuredSecret) return fail(res, 503, 'Journey payments are not configured');
 
       const amount = Number(journey.totalFare || 0);
@@ -376,7 +389,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         });
       }
 
-      const configuredSecret = typeof functions !== 'undefined' ? functions.config?.().paystack?.secret : null;
+      const configuredSecret = PAYSTACK_SECRET.value() || null;
       if (!configuredSecret) return fail(res, 503, 'Journey payments are not configured');
 
       const storedReference = text(journey.paymentReference, 160);
