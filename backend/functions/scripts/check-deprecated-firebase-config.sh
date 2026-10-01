@@ -25,8 +25,8 @@ grep_status=0
 # --exclude on this GNU grep causes --include to be silently ignored
 # (confirmed empirically while writing this script - it started matching
 # this very .sh file despite --include='*.js'). --include='*.js' alone
-# already skips every backup file in this repo, since none of them end in
-# a literal ".js".
+# already skips every backup file in this repo (index.js.bak2,
+# App.js.backup, etc.), since none of them end in a literal ".js".
 matches="$(grep -RniE --exclude-dir=node_modules --include='*.js' 'functions\.config' "$scan_dir")" || grep_status=$?
 
 if [ "$grep_status" -eq 0 ]; then

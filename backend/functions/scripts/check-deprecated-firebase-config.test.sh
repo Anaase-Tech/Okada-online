@@ -8,7 +8,9 @@
 #
 # This test exercises the real check-deprecated-firebase-config.sh script
 # (not a reimplementation) against disposable fixtures, so a future
-# regression in the guard's own logic is caught automatically.
+# regression in the guard's own logic is caught automatically. Scripts are
+# invoked through `bash` so this works whether or not the executable bit
+# survived the checkout/push path.
 
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +22,7 @@ fail=0
 
 assert_exit() {
   local desc="$1" expected="$2" dir="$3"
-  "$guard" "$dir" > "$work/out.log" 2>&1
+  bash "$guard" "$dir" > "$work/out.log" 2>&1
   local actual=$?
   if [ "$actual" -eq "$expected" ]; then
     echo "PASS: $desc (exit $actual)"
@@ -53,16 +55,14 @@ mkdir -p "$work/caseD"
 echo "functions.config()" > "$work/caseD/old.js.bak2"
 assert_exit "Case D: backup files are skipped" 0 "$work/caseD"
 
-# Extra case: the real repository must still be caught as non-clean right
-# now (journeyBookingRoutes.js) - this is a known, tracked, still-open
-# finding (PASS 4 correction 3), not a false positive in the guard itself.
-# This assertion intentionally documents current repo state rather than
-# hiding it.
+# Informational only: report the real repository's current state. This
+# never fails the test on a "found" result (exit 1) - that is the guard
+# doing its job on real code - and only fails if the guard itself errors.
 repo_root="$(cd "$here/../../.." && pwd)"
-"$guard" "$repo_root/backend/functions" > "$work/repo.log" 2>&1
+bash "$guard" "$repo_root/backend/functions" > "$work/repo.log" 2>&1
 repo_exit=$?
 if [ "$repo_exit" -eq 1 ]; then
-  echo "INFO: real repository currently still contains functions.config usage (expected until correction 3 lands) - guard correctly detects it"
+  echo "INFO: real repository contains functions.config usage - guard correctly detects it"
 elif [ "$repo_exit" -eq 0 ]; then
   echo "INFO: real repository is clean of functions.config usage"
 else
