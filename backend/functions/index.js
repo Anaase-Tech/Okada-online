@@ -61,7 +61,22 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json({ limit: '50kb' })); // prevent large payload attacks
+// verify captures the exact raw bytes of every request body into
+// req.rawBody before Express parses them into req.body. This is required
+// for the Paystack webhook's HMAC signature check below, which must be
+// computed over the identical bytes Paystack signed - a re-serialized
+// JSON.stringify(req.body) can legitimately differ from the original
+// payload (key order, number formatting, etc.) and would make a genuine
+// webhook delivery fail verification. The webhook handler already checked
+// for req.rawBody (Buffer.isBuffer(req.rawBody) ? req.rawBody : ...) but
+// nothing ever populated it until this change (PASS 1/PASS 3 finding).
+// This runs for every route, not just the webhook, but only adds a small
+// buffer reference to the request object - it does not change parsing
+// behavior for any other route.
+app.use(express.json({
+  limit: '50kb', // prevent large payload attacks
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 // ── Request ID for tracing ──────────────────────────────────
 app.use((req, _res, next) => {
@@ -785,221 +800,303 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
 
 app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
   try {
-    const rideRef = db.collection('rides').doc(req.params.rideId);
-    const ride    = await rideRef.get();
-    if (!ride.exists || ride.data().status === 'completed')
-      return fail(res, 400, 'Invalid ride');
+    const rideId = req.params.rideId;
+    const rideRef = db.collection('rides').doc(rideId);
 
-    const rideData  = ride.data();
-    const driverId  = rideData.driverId;
-    const driverDoc = await db.collection('drivers').doc(driverId).get();
-    if (!driverDoc.exists) return fail(res, 404, 'Assigned driver not found');
-    if (!req.isAdmin && driverDoc.data()?.firebaseUid !== req.uid && driverDoc.id !== req.uid)
-      return fail(res, 403, 'Only the assigned driver can complete this ride');
-    const driverData = driverDoc.data();
-
-    // Recalculate fare with driver bonuses
-    const fare = calcFareSplits(
-      rideData.rideType,
-      rideData.distance,
-      driverData
-    );
-
-    // Get owner
-    let ownerDoc = null;
-    if (driverData.ownerCode) {
-      const owSnap = await db.collection('owners')
-        .where('ownerCode','==', driverData.ownerCode).get();
-      if (!owSnap.empty) ownerDoc = owSnap.docs[0];
-    }
-
-    // ── Drive to Own deductions ──────────────────────────
-    let dtoDeduction = 0;
-    const dtoSnap = await db.collection('dto_applications')
-      .where('userId','==', driverId)
-      .where('status','==','active').limit(1).get();
-    if (!dtoSnap.empty) {
-      const dto = dtoSnap.docs[0];
-      dtoDeduction = +(fare.total * CFG.dto.trackARate).toFixed(2);
-      const newPaid    = +(dto.data().totalPaid + dtoDeduction).toFixed(2);
-      const remaining  = +(dto.data().vehiclePrice - newPaid).toFixed(2);
-      const isComplete = remaining <= 0;
-      await dto.ref.update({
-        totalPaid: newPaid,
-        remaining: Math.max(remaining, 0),
-        status:    isComplete ? 'completed' : 'active',
-        lastPayment: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      if (isComplete) {
-        await db.collection('drivers').doc(driverId).update({
-          vehicleOwned: true, vehicleDocumentsReleased: true,
-        });
-        await db.collection('notifications').add({
-          userId: driverId, type: 'dto_completed',
-          message: '🎉 Congratulations! Your vehicle is FULLY PAID OFF! Documents will be released within 48hrs. You OWN your vehicle! 🇬🇭',
-          read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+    // PASS 4 correction 6: the whole read-compute-write sequence now runs
+    // inside a single db.runTransaction, so a retried or concurrent
+    // completion call for the same ride is serialized by Firestore rather
+    // than both calls independently crediting earnings (PASS 1/PASS 3
+    // finding). Firestore transactions require every read to happen before
+    // any write, so this is restructured into a read phase, a pure
+    // compute phase (identical arithmetic to the previous version, just
+    // deferred), and a write phase - the business logic and every field
+    // written are unchanged from before this correction.
+    const result = await db.runTransaction(async (tx) => {
+      // ═══ READ PHASE (all reads before any write - Firestore requirement) ═══
+      const ride = await tx.get(rideRef);
+      if (!ride.exists || ride.data().status === 'completed') {
+        return { blocked: 'invalid-ride' };
       }
-    }
+      const rideData = ride.data();
+      const driverId = rideData.driverId;
 
-    // ── Owner DTO (Track B) + savings auto-deduct ────────
-    // NOTE: previously the Track B deduction was only ever used to move
-    // the DTO application's progress bar — the owner's actual wallet
-    // credit below still added the FULL fare.owner regardless, so a
-    // Track B owner kept 100% of their pay while "progress" quietly
-    // built up on paper with no real money ever set aside for it. Both
-    // deductions below now actually reduce what the owner is credited,
-    // mirroring how the driver's dtoDeduction/saveAmount already worked.
-    let ownerDtoDeduction = 0;
-    let ownerSaveAmount = 0;
-    if (ownerDoc) {
-      const ownerDtoSnap = await db.collection('dto_applications')
-        .where('userId','==', ownerDoc.id)
-        .where('status','==','active').limit(1).get();
-      if (!ownerDtoSnap.empty) {
-        const od = ownerDtoSnap.docs[0];
+      const driverRef = db.collection('drivers').doc(driverId);
+      const driverDoc = await tx.get(driverRef);
+      if (!driverDoc.exists) return { blocked: 'driver-not-found' };
+      if (!req.isAdmin && driverDoc.data()?.firebaseUid !== req.uid && driverDoc.id !== req.uid) {
+        return { blocked: 'forbidden' };
+      }
+      const driverData = driverDoc.data();
+
+      // Payment gate: this repository has no paymentMethod/"cash" field
+      // anywhere in its data model (confirmed by searching this file and
+      // legacyPaymentService.js) - a `payments` record with purpose:'ride'
+      // is only ever created by /payments/initialize, which only the
+      // online (Paystack) flow calls. So the presence of a payments
+      // record is itself the only existing signal that this ride went
+      // through online payment at all:
+      //   - no payments record for this rideId -> never put through
+      //     online payment -> this is the existing cash-ride path;
+      //     completion proceeds exactly as it always has, unconditionally.
+      //   - a payments record exists but neither it nor the ride shows a
+      //     completed/paid status -> an online payment was attempted and
+      //     has not succeeded yet -> this is exactly the gap PASS 1/PASS 3
+      //     found (earnings could release before payment settled) -> block.
+      //   - a payments record exists and is completed / ride.paymentStatus
+      //     is 'paid' -> proceeds as before.
+      // This adds no new payment state - it only reads the existing
+      // payments collection and ride.paymentStatus field, both already
+      // written by legacyPaymentService.js.settleRidePayment.
+      const paymentAttemptSnap = await tx.get(
+        db.collection('payments')
+          .where('rideId', '==', rideId)
+          .where('purpose', '==', 'ride')
+          .limit(1)
+      );
+      if (!paymentAttemptSnap.empty) {
+        const paymentAttempt = paymentAttemptSnap.docs[0].data();
+        const ridePaid = String(rideData.paymentStatus || '').toLowerCase() === 'paid';
+        const paymentCompleted = String(paymentAttempt.status || '').toLowerCase() === 'completed';
+        if (!ridePaid && !paymentCompleted) {
+          return { blocked: 'payment-not-settled' };
+        }
+      }
+
+      let ownerDoc = null;
+      if (driverData.ownerCode) {
+        const owSnap = await tx.get(
+          db.collection('owners').where('ownerCode', '==', driverData.ownerCode)
+        );
+        if (!owSnap.empty) ownerDoc = owSnap.docs[0];
+      }
+
+      const dtoSnap = await tx.get(
+        db.collection('dto_applications')
+          .where('userId', '==', driverId)
+          .where('status', '==', 'active').limit(1)
+      );
+
+      let ownerDtoSnap = { empty: true };
+      if (ownerDoc) {
+        ownerDtoSnap = await tx.get(
+          db.collection('dto_applications')
+            .where('userId', '==', ownerDoc.id)
+            .where('status', '==', 'active').limit(1)
+        );
+      }
+
+      let loanSnap = null;
+      const loanId = driverData.activeLoanId;
+      if (loanId) {
+        loanSnap = await tx.get(db.collection('loans').doc(loanId));
+      }
+
+      const refSnap = await tx.get(
+        db.collection('referrals')
+          .where('newUserId', '==', driverId)
+          .where('status', '==', 'pending').limit(1)
+      );
+
+      // ═══ COMPUTE PHASE (pure - identical arithmetic to before this correction) ═══
+      const fare = calcFareSplits(rideData.rideType, rideData.distance, driverData);
+
+      let dtoDoc = null;
+      let dtoDeduction = 0;
+      let dtoNewPaid = 0;
+      let dtoRemaining = 0;
+      let dtoIsComplete = false;
+      if (!dtoSnap.empty) {
+        dtoDoc = dtoSnap.docs[0];
+        dtoDeduction = +(fare.total * CFG.dto.trackARate).toFixed(2);
+        dtoNewPaid = +(dtoDoc.data().totalPaid + dtoDeduction).toFixed(2);
+        dtoRemaining = +(dtoDoc.data().vehiclePrice - dtoNewPaid).toFixed(2);
+        dtoIsComplete = dtoRemaining <= 0;
+      }
+
+      let ownerDtoDoc = null;
+      let ownerDtoDeduction = 0;
+      let ownerDtoPaid = 0;
+      let ownerDtoRemaining = 0;
+      let ownerDtoIsComplete = false;
+      if (ownerDoc && !ownerDtoSnap.empty) {
+        ownerDtoDoc = ownerDtoSnap.docs[0];
         ownerDtoDeduction = +(fare.owner * CFG.dto.trackBRate).toFixed(2);
-        const owPaid = +(od.data().totalPaid + ownerDtoDeduction).toFixed(2);
-        const owRem  = +(od.data().vehiclePrice * 0.70 - owPaid).toFixed(2);
-        const owComplete = owRem <= 0;
-        await od.ref.update({
-          totalPaid: owPaid,
-          remaining: Math.max(owRem, 0),
-          status:    owComplete ? 'completed' : 'active',
+        ownerDtoPaid = +(ownerDtoDoc.data().totalPaid + ownerDtoDeduction).toFixed(2);
+        ownerDtoRemaining = +(ownerDtoDoc.data().vehiclePrice * 0.70 - ownerDtoPaid).toFixed(2);
+        ownerDtoIsComplete = ownerDtoRemaining <= 0;
+      }
+
+      // Auto-save from the owner's share - same mechanism the driver
+      // already had.
+      let ownerSaveAmount = 0;
+      if (ownerDoc) {
+        const ownerSaveRate = ownerDoc.data().savingsRate || 0;
+        ownerSaveAmount = ownerSaveRate > 0 ? +(fare.owner * ownerSaveRate / 100).toFixed(2) : 0;
+      }
+
+      let loanDeduction = 0;
+      let loanRemaining = 0;
+      let loanIsRepaid = false;
+      const loanActive = !!(loanSnap && loanSnap.exists && loanSnap.data().status === 'active');
+      if (loanActive) {
+        loanDeduction = +(fare.driver * CFG.loans.deductPerRide).toFixed(2);
+        loanRemaining = +(loanSnap.data().outstanding - loanDeduction).toFixed(2);
+        loanIsRepaid = loanRemaining <= 0;
+      }
+
+      const saveRate = driverData.savingsRate || 0;
+      const saveAmount = saveRate > 0 ? +(fare.driver * saveRate / 100).toFixed(2) : 0;
+
+      const hasReferral = !refSnap.empty;
+      const refBonus = hasReferral ? +(fare.total * CFG.bonus.referral).toFixed(2) : 0;
+      const referrerId = hasReferral ? refSnap.docs[0].data().referrerId : null;
+
+      const netDriver = +(fare.driver - dtoDeduction - loanDeduction - saveAmount).toFixed(2);
+      const netOwner = +(fare.owner - ownerDtoDeduction - ownerSaveAmount).toFixed(2);
+
+      // ═══ WRITE PHASE ═══
+      if (dtoDoc) {
+        tx.update(dtoDoc.ref, {
+          totalPaid: dtoNewPaid,
+          remaining: Math.max(dtoRemaining, 0),
+          status: dtoIsComplete ? 'completed' : 'active',
           lastPayment: admin.firestore.FieldValue.serverTimestamp(),
         });
-        if (owComplete) {
-          await ownerDoc.ref.update({ vehicleOwned: true, vehicleDocumentsReleased: true });
-          await db.collection('notifications').add({
-            userId: ownerDoc.id, type: 'dto_completed',
+        if (dtoIsComplete) {
+          tx.update(driverRef, { vehicleOwned: true, vehicleDocumentsReleased: true });
+          tx.set(db.collection('notifications').doc(), {
+            userId: driverId, type: 'dto_completed',
             message: '🎉 Congratulations! Your vehicle is FULLY PAID OFF! Documents will be released within 48hrs. You OWN your vehicle! 🇬🇭',
             read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
           });
         }
       }
 
-      // Auto-save from the owner's share — same mechanism the driver
-      // already had, just never wired for owners until now.
-      const ownerSaveRate = ownerDoc.data().savingsRate || 0;
-      ownerSaveAmount = ownerSaveRate > 0
-        ? +(fare.owner * ownerSaveRate / 100).toFixed(2) : 0;
-      if (ownerSaveAmount > 0) {
-        await db.collection('savings_transactions').add({
-          userId: ownerDoc.id, rideId: req.params.rideId,
-          type: 'auto_deposit', amount: ownerSaveAmount,
+      if (ownerDoc) {
+        if (ownerDtoDoc) {
+          tx.update(ownerDtoDoc.ref, {
+            totalPaid: ownerDtoPaid,
+            remaining: Math.max(ownerDtoRemaining, 0),
+            status: ownerDtoIsComplete ? 'completed' : 'active',
+            lastPayment: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          if (ownerDtoIsComplete) {
+            tx.update(ownerDoc.ref, { vehicleOwned: true, vehicleDocumentsReleased: true });
+            tx.set(db.collection('notifications').doc(), {
+              userId: ownerDoc.id, type: 'dto_completed',
+              message: '🎉 Congratulations! Your vehicle is FULLY PAID OFF! Documents will be released within 48hrs. You OWN your vehicle! 🇬🇭',
+              read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+        if (ownerSaveAmount > 0) {
+          tx.set(db.collection('savings_transactions').doc(), {
+            userId: ownerDoc.id, rideId,
+            type: 'auto_deposit', amount: ownerSaveAmount,
+            status: 'completed',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          tx.update(ownerDoc.ref, {
+            'savings.balance': admin.firestore.FieldValue.increment(ownerSaveAmount),
+            'savings.totalDeposited': admin.firestore.FieldValue.increment(ownerSaveAmount),
+          });
+        }
+      }
+
+      if (loanActive) {
+        if (loanIsRepaid) {
+          tx.update(loanSnap.ref, {
+            outstanding: 0, status: 'repaid',
+            closedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          tx.update(driverRef, { activeLoanId: null });
+        } else {
+          tx.update(loanSnap.ref, { outstanding: loanRemaining });
+        }
+      }
+
+      if (saveAmount > 0) {
+        tx.set(db.collection('savings_transactions').doc(), {
+          userId: driverId, rideId,
+          type: 'auto_deposit', amount: saveAmount,
           status: 'completed',
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-        await ownerDoc.ref.update({
-          'savings.balance': admin.firestore.FieldValue.increment(ownerSaveAmount),
-          'savings.totalDeposited': admin.firestore.FieldValue.increment(ownerSaveAmount),
+        tx.update(driverRef, {
+          'savings.balance': admin.firestore.FieldValue.increment(saveAmount),
+          'savings.totalDeposited': admin.firestore.FieldValue.increment(saveAmount),
         });
       }
-    }
 
-    // ── Loan repayment deduction ─────────────────────────
-    let loanDeduction = 0;
-    const loanId = driverData.activeLoanId;
-    if (loanId) {
-      const loanRef  = db.collection('loans').doc(loanId);
-      const loanSnap = await loanRef.get();
-      if (loanSnap.exists && loanSnap.data().status === 'active') {
-        loanDeduction  = +(fare.driver * CFG.loans.deductPerRide).toFixed(2);
-        const remaining = +(loanSnap.data().outstanding - loanDeduction).toFixed(2);
-        if (remaining <= 0) {
-          await loanRef.update({ outstanding: 0, status: 'repaid',
-            closedAt: admin.firestore.FieldValue.serverTimestamp() });
-          await db.collection('drivers').doc(driverId)
-            .update({ activeLoanId: null });
-        } else {
-          await loanRef.update({ outstanding: remaining });
-        }
+      if (hasReferral) {
+        tx.update(db.collection('users').doc(referrerId), {
+          'wallet.available': admin.firestore.FieldValue.increment(refBonus),
+        });
+        tx.update(refSnap.docs[0].ref, {
+          status: 'activated',
+          activatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       }
-    }
 
-    // ── Auto savings deduction (driver) ──────────────────
-    const saveRate  = driverData.savingsRate || 0;
-    const saveAmount = saveRate > 0
-      ? +(fare.driver * saveRate / 100).toFixed(2) : 0;
-    if (saveAmount > 0) {
-      await db.collection('savings_transactions').add({
-        userId: driverId, rideId: req.params.rideId,
-        type: 'auto_deposit', amount: saveAmount,
-        status: 'completed',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      await db.collection('drivers').doc(driverId).update({
-        'savings.balance': admin.firestore.FieldValue.increment(saveAmount),
-        'savings.totalDeposited': admin.firestore.FieldValue.increment(saveAmount),
-      });
-    }
-
-    // ── Referral reward ──────────────────────────────────
-    const refSnap = await db.collection('referrals')
-      .where('newUserId','==', driverId)
-      .where('status','==','pending').limit(1).get();
-    if (!refSnap.empty) {
-      const refBonus = +(fare.total * CFG.bonus.referral).toFixed(2);
-      await db.collection('users').doc(refSnap.docs[0].data().referrerId)
-        .update({ 'wallet.available': admin.firestore.FieldValue.increment(refBonus) });
-      await refSnap.docs[0].ref.update({ status: 'activated', activatedAt:
-        admin.firestore.FieldValue.serverTimestamp() });
-    }
-
-    // ── Net earnings after deductions ────────────────────
-    const netDriver = +(fare.driver - dtoDeduction - loanDeduction - saveAmount).toFixed(2);
-    const netOwner  = +(fare.owner - ownerDtoDeduction - ownerSaveAmount).toFixed(2);
-
-    // ── Update driver ────────────────────────────────────
-    await db.collection('drivers').doc(driverId).update({
-      'earnings.total': admin.firestore.FieldValue.increment(netDriver),
-      'earnings.today': admin.firestore.FieldValue.increment(netDriver),
-      'earnings.week':  admin.firestore.FieldValue.increment(netDriver),
-      'wallet.pending': admin.firestore.FieldValue.increment(netDriver),
-      'pools.fuel':     admin.firestore.FieldValue.increment(fare.fuel),
-      'pools.maintenance': admin.firestore.FieldValue.increment(fare.maintenance),
-      totalRides: admin.firestore.FieldValue.increment(1),
-    });
-
-    // ── Update owner ─────────────────────────────────────
-    if (ownerDoc) {
-      await ownerDoc.ref.update({
-        'earnings.total': admin.firestore.FieldValue.increment(netOwner),
-        'earnings.today': admin.firestore.FieldValue.increment(netOwner),
-        'wallet.pending': admin.firestore.FieldValue.increment(netOwner),
-        'pools.fuel':     admin.firestore.FieldValue.increment(fare.fuel),
+      tx.update(driverRef, {
+        'earnings.total': admin.firestore.FieldValue.increment(netDriver),
+        'earnings.today': admin.firestore.FieldValue.increment(netDriver),
+        'earnings.week': admin.firestore.FieldValue.increment(netDriver),
+        'wallet.pending': admin.firestore.FieldValue.increment(netDriver),
+        'pools.fuel': admin.firestore.FieldValue.increment(fare.fuel),
         'pools.maintenance': admin.firestore.FieldValue.increment(fare.maintenance),
         totalRides: admin.firestore.FieldValue.increment(1),
       });
+
+      if (ownerDoc) {
+        tx.update(ownerDoc.ref, {
+          'earnings.total': admin.firestore.FieldValue.increment(netOwner),
+          'earnings.today': admin.firestore.FieldValue.increment(netOwner),
+          'wallet.pending': admin.firestore.FieldValue.increment(netOwner),
+          'pools.fuel': admin.firestore.FieldValue.increment(fare.fuel),
+          'pools.maintenance': admin.firestore.FieldValue.increment(fare.maintenance),
+          totalRides: admin.firestore.FieldValue.increment(1),
+        });
+      }
+
+      tx.update(rideRef, {
+        status: 'completed',
+        fare,
+        dtoDeduction,
+        ownerDtoDeduction,
+        loanDeduction,
+        ownerSaveAmount,
+        netDriverEarnings: netDriver,
+        netOwnerEarnings: ownerDoc ? netOwner : null,
+        earningsReleased: false, // released after 24hr hold
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      tx.set(db.collection('notifications').doc(), {
+        userId: rideData.userId, type: 'ride_completed',
+        message: `Ride completed! Fare: ₵${fare.total}. Thank you for riding with Okada Online! 🇬🇭`,
+        rideId,
+        read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {
+        blocked: null,
+        response: {
+          splits: fare, dtoDeduction, ownerDtoDeduction, loanDeduction,
+          netDriverEarnings: netDriver,
+          netOwnerEarnings: ownerDoc ? netOwner : 0,
+        },
+      };
+    });
+
+    if (result.blocked === 'invalid-ride') return fail(res, 400, 'Invalid ride');
+    if (result.blocked === 'driver-not-found') return fail(res, 404, 'Assigned driver not found');
+    if (result.blocked === 'forbidden') return fail(res, 403, 'Only the assigned driver can complete this ride');
+    if (result.blocked === 'payment-not-settled') {
+      return fail(res, 409, 'This ride has an online payment that has not completed yet - verify payment before completing the ride');
     }
-
-    // ── Update ride ──────────────────────────────────────
-    await rideRef.update({
-      status: 'completed',
-      fare,
-      dtoDeduction,
-      ownerDtoDeduction,
-      loanDeduction,
-      ownerSaveAmount,
-      netDriverEarnings: netDriver,
-      netOwnerEarnings: ownerDoc ? netOwner : null,
-      earningsReleased: false, // released after 24hr hold
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // Notify passenger
-    await db.collection('notifications').add({
-      userId: rideData.userId, type: 'ride_completed',
-      message: `Ride completed! Fare: ₵${fare.total}. Thank you for riding with Okada Online! 🇬🇭`,
-      rideId: req.params.rideId,
-      read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return ok(res, {
-      splits: fare, dtoDeduction, ownerDtoDeduction, loanDeduction,
-      netDriverEarnings: netDriver,
-      netOwnerEarnings: ownerDoc ? netOwner : 0,
-    });
+    return ok(res, result.response);
   } catch (e) {
     console.error('complete-ride error:', e);
     return fail(res, 500, e.message);
