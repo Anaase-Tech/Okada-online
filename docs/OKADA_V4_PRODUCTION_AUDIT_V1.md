@@ -591,3 +591,8 @@ The Passenger and Driver PWA paths are being aligned with the server-backed paym
 - The Pay Later frontend call now uses the real ride ID and only reports a server-accepted deferred request. Full Pay Later lifecycle integration with the ride completion payment gate remains to be independently verified.
 
 No production deployment was performed. Source changes require CI review before the next step.
+
+
+## PASS 4.1 correction note — real history and single completion control — 2026-10-17
+
+The latest CI run for commit `6c4501e` compiled the frontend but failed one backend source-contract test because the Passenger screen still contained a fabricated sample-history fallback (random fares and a hard-coded example driver). This was a real no-fake-data violation, so the fix removes the fallback instead of weakening the test. Ride history now maps server records to the screen and shows an explicit error if the request fails. Unknown ratings are no longer displayed as five stars. The same patch removes the duplicate driver Complete button for an in-progress ride. CI must be green after the next commit before this state is marked verified.

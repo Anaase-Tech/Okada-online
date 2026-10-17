@@ -45,6 +45,8 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
   const [driverPos,setDriverPos]=useState(null);
   const [eta,setEta]=useState(0);
   const [history,setHistory]=useState([]);
+  const [historyError,setHistoryError]=useState(null);
+  const [historyLoading,setHistoryLoading]=useState(false);
   const [loading,setLoading]=useState(false);
   const [toast,setToast]=useState(null);
   const [payStatus,setPayStatus]=useState("idle");
@@ -148,6 +150,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
 
       const paymentStatus = String(ride.paymentStatus || "").toUpperCase();
       if (paymentStatus === "CASH_AWAITING_DRIVER") setPayStatus("awaiting-driver");
+      if (paymentStatus === "DEFERRED") setPayStatus("deferred");
       if (paymentStatus === "CASH_PAID" || paymentStatus === "PAID") setPayStatus("paid");
       if (paymentStatus === "FAILED" || paymentStatus === "ABANDONED") setPayStatus((old) => old === "processing" ? "failed" : old);
     }, (error) => {
@@ -219,11 +222,44 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
   }, [user.id]);
 
   useEffect(()=>{
-    if(view==="history"){
-      api.getHistory(user.id).then(r=>setHistory(r.rides||[])).catch(()=>setHistory(
-        Array.from({length:6},(_,i)=>({id:i,from:LOCS[i*2%LOCS.length],to:LOCS[(i*2+1)%LOCS.length],fare:(Math.random()*20+5).toFixed(2),date:new Date(Date.now()-i*86400000*2).toLocaleDateString(),driver:"Kwame A.",rating:5,vehicle:VEHICLES[i%4].label,paid:["MoMo","Cash","Card","Pay Later"][i%4]}))
-      ));
-    }
+    if(view!=="history") return undefined;
+    let active = true;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    api.getHistory(user.id).then((result)=>{
+      if(!active) return;
+      const rides = Array.isArray(result.rides) ? result.rides : [];
+      setHistory(rides.map((ride)=>{
+        const createdAt = ride.createdAt?.toDate ? ride.createdAt.toDate() : new Date(ride.createdAt || 0);
+        const validDate = Number.isNaN(createdAt.getTime()) ? "Date unavailable" : createdAt.toLocaleDateString();
+        const paymentStatus = String(ride.paymentStatus || "").toUpperCase();
+        const paymentMethod = String(ride.paymentMethod || ride.payMethod || "").toLowerCase();
+        const paid = paymentStatus === "CASH_PAID" ? "Cash"
+          : paymentStatus === "DEFERRED" ? "Pay Later"
+          : paymentStatus === "PAID" ? (paymentMethod === "cash" ? "Cash" : "Online")
+          : paymentStatus === "FAILED" || paymentStatus === "ABANDONED" ? "Payment failed"
+          : paymentStatus === "CASH_AWAITING_DRIVER" ? "Cash pending"
+          : paymentStatus || "Not confirmed";
+        return {
+          id: ride.id,
+          from: ride.pickupLocation?.address || "Pickup unavailable",
+          to: ride.destination?.address || "Destination unavailable",
+          fare: Number(ride.fare?.total ?? 0).toFixed(2),
+          date: validDate,
+          driver: ride.driverName || "Driver not assigned",
+          rating: Number(ride.driverRating || 0),
+          vehicle: ride.rideType || "—",
+          paid,
+        };
+      }));
+    }).catch((error)=>{
+      if(!active) return;
+      setHistory([]);
+      setHistoryError(error?.message || "Ride history could not be loaded.");
+    }).finally(()=>{
+      if(active) setHistoryLoading(false);
+    });
+    return ()=>{ active = false; };
   },[view,user.id]);
 
   const bookRide = async () => {
@@ -419,7 +455,9 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                       ? <span style={{padding:"12px",background:dark?"#14532d":"#dcfce7",color:"#166534",borderRadius:12,fontWeight:800,fontSize:13,textAlign:"center"}}>Payment verified</span>
                       : payStatus==="awaiting-driver"
                         ? <span style={{padding:"12px",background:dark?"#422006":"#fef3c7",color:"#92400e",borderRadius:12,fontWeight:800,fontSize:13,textAlign:"center"}}>Waiting for cash confirmation</span>
-                        : <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Payment options</button>}
+                        : payStatus==="deferred"
+                          ? <span style={{padding:"12px",background:dark?"#1e1b4b":"#eef2ff",color:"#6d28d9",borderRadius:12,fontWeight:800,fontSize:13,textAlign:"center"}}>Pay Later accepted</span>
+                          : <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Payment options</button>}
                   </div>
                 </div>
               )}
@@ -585,10 +623,17 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
         {view==="history"&&(
           <div style={{padding:16}}>
             <h2 className={`font-black text-lg mb-4 ${t.text}`}>📋 Ride History</h2>
-            {history.length===0?(
+            {historyLoading ? (
+              <div style={{textAlign:"center",padding:"48px 0"}}><Spin/><p className={t.sub} style={{marginTop:12}}>Loading your recorded rides…</p></div>
+            ) : historyError ? (
+              <div style={{textAlign:"center",padding:"32px 16px"}}>
+                <p className={t.sub}>Your ride history could not be loaded. No sample rides have been substituted.</p>
+                <button onClick={()=>setView("home")} style={{marginTop:16,padding:"10px 24px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Return Home</button>
+              </div>
+            ) : history.length===0?(
               <div style={{textAlign:"center",padding:"48px 0"}}>
                 <div style={{fontSize:48,marginBottom:12}}>🛺</div>
-                <p className={t.sub}>No rides yet</p>
+                <p className={t.sub}>No recorded rides yet</p>
                 <button onClick={()=>setView("home")} style={{marginTop:16,padding:"10px 24px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Book Now</button>
               </div>
             ):history.map(r=>(
@@ -605,7 +650,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   <div style={{textAlign:"right",marginLeft:12}}>
                     <p style={{fontWeight:900,color:"#16a34a"}}>GH₵{r.fare}</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:2,marginTop:4}}>
-                      {[...Array(r.rating||5)].map((_,i)=><Star key={i} style={{width:11,height:11,fill:"#facc15",color:"#facc15"}}/>)}
+                      {[...Array(Math.max(0, Math.min(5, Number(r.rating) || 0)))].map((_,i)=><Star key={i} style={{width:11,height:11,fill:"#facc15",color:"#facc15"}}/>)}
                     </div>
                   </div>
                 </div>

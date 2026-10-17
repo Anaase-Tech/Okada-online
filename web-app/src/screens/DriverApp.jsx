@@ -370,13 +370,12 @@ export function DriverApp({user,onLogout,dark,setDark}) {
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <a href={`tel:${activeRide.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                  {String(activeRide.status || "").toLowerCase() !== "in_progress" && !activeRide.demo
-                    ? <button onClick={startActiveRide} disabled={completing}
-                        style={{padding:"10px",background:"#0891b2",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>▶ Start ride</button>
-                    : <button onClick={complete} disabled={completing}
-                        style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>
-                        {completing?"Completing…":String(activeRide.payMethod || "").toLowerCase()==="cash"?"💵 Confirm cash":"✅ Complete"}
-                      </button>}
+                  {String(activeRide.status || "").toLowerCase() === "in_progress"
+                    ? <span style={{padding:"10px",background:dark?"#1e3a8a":"#dbeafe",color:"#1d4ed8",borderRadius:12,fontWeight:800,fontSize:12,textAlign:"center"}}>Ride in progress</span>
+                    : !activeRide.demo
+                      ? <button onClick={startActiveRide} disabled={completing}
+                          style={{padding:"10px",background:"#0891b2",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>▶ Start ride</button>
+                      : <span style={{padding:"10px",background:dark?"#374151":"#f3f4f6",color:dark?"#d1d5db":"#4b5563",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center"}}>Demo ride</span>}
                 </div>
                 {String(activeRide.status || "").toLowerCase() === "in_progress" && (
                   <button onClick={complete} disabled={completing}
