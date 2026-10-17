@@ -179,21 +179,33 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
     });
   }, [driver?.id]);
 
-  // Restore the current server-backed ride after a page reload.
+  // Restore the current server-backed ride after a page reload. If only a
+  // request key remains (the POST may have committed before its response was
+  // lost), restore its original route so a retry can reuse the same key.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has("reference") || params.has("trxref")) return;
     try {
       const saved = JSON.parse(localStorage.getItem("okada_pending_ride") || "null");
-      if (!saved?.rideId) return;
-      setRideId(saved.rideId);
-      if (saved.pickup) setPickup(saved.pickup);
-      if (saved.dest) setDest(saved.dest);
-      if (saved.vehicle) setVehicle(saved.vehicle);
-      if (saved.fare) setFare(saved.fare);
-      setStatus("searching");
+      if (saved?.rideId) {
+        setRideId(saved.rideId);
+        if (saved.pickup) setPickup(saved.pickup);
+        if (saved.dest) setDest(saved.dest);
+        if (saved.vehicle) setVehicle(saved.vehicle);
+        if (saved.fare) setFare(saved.fare);
+        setStatus("searching");
+        return;
+      }
+      const pendingRequest = JSON.parse(localStorage.getItem("okada_pending_request") || "null");
+      if (pendingRequest?.requestId) {
+        if (pendingRequest.pickup) setPickup(pendingRequest.pickup);
+        if (pendingRequest.dest) setDest(pendingRequest.dest);
+        if (pendingRequest.vehicle) setVehicle(pendingRequest.vehicle);
+        setStatus("idle");
+        toast$("An earlier booking attempt is unresolved. Retry the restored route to confirm whether the server created it.", "error");
+      }
     } catch (error) {
-      console.warn("Could not restore pending ride:", error.message);
+      console.warn("Could not restore pending ride/request:", error.message);
     }
   }, [user.id]);
 

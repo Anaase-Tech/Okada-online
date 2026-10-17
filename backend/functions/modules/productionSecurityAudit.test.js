@@ -296,3 +296,11 @@ test('an idempotent retry of an accepted/cancelled/completed ride does not redis
   assert.ok(request.indexOf("String(created.ride.status || '').toLowerCase() !== 'requested'")
     < request.indexOf("const drivers = await db.collection('drivers')"));
 });
+
+
+test('passenger restores unresolved ride request key and route after reload', () => {
+  const passenger = read('web-app/src/screens/PassengerApp.jsx');
+  assert.ok(passenger.includes('localStorage.getItem("okada_pending_request")'));
+  assert.ok(passenger.includes('Retry the restored route'));
+  assert.ok(passenger.includes('requestId, pickup, dest, vehicle'));
+});
