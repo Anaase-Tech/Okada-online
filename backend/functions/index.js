@@ -874,9 +874,38 @@ app.post('/rides/:rideId/cancel', requireAuth, async (req, res) => {
       const status = String(rideData.status || '').toLowerCase();
       if (status === 'cancelled') return { blocked: null, idempotent: true };
       if (status !== 'requested') return { blocked: 'already-assigned-or-started' };
+
+      const paymentSnap = await tx.get(db.collection('payments').where('rideId', '==', rideId));
+      const paymentRecords = paymentSnap.docs
+        .map((doc) => ({ ref: doc.ref, data: doc.data() }))
+        .filter((item) => item.data.purpose === 'ride');
+      const onlinePayments = paymentRecords.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
+      const terminalOnlineStatuses = ['FAILED', 'ABANDONED', 'INITIALIZATION_FAILED', 'CANCELLED', 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED'];
+      if (['PAID', 'CASH_PAID', 'DEFERRED'].includes(String(rideData.paymentStatus || '').toUpperCase())
+          || onlinePayments.some((item) => ['COMPLETED', 'COMPLETED_REFUND_REVIEW'].includes(String(item.data.status || '').toUpperCase()))) {
+        return { blocked: 'payment-settled-or-review' };
+      }
+      if (onlinePayments.some((item) => !terminalOnlineStatuses.includes(String(item.data.status || '').toUpperCase()))) {
+        return { blocked: 'payment-unresolved' };
+      }
+
+      for (const item of paymentRecords) {
+        if (String(item.data.provider || '').toLowerCase() === 'cash'
+            && String(item.data.status || '').toUpperCase() === 'CASH_PENDING_CONFIRMATION') {
+          tx.update(item.ref, {
+            status: 'cancelled_by_passenger',
+            cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
       tx.update(rideRef, {
         status: 'cancelled', cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
         cancelledBy: req.uid, cancellationReason: 'passenger_cancelled_before_assignment',
+        ...(String(rideData.paymentStatus || '').toUpperCase() === 'CASH_AWAITING_DRIVER' ? {
+          paymentStatus: 'CANCELLED',
+          cashFallbackStatus: 'CANCELLED_BEFORE_ASSIGNMENT',
+        } : {}),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       return { blocked: null, idempotent: false };
@@ -884,6 +913,8 @@ app.post('/rides/:rideId/cancel', requireAuth, async (req, res) => {
     if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
     if (result.blocked === 'ownership-changed') return fail(res, 409, 'Ride ownership changed; refresh before retrying');
     if (result.blocked === 'already-assigned-or-started') return fail(res, 409, 'This ride has already been assigned or started. Contact the driver/support; it was not cancelled.');
+    if (result.blocked === 'payment-settled-or-review') return fail(res, 409, 'A payment is already completed, deferred, or awaiting refund review. Contact support before cancelling.');
+    if (result.blocked === 'payment-unresolved') return fail(res, 409, 'An online payment is still pending or has an unknown outcome. Verify it before cancelling.');
     return ok(res, { rideId, status: 'cancelled', idempotent: !!result.idempotent });
   } catch (e) {
     console.error('cancel-ride error:', e.message);

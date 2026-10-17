@@ -27,9 +27,11 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
     const ride = rideSnap.data();
     const ridePaymentStatus = upper(ride.paymentStatus);
     const paymentStatus = upper(payment.status);
+    const rideStatus = upper(ride.status);
+    const cancelledRide = rideStatus === 'CANCELLED';
     const cashPaid = upper(ride.paymentMethod) === 'CASH'
       && ridePaymentStatus === 'CASH_PAID'
-      && upper(ride.status) === 'COMPLETED';
+      && rideStatus === 'COMPLETED';
     const anotherReferenceAlreadyPaid = ridePaymentStatus === 'PAID'
       && !!ride.paymentReference
       && String(ride.paymentReference) !== String(reference);
@@ -45,7 +47,7 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       return { idempotent: true, rideId, paymentStatus: 'paid' };
     }
     if (paymentStatus === 'COMPLETED_REFUND_REVIEW'
-        && (cashPaid || anotherReferenceAlreadyPaid || repaidPayLater)) {
+        && (cancelledRide || cashPaid || anotherReferenceAlreadyPaid || repaidPayLater)) {
       return { idempotent: true, rideId, paymentStatus: ridePaymentStatus.toLowerCase(), requiresRefundReview: true };
     }
 
@@ -72,12 +74,14 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
     // If another method has already settled this ride, don't rewrite the ride
     // or apply financial side effects again. The additional successful charge
     // is a reconciliation case for an administrator, not an automatic refund.
-    if (cashPaid || anotherReferenceAlreadyPaid || repaidPayLater) {
-      const conflict = cashPaid
-        ? 'ONLINE_SUCCESS_AFTER_CASH_PAID'
-        : anotherReferenceAlreadyPaid
-          ? 'MULTIPLE_ONLINE_SUCCESSES_FOR_RIDE'
-          : 'ONLINE_SUCCESS_AFTER_PAY_LATER_REPAID';
+    if (cancelledRide || cashPaid || anotherReferenceAlreadyPaid || repaidPayLater) {
+      const conflict = cancelledRide
+        ? 'ONLINE_SUCCESS_AFTER_RIDE_CANCELLED'
+        : cashPaid
+          ? 'ONLINE_SUCCESS_AFTER_CASH_PAID'
+          : anotherReferenceAlreadyPaid
+            ? 'MULTIPLE_ONLINE_SUCCESSES_FOR_RIDE'
+            : 'ONLINE_SUCCESS_AFTER_PAY_LATER_REPAID';
       tx.update(paymentDoc.ref, {
         status: 'completed_refund_review',
         providerTransactionId: providerData?.id ? String(providerData.id) : null,
@@ -89,15 +93,20 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       tx.set(db.collection('notifications').doc(), {
+        ...(ride.userId ? { userId: ride.userId } : {}),
+        ...(ride.driverId ? { driverId: ride.driverId } : {}),
         type: 'payment_refund_review',
-        message: cashPaid
-          ? 'A Paystack payment succeeded after this ride was recorded as cash-paid. Review for possible refund.'
-          : anotherReferenceAlreadyPaid
-            ? 'More than one Paystack payment succeeded for the same ride. Review for possible refund.'
-            : 'A Paystack payment succeeded after the Pay Later balance was already repaid. Review for possible refund.',
+        message: cancelledRide
+          ? 'A Paystack payment succeeded after this ride was cancelled. Do not pay again; an administrator must review a possible refund.'
+          : cashPaid
+            ? 'A Paystack payment succeeded after this ride was recorded as cash-paid. Review for possible refund.'
+            : anotherReferenceAlreadyPaid
+              ? 'More than one Paystack payment succeeded for the same ride. Review for possible refund.'
+              : 'A Paystack payment succeeded after the Pay Later balance was already repaid. Review for possible refund.',
         rideId,
         paymentReference: String(reference),
         refundStatus: 'REQUIRES_REVIEW',
+        settlementConflict: conflict,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       return { idempotent: false, rideId, paymentStatus: ridePaymentStatus.toLowerCase(), requiresRefundReview: true };
