@@ -532,3 +532,8 @@ Direct inspection of the active legacy handler confirmed a read-then-update race
 The runtime/CI migration to Node 22 (Functions) and Node 24 (frontend CI) is being validated by GitHub Actions. No Firebase production deployment was performed or authorized.
 
 Still open: durable Paystack attempt persistence/idempotency, ride completion lifecycle state policy, duplicate journey plan route, emulator contention tests, pickup/final-mile allowlists, backup packaging, Firestore access contract, dependency triage, and the cash-after-failed-online-payment product decision.
+
+
+## PASS 4.1 CI correction — 2026-10-17
+
+The first Node 22 CI run after adding the ride-acceptance source-level regression test failed because the new test's regex literals were over-escaped and could not be parsed. This was a test-source syntax error, not an application runtime failure. The test literals have been corrected; CI must be rerun and its result recorded before this pass is considered green.

@@ -93,3 +93,7 @@ The kickoff message contains current branch state and team rules. Slack does not
 
 - Firebase Functions runtime selection: https://firebase.google.com/docs/functions/manage-functions
 - Google Cloud Functions runtime lifecycle: https://docs.cloud.google.com/run/docs/runtimes/function-runtimes
+
+
+### CI note — 2026-10-17
+The first run after the atomic ride-acceptance change exposed a syntax error in the newly added static regression test (over-escaped regex literals). The test has been corrected in source. Do not mark PASS 4.1 green until a subsequent GitHub Actions run for the corrected commit passes both jobs.

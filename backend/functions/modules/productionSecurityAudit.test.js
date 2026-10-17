@@ -93,11 +93,11 @@ test('legacy ride acceptance performs the ride state transition and notification
   const end = index.indexOf("app.post('/rides/:rideId/complete'", start);
   assert.ok(start >= 0 && end > start, 'ride acceptance handler boundaries exist');
   const handler = index.slice(start, end);
-  assert.match(handler, /db\\.runTransaction/);
-  assert.match(handler, /tx\\.get\\(rideRef\\)/);
-  assert.match(handler, /tx\\.get\\(driverRef\\)/);
-  assert.match(handler, /tx\\.update\\(rideRef/);
-  assert.match(handler, /tx\\.set\\(notificationRef/);
-  assert.doesNotMatch(handler, /await rideRef\\.get\\(/);
-  assert.doesNotMatch(handler, /await rideRef\\.update\\(/);
+  assert.match(handler, /db\.runTransaction/);
+  assert.match(handler, /tx\.get\(rideRef\)/);
+  assert.match(handler, /tx\.get\(driverRef\)/);
+  assert.match(handler, /tx\.update\(rideRef/);
+  assert.match(handler, /tx\.set\(notificationRef/);
+  assert.doesNotMatch(handler, /await rideRef\.get\(/);
+  assert.doesNotMatch(handler, /await rideRef\.update\(/);
 });
