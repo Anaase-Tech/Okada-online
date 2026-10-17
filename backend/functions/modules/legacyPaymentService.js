@@ -17,7 +17,6 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
   return db.runTransaction(async (tx) => {
     const paymentDoc = await findPaymentByReference(tx, db, reference);
     if (!paymentDoc) throw new Error('Payment record not found');
-
     const payment = paymentDoc.data();
     const rideId = String(payment.rideId || '');
     if (!rideId) throw new Error('Payment is not linked to a ride');
@@ -35,12 +34,18 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       && !!ride.paymentReference
       && String(ride.paymentReference) !== String(reference);
 
+    const payLaterSnap = await tx.get(db.collection('pay_later').where('rideId', '==', rideId));
+    const payLaterRecords = payLaterSnap.docs.map((doc) => ({ ref: doc.ref, data: doc.data() }));
+    const activePayLater = payLaterRecords.find((item) => ['DEFERRED', 'OVERDUE'].includes(upper(item.data.status)));
+    const repaidPayLater = payLaterRecords.find((item) => upper(item.data.status) === 'PAID');
+
     if (paymentStatus === 'COMPLETED'
         && ridePaymentStatus === 'PAID'
         && String(ride.paymentReference || '') === String(reference)) {
       return { idempotent: true, rideId, paymentStatus: 'paid' };
     }
-    if (paymentStatus === 'COMPLETED_REFUND_REVIEW' && (cashPaid || anotherReferenceAlreadyPaid)) {
+    if (paymentStatus === 'COMPLETED_REFUND_REVIEW'
+        && (cashPaid || anotherReferenceAlreadyPaid || repaidPayLater)) {
       return { idempotent: true, rideId, paymentStatus: ridePaymentStatus.toLowerCase(), requiresRefundReview: true };
     }
 
@@ -64,11 +69,15 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       throw new Error('Ride payment amount or currency mismatch');
     }
 
-    // Never let a late Paystack success silently override a cash payment or
-    // a different already-settled Paystack reference. Track the captured
-    // transaction for manual refund reconciliation without changing ride
-    // payment status or applying ride earnings a second time.
-    if (cashPaid || anotherReferenceAlreadyPaid) {
+    // If another method has already settled this ride, don't rewrite the ride
+    // or apply financial side effects again. The additional successful charge
+    // is a reconciliation case for an administrator, not an automatic refund.
+    if (cashPaid || anotherReferenceAlreadyPaid || repaidPayLater) {
+      const conflict = cashPaid
+        ? 'ONLINE_SUCCESS_AFTER_CASH_PAID'
+        : anotherReferenceAlreadyPaid
+          ? 'MULTIPLE_ONLINE_SUCCESSES_FOR_RIDE'
+          : 'ONLINE_SUCCESS_AFTER_PAY_LATER_REPAID';
       tx.update(paymentDoc.ref, {
         status: 'completed_refund_review',
         providerTransactionId: providerData?.id ? String(providerData.id) : null,
@@ -76,32 +85,46 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
         verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         refundStatus: 'REQUIRES_REVIEW',
-        settlementConflict: cashPaid ? 'ONLINE_SUCCESS_AFTER_CASH_PAID' : 'MULTIPLE_ONLINE_SUCCESSES_FOR_RIDE',
+        settlementConflict: conflict,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       tx.set(db.collection('notifications').doc(), {
         type: 'payment_refund_review',
         message: cashPaid
           ? 'A Paystack payment succeeded after this ride was recorded as cash-paid. Review for possible refund.'
-          : 'More than one Paystack payment succeeded for the same ride. Review for possible refund.',
+          : anotherReferenceAlreadyPaid
+            ? 'More than one Paystack payment succeeded for the same ride. Review for possible refund.'
+            : 'A Paystack payment succeeded after the Pay Later balance was already repaid. Review for possible refund.',
         rideId,
         paymentReference: String(reference),
         refundStatus: 'REQUIRES_REVIEW',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      return {
-        idempotent: false,
-        rideId,
-        paymentStatus: ridePaymentStatus.toLowerCase(),
-        requiresRefundReview: true,
-      };
+      return { idempotent: false, rideId, paymentStatus: ridePaymentStatus.toLowerCase(), requiresRefundReview: true };
     }
 
     const cashFallbackPending = upper(ride.paymentMethod) === 'CASH'
       && ridePaymentStatus === 'CASH_AWAITING_DRIVER';
+    const payLaterPending = !!activePayLater
+      && upper(ride.paymentMethod) === 'PAY_LATER'
+      && ridePaymentStatus === 'DEFERRED';
     let cashPaymentDoc = null;
     if (cashFallbackPending && ride.cashPaymentReference) {
       cashPaymentDoc = await findPaymentByReference(tx, db, ride.cashPaymentReference);
+    }
+
+    let payLaterUserRef = null;
+    if (payLaterPending) {
+      const profileCollection = String(activePayLater.data.userCollection || 'users');
+      if (!activePayLater.data.userId || Number(activePayLater.data.amount) <= 0) {
+        throw new Error('Pay Later record is inconsistent');
+      }
+      payLaterUserRef = db.collection(profileCollection).doc(String(activePayLater.data.userId));
+      const payLaterUserSnap = await tx.get(payLaterUserRef);
+      if (!payLaterUserSnap.exists) throw new Error('Pay Later passenger profile not found');
+      const used = Number(payLaterUserSnap.data()?.payLater?.used || 0);
+      const owed = Number(activePayLater.data.amount);
+      if (!Number.isFinite(used) || used < owed) throw new Error('Pay Later limit ledger is inconsistent');
     }
 
     tx.update(paymentDoc.ref, {
@@ -113,15 +136,13 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-
     tx.update(rideRef, {
       paymentStatus: 'paid',
       paymentMethod: 'paystack',
       payMethod: 'paystack',
       paymentReference: String(reference),
-      ...(cashFallbackPending ? {
-        cashFallbackStatus: 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED',
-      } : {}),
+      ...(cashFallbackPending ? { cashFallbackStatus: 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED' } : {}),
+      ...(payLaterPending ? { payLaterStatus: 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED' } : {}),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -132,11 +153,25 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
-    if (cashFallbackPending) {
+    if (payLaterPending) {
+      tx.update(activePayLater.ref, {
+        status: 'cancelled_online_payment_succeeded',
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancellationReason: 'Online payment verified before Pay Later repayment',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      tx.update(payLaterUserRef, {
+        'payLater.used': admin.firestore.FieldValue.increment(-Number(activePayLater.data.amount)),
+      });
+    }
+
+    if (cashFallbackPending || payLaterPending) {
       tx.set(db.collection('notifications').doc(), {
         userId: ride.userId,
-        type: 'cash_fallback_cancelled',
-        message: 'Your online payment was verified. Do not pay this ride in cash as well.',
+        type: cashFallbackPending ? 'cash_fallback_cancelled' : 'pay_later_cancelled',
+        message: cashFallbackPending
+          ? 'Your online payment was verified. Do not pay this ride in cash as well.'
+          : 'Your online payment was verified. The Pay Later balance for this ride has been cancelled.',
         rideId,
         paymentReference: String(reference),
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -144,8 +179,8 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       if (ride.driverId) {
         tx.set(db.collection('notifications').doc(), {
           driverId: ride.driverId,
-          type: 'cash_fallback_cancelled',
-          message: 'Online payment was verified for this ride. Do not collect cash for the same fare.',
+          type: 'online_payment_verified',
+          message: 'Online payment was verified for this ride. Do not collect cash or expect a Pay Later charge for the same fare.',
           rideId,
           paymentReference: String(reference),
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -153,7 +188,13 @@ async function settleRidePayment({ db, admin, reference, providerData }) {
       }
     }
 
-    return { idempotent: false, rideId, paymentStatus: 'paid', cashFallbackCancelled: cashFallbackPending };
+    return {
+      idempotent: false,
+      rideId,
+      paymentStatus: 'paid',
+      cashFallbackCancelled: cashFallbackPending,
+      payLaterCancelled: payLaterPending,
+    };
   });
 }
 
@@ -161,7 +202,6 @@ async function markRidePaymentFailed({ db, admin, reference, reason, providerSta
   return db.runTransaction(async (tx) => {
     const paymentDoc = reference ? await findPaymentByReference(tx, db, reference) : null;
     if (!paymentDoc) throw new Error('Payment record not found');
-
     const payment = paymentDoc.data();
     const currentStatus = upper(payment.status);
     if (['COMPLETED', 'COMPLETED_REFUND_REVIEW'].includes(currentStatus)) {
@@ -184,15 +224,14 @@ async function markRidePaymentFailed({ db, admin, reference, reason, providerSta
     if (rideSnap?.exists) {
       const ride = rideSnap.data();
       if (String(ride.paymentReference || '') === String(reference)
-          && upper(ride.paymentMethod) !== 'CASH'
-          && upper(ride.paymentStatus) !== 'PAID') {
+          && !['CASH', 'PAY_LATER'].includes(upper(ride.paymentMethod))
+          && !['PAID', 'DEFERRED'].includes(upper(ride.paymentStatus))) {
         tx.update(rideRef, {
           paymentStatus: terminalStatus,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
     }
-
     return { paymentStatus: terminalStatus };
   });
 }
