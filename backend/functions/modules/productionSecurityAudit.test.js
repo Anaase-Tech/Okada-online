@@ -199,3 +199,48 @@ test('unknown provider initialization returns the reserved reference for status 
   assert.match(passengerSource, /result\.outcome==="INITIALIZATION_UNKNOWN"/);
   assert.match(passengerSource, /api\.verifyPayment\(paymentReference\)/);
 });
+
+
+test('Map distinguishes missing/stale GPS from fresh GPS and reports missing Google Maps configuration', () => {
+  const map = read('web-app/src/components/Map.jsx');
+  assert.ok(map.includes('GPS unavailable'));
+  assert.ok(map.includes('GPS stale'));
+  assert.ok(map.includes('updatedAtMs'));
+  assert.ok(map.includes('Google Maps is not configured'));
+  assert.ok(!map.includes('GPS Live'));
+});
+
+test('driver live dispatch is vehicle-scoped, skips declined requests, and distance-filters pending rides', () => {
+  const driver = read('web-app/src/screens/DriverApp.jsx');
+  assert.ok(driver.includes('where("rideType", "==", driverVehicleType)'));
+  assert.ok(driver.includes('declinedRideIds.has(candidate.id)'));
+  assert.ok(driver.includes('distanceKm(currentPoint, { lat: pickupLat, lng: pickupLng }) <= 5'));
+  assert.ok(driver.includes('(error) => {'));
+  const statusRoute = index.slice(index.indexOf("app.put('/drivers/:id/status'"), index.indexOf("app.put('/drivers/:id/location'"));
+  assert.ok(!statusRoute.includes('vehicleType: sanitize(req.body.vehicleType'));
+});
+
+test('driver GPS publisher uses browser geolocation, timestamps and a throttled heartbeat', () => {
+  const driver = read('web-app/src/screens/DriverApp.jsx');
+  assert.ok(driver.includes('navigator.geolocation.watchPosition'));
+  assert.ok(driver.includes('now - Number(previous.lastPublishedAt || 0) >= 15000'));
+  assert.ok(driver.includes('position.coords.heading'));
+  assert.ok(!driver.includes('Math.random()-0.5'));
+});
+
+test('backend ride dispatch validates coordinates, vehicle match, fresh location and acceptance radius', () => {
+  assert.ok(index.includes('function normalizeVehicleType'));
+  assert.ok(index.includes('Unsupported ride vehicle type'));
+  assert.ok(index.includes('requestedVehicleType !== driverVehicleType'));
+  assert.ok(index.includes('Date.now() - lastUpdatedMs > 60000'));
+  assert.ok(index.includes("return { blocked: 'driver-too-far' }"));
+});
+
+test('driver map receives a real next-stop navigation target and bounded reroute policy', () => {
+  const driver = read('web-app/src/screens/DriverApp.jsx');
+  const map = read('web-app/src/components/Map.jsx');
+  assert.ok(driver.includes('navigationTarget={activeRide ?'));
+  assert.ok(driver.includes('driverPos={driverSelfPos}'));
+  assert.ok(map.includes('Date.now() - lastDriverRoute.current.requestedAt >= 30000'));
+  assert.ok(map.includes('This is not turn-by-turn or voice navigation.'));
+});

@@ -166,7 +166,8 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
     return onSnapshot(doc(db, "drivers", driver.id), (snap) => {
       const location = snap.exists() ? snap.data()?.location : null;
       if (Number.isFinite(Number(location?.latitude)) && Number.isFinite(Number(location?.longitude))) {
-        setDriverPos({ lat: Number(location.latitude), lng: Number(location.longitude) });
+        const updatedAtMs = typeof location.lastUpdated?.toMillis === "function" ? location.lastUpdated.toMillis() : 0;
+        setDriverPos({ lat: Number(location.latitude), lng: Number(location.longitude), updatedAtMs });
       } else {
         setDriverPos(null);
       }
@@ -358,7 +359,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
               </div>
             )}
             <div style={{marginBottom:12}}>
-              <Map dark={dark} height={150} status={status}
+              <Map dark={dark} height={220} status={status}
                 pickup={LOCATION_COORDS[pickup]||null}
                 destination={LOCATION_COORDS[dest]||null}
                 driverPos={driverPos}/>
