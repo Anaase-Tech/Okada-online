@@ -265,3 +265,26 @@ test('driver dispatch is not ready until server accepts a GPS write', () => {
   assert.match(gps, /setGpsReady\(false\)/);
   assert.doesNotMatch(gps, /driverSelfPosRef\.current = next;\s*setGpsReady\(true\);/);
 });
+
+
+test('ride request endpoint includes transactional idempotency and stable notification IDs', () => {
+  const request = index.slice(index.indexOf("app.post('/rides/request'"), index.indexOf("app.post('/rides/:rideId/cancel'"));
+  assert.ok(request.includes('ride_request_idempotency'));
+  assert.ok(request.includes('db.runTransaction'));
+  assert.ok(request.includes('tx.create(idempotencyRef'));
+  assert.ok(request.includes('record.fingerprint !== fingerprint'));
+  assert.ok(request.includes('notificationId = crypto.createHash'));
+  assert.ok(request.includes('dispatchWarnings'));
+});
+
+test('passenger cancellation is server-backed and only cancels unassigned requests', () => {
+  const cancel = index.slice(index.indexOf("app.post('/rides/:rideId/cancel'"), index.indexOf("app.post('/rides/:rideId/accept'"));
+  assert.ok(cancel.includes('db.runTransaction'));
+  assert.ok(cancel.includes("status !== 'requested'"));
+  assert.ok(cancel.includes("status: 'cancelled'"));
+  const passenger = read('web-app/src/screens/PassengerApp.jsx');
+  const api = read('web-app/src/api.js');
+  assert.ok(api.includes('cancelRide(rideId)'));
+  assert.ok(passenger.includes('await api.cancelRide(rideId)'));
+  assert.ok(!passenger.includes('onClick={()=>setStatus("idle")}'));
+});

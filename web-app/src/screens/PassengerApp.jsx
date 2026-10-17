@@ -145,6 +145,8 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
         setDriver(null);
         setCurrentRide(null);
         setRideId(null);
+        localStorage.removeItem("okada_pending_ride");
+        localStorage.removeItem("okada_pending_request");
         toast$("The ride was cancelled.", "error");
       }
 
@@ -176,6 +178,24 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       setDriverPos(null);
     });
   }, [driver?.id]);
+
+  // Restore the current server-backed ride after a page reload.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("reference") || params.has("trxref")) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem("okada_pending_ride") || "null");
+      if (!saved?.rideId) return;
+      setRideId(saved.rideId);
+      if (saved.pickup) setPickup(saved.pickup);
+      if (saved.dest) setDest(saved.dest);
+      if (saved.vehicle) setVehicle(saved.vehicle);
+      if (saved.fare) setFare(saved.fare);
+      setStatus("searching");
+    } catch (error) {
+      console.warn("Could not restore pending ride:", error.message);
+    }
+  }, [user.id]);
 
   // A Paystack redirect returns to the PWA with a provider reference. Verify
   // it server-side; never infer payment success from a redirect or timeout.
@@ -272,11 +292,26 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       toast$("Coordinates are not configured for this location. The ride was not submitted.", "error");
       return;
     }
+
+    let previous = null;
+    try { previous = JSON.parse(localStorage.getItem("okada_pending_request") || "null"); } catch {}
+    if (previous?.requestId
+        && (previous.pickup !== pickup || previous.dest !== dest || previous.vehicle !== vehicle)) {
+      toast$("A previous booking attempt is unresolved. Restore its route and retry it before submitting a different ride, to avoid creating an untracked request.", "error");
+      return;
+    }
+    let requestId = previous?.requestId || null;
+    if (!requestId) requestId = window.crypto?.randomUUID?.() || ("ride-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+    localStorage.setItem("okada_pending_request", JSON.stringify({
+      requestId, pickup, dest, vehicle, createdAt: Date.now(),
+    }));
+
     setLoading(true);
     setStatus("searching");
     try {
       const result = await api.requestRide({
         userId: user.id,
+        requestId,
         pickupLocation: { address: pickup, latitude: pickupCoords.lat, longitude: pickupCoords.lng },
         destination: { address: dest, latitude: destCoords.lat, longitude: destCoords.lng },
         rideType: vehicle,
@@ -296,20 +331,44 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
         rideId: result.rideId, pickup, dest, vehicle,
         fare: { ...(fare || {}), total: Number(result.fare.total), serverFare: result.fare },
       }));
+      localStorage.removeItem("okada_pending_request");
       setDriver(null);
       setEta(0);
       setStatus("searching");
-      toast$(Number(result.nearbyDriversNotified || 0) > 0
-        ? "Ride request sent to nearby verified drivers. Waiting for a real driver to accept."
-        : "Ride request was recorded. Waiting for an available driver.");
+      toast$(result.idempotent
+        ? "Restored the existing request after a retry. Waiting for a real driver to accept."
+        : Number(result.nearbyDriversNotified || 0) > 0
+          ? "Ride request sent to nearby verified drivers. Waiting for a real driver to accept."
+          : "Ride request was recorded. Waiting for an available driver.");
     } catch (error) {
       console.error("Ride request failed:", error);
       setStatus("idle");
       setRideId(null);
       setCurrentRide(null);
-      toast$(error?.message || "Ride request failed. No driver has been assigned.", "error");
+      toast$(error?.message || "Ride request failed. The retry key is retained; retry this same route before submitting another request.", "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const cancelCurrentRide = async () => {
+    if (!rideId) {
+      setStatus("idle");
+      setDriver(null);
+      setCurrentRide(null);
+      return;
+    }
+    try {
+      await api.cancelRide(rideId);
+      setStatus("idle");
+      setDriver(null);
+      setCurrentRide(null);
+      setRideId(null);
+      localStorage.removeItem("okada_pending_ride");
+      localStorage.removeItem("okada_pending_request");
+      toast$("Ride request cancelled by the server.");
+    } catch (error) {
+      toast$(error?.message || "Ride was not cancelled. Check the server status before retrying.", "error");
     }
   };
 
@@ -409,7 +468,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                 <div style={{textAlign:"center",padding:"24px 0"}}>
                   <div style={{width:48,height:48,border:"4px solid #16a34a",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
                   <p className={`font-bold ${t.text}`}>Finding your driver…</p>
-                  <button onClick={()=>setStatus("idle")} style={{marginTop:16,padding:"8px 20px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontSize:13,fontWeight:700}}>Cancel</button>
+                  <button onClick={cancelCurrentRide} disabled={loading} style={{marginTop:16,padding:"8px 20px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontSize:13,fontWeight:700,opacity:loading?0.6:1}}>Cancel request</button>
                 </div>
               )}
 
@@ -429,7 +488,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                     {status==="matched"&&<div style={{textAlign:"center"}}><p className={`text-xs ${t.sub}`}>Driver assigned</p><p style={{fontWeight:800,color:"#16a34a",fontSize:13}}>Awaiting trip start</p></div>}
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-                    <button onClick={()=>setStatus("idle")} style={{padding:"10px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}>Cancel</button>
+                    <button onClick={cancelCurrentRide} style={{padding:"10px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}>Cancel request</button>
                     <a href={`tel:${driver.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
                     <span style={{padding:"10px",background:dark?"#374151":"#f3f4f6",color:dark?"#d1d5db":"#4b5563",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center"}}>Waiting for driver to start</span>
                   </div>

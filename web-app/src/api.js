@@ -41,6 +41,7 @@ class Api {
 
   // ── Rides ──────────────────────────────────────────
   requestRide(data)                              { return this.req("POST", "/rides/request", data); }
+  cancelRide(rideId)                             { return this.req("POST", `/rides/${rideId}/cancel`, {}); }
   acceptRide(rideId, driverId)                   { return this.req("POST", `/rides/${rideId}/accept`, { driverId }); }
   startRide(rideId)                              { return this.req("POST", `/rides/${rideId}/start`, {}); }
   setRidePaymentMethod(rideId, method)           { return this.req("POST", `/rides/${rideId}/payment-method`, { method }); }
