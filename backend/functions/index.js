@@ -2505,19 +2505,28 @@ app.get('/payments/verify/:ref', requireAuth, async (req, res) => {
     } else if (payment.rideId) {
       if (providerStatus === 'success') {
         const settled = await settleRidePayment({ db, admin, reference, providerData: data });
-        return ok(res, { reference, verified: true, outcome: settled.idempotent ? 'ALREADY_PAID' : 'SUCCESS' });
+        return ok(res, {
+          reference,
+          rideId: payment.rideId,
+          verified: true,
+          outcome: settled.requiresRefundReview ? 'REQUIRES_REFUND_REVIEW' : (settled.idempotent ? 'ALREADY_PAID' : 'SUCCESS'),
+          ...(settled.requiresRefundReview ? { refundStatus: 'REQUIRES_REVIEW' } : {}),
+          ...(settled.cashFallbackCancelled ? { cashFallbackCancelled: true } : {}),
+          ...(settled.payLaterCancelled ? { payLaterCancelled: true } : {}),
+        });
       }
       if (['failed', 'abandoned'].includes(providerStatus)) {
         const settled = await markRidePaymentFailed({
           db, admin, reference, reason: `Paystack transaction status: ${providerStatus}`,
           providerStatus,
         });
-        return ok(res, { reference, verified: false, outcome: 'FAILED', ...settled });
+        return ok(res, { reference, rideId: payment.rideId, verified: false, outcome: 'FAILED', ...settled });
       }
     }
 
     return ok(res, {
       reference,
+      ...(payment.rideId ? { rideId: payment.rideId } : {}),
       verified: false,
       outcome: 'PENDING',
       providerStatus: providerStatus || 'unknown',
