@@ -191,6 +191,17 @@ const fail = (res, code, msg) =>
 const ok = (res, data) =>
   res.status(200).json({ ok: true, ...data });
 
+function normalizeVehicleType(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\\s_-]+/g, '');
+  const aliases = {
+    okada: 'okada', motorcycle: 'okada', motorbike: 'okada',
+    car: 'car', sedan: 'car',
+    tricycle: 'tricycle', keke: 'tricycle',
+    bicycle: 'bicycle', ebicycle: 'bicycle', electricbicycle: 'bicycle',
+  };
+  return aliases[normalized] || null;
+}
+
 const toRad = d => d * Math.PI / 180;
 function haversine(la1, lo1, la2, lo2) {
   const dLa = toRad(la2 - la1), dLo = toRad(lo2 - lo1);
@@ -701,16 +712,29 @@ app.post('/rides/request', requireAuth, async (req, res) => {
     if (!userId || !pickupLocation || !destination)
       return fail(res, 400, 'userId, pickupLocation, destination required');
 
+    const requestedVehicleType = normalizeVehicleType(rideType || 'okada');
+    if (!requestedVehicleType) return fail(res, 400, 'Unsupported ride vehicle type');
+    const pickupLat = Number(pickupLocation.latitude);
+    const pickupLng = Number(pickupLocation.longitude);
+    const destinationLat = Number(destination.latitude);
+    const destinationLng = Number(destination.longitude);
+    if (![pickupLat, pickupLng, destinationLat, destinationLng].every(Number.isFinite)
+        || pickupLat < -90 || pickupLat > 90 || destinationLat < -90 || destinationLat > 90
+        || pickupLng < -180 || pickupLng > 180 || destinationLng < -180 || destinationLng > 180) {
+      return fail(res, 400, 'Valid pickup and destination coordinates are required');
+    }
+    if (pickupLat === destinationLat && pickupLng === destinationLng) {
+      return fail(res, 400, 'Pickup and destination must be different');
+    }
+
     const userProfile = await resolveUserRef(userId, req);
     if (!userProfile) return fail(res, 403, 'Ride requester is not owned by the authenticated user');
     const userDoc = userProfile.ref.get ? await userProfile.ref.get() : null;
     if (!userDoc?.exists) return fail(res, 404, 'User not found');
 
-    const km = haversine(
-      pickupLocation.latitude, pickupLocation.longitude,
-      destination.latitude,    destination.longitude
-    );
-    const fare = calcFareSplits(sanitize(rideType || 'okada'), km, null);
+    const km = haversine(pickupLat, pickupLng, destinationLat, destinationLng);
+    if (!Number.isFinite(km) || km <= 0) return fail(res, 400, 'Unable to calculate a valid trip distance');
+    const fare = calcFareSplits(requestedVehicleType, km, null);
 
     const ride = {
       userId: sanitize(userId),
@@ -726,7 +750,7 @@ app.post('/rides/request', requireAuth, async (req, res) => {
         latitude:  parseFloat(destination.latitude),
         longitude: parseFloat(destination.longitude),
       },
-      rideType:          sanitize(rideType || 'okada'),
+      rideType:          requestedVehicleType,
       status:            'requested',
       fare,
       distance:          +km.toFixed(2),
@@ -742,10 +766,15 @@ app.post('/rides/request', requireAuth, async (req, res) => {
       .where('isVerified', '==', true).get();
     let notified = 0;
     for (const d of drivers.docs) {
-      const loc = d.data().location;
-      if (!loc) continue;
-      if (haversine(pickupLocation.latitude, pickupLocation.longitude,
-                    loc.latitude, loc.longitude) > 5) continue;
+      const driverData = d.data();
+      if (normalizeVehicleType(driverData.vehicleType || 'okada') !== requestedVehicleType) continue;
+      const loc = driverData.location;
+      const driverLat = Number(loc?.latitude);
+      const driverLng = Number(loc?.longitude);
+      const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
+      if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs) continue;
+      if (Date.now() - lastUpdatedMs > 60000) continue;
+      if (haversine(pickupLat, pickupLng, driverLat, driverLng) > 5) continue;
       await db.collection('notifications').add({
         driverId: d.id, type: 'new_ride', rideId: ref.id,
         message:  `New ride: ${ride.pickupLocation.address} → ${ride.destination.address} | ₵${fare.total}`,
@@ -788,6 +817,23 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
       if (!req.isAdmin && driverData?.firebaseUid !== req.uid && driverSnap.id !== req.uid) {
         return { blocked: 'forbidden' };
       }
+      if (!driverData.isOnline) return { blocked: 'driver-offline' };
+      const requestedVehicleType = normalizeVehicleType(rideData.rideType || 'okada');
+      const driverVehicleType = normalizeVehicleType(driverData.vehicleType || 'okada');
+      if (!requestedVehicleType || !driverVehicleType || requestedVehicleType !== driverVehicleType) {
+        return { blocked: 'vehicle-mismatch' };
+      }
+      const loc = driverData.location;
+      const driverLat = Number(loc?.latitude);
+      const driverLng = Number(loc?.longitude);
+      const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
+      if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs
+          || Date.now() - lastUpdatedMs > 60000) return { blocked: 'location-stale' };
+      if (!Number.isFinite(Number(rideData.pickupLocation?.latitude))
+          || !Number.isFinite(Number(rideData.pickupLocation?.longitude))
+          || haversine(Number(rideData.pickupLocation.latitude), Number(rideData.pickupLocation.longitude), driverLat, driverLng) > 5) {
+        return { blocked: 'driver-too-far' };
+      }
 
       tx.update(rideRef, {
         driverId: driverSnap.id,
@@ -811,6 +857,10 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
     if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
     if (result.blocked === 'unavailable') return fail(res, 400, 'Ride no longer available');
     if (result.blocked === 'driver-not-verified') return fail(res, 403, 'Driver not verified');
+    if (result.blocked === 'driver-offline') return fail(res, 409, 'Driver must be online to accept a ride');
+    if (result.blocked === 'vehicle-mismatch') return fail(res, 409, 'This ride requires a different verified vehicle type');
+    if (result.blocked === 'location-stale') return fail(res, 409, 'Refresh driver GPS before accepting a ride');
+    if (result.blocked === 'driver-too-far') return fail(res, 409, 'This ride is outside the current 5 km dispatch area');
     if (result.blocked === 'forbidden') {
       return fail(res, 403, 'Driver identity does not match the authenticated user');
     }
@@ -1421,10 +1471,8 @@ app.put('/drivers/:id/status', requireAuth, async (req, res) => {
     // Only fully verified drivers can go online
     if (req.body.isOnline && !driver.data().isVerified)
       return fail(res, 403, 'Complete KYC, license, and vehicle verification to go online');
-    await db.collection('drivers').doc(req.params.id).update({
-      isOnline:    !!req.body.isOnline,
-      vehicleType: sanitize(req.body.vehicleType || 'okada'),
-    });
+    // Vehicle type belongs to the verified driver profile; availability toggles cannot change it.
+    await driverRef.update({ isOnline: !!req.body.isOnline });
     return ok(res, {});
   } catch (e) {
     return fail(res, 500, e.message);
