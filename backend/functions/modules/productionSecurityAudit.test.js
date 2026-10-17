@@ -90,7 +90,7 @@ test('admin cannot fall back to a manufactured demo session', () => {
 
 test('legacy ride acceptance performs the ride state transition and notification in one transaction', () => {
   const start = index.indexOf("app.post('/rides/:rideId/accept'");
-  const end = index.indexOf("app.post('/rides/:rideId/complete'", start);
+  const end = index.indexOf("app.post('/rides/:rideId/start'", start);
   assert.ok(start >= 0 && end > start, 'ride acceptance handler boundaries exist');
   const handler = index.slice(start, end);
   assert.match(handler, /db\.runTransaction/);

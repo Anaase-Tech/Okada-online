@@ -573,3 +573,7 @@ If Paystack succeeds after the passenger has selected cash but before the driver
 ### Verification status at time of this addendum
 
 These changes are source edits awaiting the CI result. Unit/source regression coverage is being added. No live Paystack sandbox, Firebase Emulator contention test, refund execution, or Firebase production deployment has been performed. Do not call this production-ready until those gaps are closed.
+
+
+### Payment gate/acceptance regression verification note — 2026-10-17
+The first CI run for the payment/cash continuation passed 53 of 54 tests. The failure was a source-level acceptance test whose handler slice extended into the new routes and therefore incorrectly detected the new route's legitimate pre-transaction read. The assertion boundary was narrowed to the end of the actual acceptance handler. The same patch hardens ride-start authorization by checking the assigned driver's Firebase UID through the driver document rather than assuming the Firestore document ID always equals the Firebase UID. A subsequent CI run is required to confirm the correction.

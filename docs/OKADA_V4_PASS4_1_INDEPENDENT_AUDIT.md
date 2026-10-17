@@ -113,3 +113,7 @@ Decision: allow cash fallback only after every online payment attempt is conclus
 Source changes added: durable Paystack attempt reservation before provider call; fail-closed handling of uncertain provider result; explicit cash selection record; authenticated atomic start endpoint; completion gate checking all payment attempts; late-success/refund-review reconciliation. These source edits require CI and emulator-backed verification; no production Firebase deployment was performed.
 
 The product rule minimizes double collection and prevents "abandoned" frontend redirects from being treated as proof that the provider charge definitively failed. An unknown/pending provider state must be reconciled before taking cash.
+
+
+### Payment gate/acceptance regression verification note — 2026-10-17
+The first CI run for the payment/cash continuation passed 53 of 54 tests. The failure was a source-level acceptance test whose handler slice extended into the new routes and therefore incorrectly detected the new route's legitimate pre-transaction read. The assertion boundary was narrowed to the end of the actual acceptance handler. The same patch hardens ride-start authorization by checking the assigned driver's Firebase UID through the driver document rather than assuming the Firestore document ID always equals the Firebase UID. A subsequent CI run is required to confirm the correction.

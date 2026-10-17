@@ -829,14 +829,14 @@ app.post('/rides/:rideId/start', requireAuth, async (req, res) => {
       const rideSnap = await tx.get(rideRef);
       if (!rideSnap.exists) return { blocked: 'not-found' };
       const ride = rideSnap.data();
+      if (!['accepted', 'in_progress'].includes(String(ride.status || '').toLowerCase())) return { blocked: 'invalid-state' };
+      const driverSnap = ride.driverId ? await tx.get(db.collection('drivers').doc(String(ride.driverId))) : null;
+      const assignedDriverMatches = driverSnap?.exists
+        && (String(driverSnap.id) === String(req.uid) || String(driverSnap.data()?.firebaseUid || '') === String(req.uid));
+      if (!req.isAdmin && !assignedDriverMatches) return { blocked: 'forbidden' };
       if (String(ride.status || '').toLowerCase() === 'in_progress') {
-        if (!req.isAdmin && String(ride.driverId || '') !== String(req.uid)
-            && String(ride.driverFirebaseUid || '') !== String(req.uid)) return { blocked: 'forbidden' };
         return { blocked: null, alreadyStarted: true };
       }
-      if (String(ride.status || '').toLowerCase() !== 'accepted') return { blocked: 'invalid-state' };
-      if (!req.isAdmin && String(ride.driverId || '') !== String(req.uid)
-          && String(ride.driverFirebaseUid || '') !== String(req.uid)) return { blocked: 'forbidden' };
       tx.update(rideRef, {
         status: 'in_progress',
         rideStartedAt: admin.firestore.FieldValue.serverTimestamp(),
