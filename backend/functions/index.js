@@ -1029,10 +1029,11 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     const result = await db.runTransaction(async (tx) => {
       // ═══ READ PHASE (all reads before any write - Firestore requirement) ═══
       const ride = await tx.get(rideRef);
-      if (!ride.exists || ride.data().status === 'completed') {
-        return { blocked: 'invalid-ride' };
-      }
+      if (!ride.exists) return { blocked: 'invalid-ride' };
       const rideData = ride.data();
+      const currentRideStatus = String(rideData.status || '').toLowerCase();
+      if (currentRideStatus === 'completed') return { blocked: 'invalid-ride' };
+      if (currentRideStatus !== 'in_progress') return { blocked: 'invalid-state' };
       const driverId = rideData.driverId;
 
       const driverRef = db.collection('drivers').doc(driverId);
@@ -1364,6 +1365,7 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     });
 
     if (result.blocked === 'invalid-ride') return fail(res, 400, 'Invalid ride');
+    if (result.blocked === 'invalid-state') return fail(res, 409, 'Ride must be started and in progress before completion');
     if (result.blocked === 'driver-not-found') return fail(res, 404, 'Assigned driver not found');
     if (result.blocked === 'forbidden') return fail(res, 403, 'Only the assigned driver can complete this ride');
     if (result.blocked === 'payment-not-settled') {

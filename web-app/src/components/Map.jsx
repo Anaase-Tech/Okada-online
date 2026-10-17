@@ -91,6 +91,7 @@ export function Map({ dark, pickup, destination, driverPos, status = "idle", hei
   const gpsStale = !!driverPoint && !gpsFresh;
 
   useEffect(() => {
+    if (!navigationMode) lastDriverRoute.current = null;
     if (!MAPS_KEY || !isLoaded || !window.google || !routeOrigin || !routeDestination) {
       requestSequence.current += 1;
       setDirections(null);

@@ -177,8 +177,11 @@ async function completeRide({ db, admin, rideId, callerUid, callerIsAdmin }) {
   const rideRef = db.collection('rides').doc(rideId);
   return db.runTransaction(async (tx) => {
     const ride = await tx.get(rideRef);
-    if (!ride.exists || ride.data().status === 'completed') return { blocked: 'invalid-ride' };
+    if (!ride.exists) return { blocked: 'invalid-ride' };
     const rideData = ride.data();
+    const currentStatus = String(rideData.status || '').toLowerCase();
+    if (currentStatus === 'completed') return { blocked: 'invalid-ride' };
+    if (currentStatus !== 'in_progress') return { blocked: 'invalid-state' };
     const driverId = rideData.driverId;
 
     const driverRef = db.collection('drivers').doc(driverId);
@@ -218,7 +221,7 @@ async function completeRide({ db, admin, rideId, callerUid, callerIsAdmin }) {
 
 function seed(overrides = {}) {
   return {
-    rides: { ride1: { status: 'requested', driverId: 'driver1', rideType: 'okada', distance: 5, userId: 'pax1', ...overrides.ride } },
+    rides: { ride1: { status: 'in_progress', driverId: 'driver1', rideType: 'okada', distance: 5, userId: 'pax1', ...overrides.ride } },
     drivers: { driver1: { firebaseUid: 'driver1', earnings: { total: 0 }, wallet: { pending: 0 }, totalRides: 0, ...overrides.driver } },
     payments: overrides.payments || {},
   };
@@ -238,7 +241,7 @@ test('ride with an incomplete online payment is blocked with payment-not-settled
   }));
   const result = await completeRide({ db, admin: fakeAdmin, rideId: 'ride1', callerUid: 'driver1', callerIsAdmin: false });
   assert.equal(result.blocked, 'payment-not-settled');
-  assert.equal(store.rides.ride1.status, 'requested', 'ride must not be marked completed');
+  assert.equal(store.rides.ride1.status, 'in_progress', 'ride must not be marked completed');
   assert.equal(store.drivers.driver1.earnings.total, 0, 'driver must not be credited before payment settles');
 });
 
@@ -268,4 +271,16 @@ test('a non-assigned, non-admin caller is rejected with forbidden', async () => 
   const { db } = makeFakeFirestore(seed());
   const result = await completeRide({ db, admin: fakeAdmin, rideId: 'ride1', callerUid: 'someone-else', callerIsAdmin: false });
   assert.equal(result.blocked, 'forbidden');
+});
+
+
+test('ride completion refuses requested, accepted and cancelled lifecycle states without releasing earnings', async () => {
+  for (const status of ['requested', 'accepted', 'cancelled']) {
+    const { db, store } = makeFakeFirestore(seed({ ride: { status } }));
+    const result = await completeRide({ db, admin: fakeAdmin, rideId: 'ride1', callerUid: 'driver1', callerIsAdmin: false });
+    assert.equal(result.blocked, 'invalid-state', `status ${status} must not complete`);
+    assert.equal(store.rides.ride1.status, status);
+    assert.equal(store.drivers.driver1.earnings.total, 0);
+    assert.equal(store.drivers.driver1.wallet.pending, 0);
+  }
 });
