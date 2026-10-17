@@ -50,18 +50,6 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         }
       }
 
-      const seatCount = Number(req.body?.seatCount || 1);
-      if (legs.some((leg) => leg.tripId) && (!Number.isInteger(seatCount) || seatCount < 1 || seatCount > 10)) {
-        return fail(res, 400, 'seatCount must be between 1 and 10');
-      }
-      for (const [label, option] of [['Pickup', req.body?.pickup], ['Final-mile', req.body?.finalMile]]) {
-        if (!option || option.fare == null || option.fare === '') continue;
-        const suppliedFare = Number(option.fare);
-        if (!Number.isFinite(suppliedFare) || suppliedFare !== 0) {
-          return fail(res, 400, label + ' fare must be priced by a trusted backend quote before charging');
-        }
-      }
-
       const result = await db.runTransaction(async (tx) => {
         // READ PHASE 1: load/validate all trips.
         const tripRefs = [...new Set(legs.map((leg) => leg.tripId).filter(Boolean))]

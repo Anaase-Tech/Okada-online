@@ -668,3 +668,8 @@ The route now separates read and compute phases from the write phase: reads all 
 Added a dedicated GitHub Actions job to start Firestore Emulator and exercise the actual Trotro, standalone Transit, and Journey booking router factories with concurrent HTTP requests. Each case submits four simultaneous one-seat requests against capacity two and asserts exactly two accepted bookings and no seat over-allocation. The Journey case uses two legs and covers the multi-leg read-before-write defect.
 
 The emulator suite is opt-in (`OKADA_FIRESTORE_EMULATOR=1`) and skips in the ordinary fast unit suite. Its dedicated CI result must be checked independently; no emulator result is claimed until that job runs green. The injected test-auth middleware isolates transactional booking logic and does not replace Firebase ID-token verification tests.
+
+
+### Follow-up CI finding — 2026-10-17
+
+The first run after adding the Firestore Emulator suite caught a duplicate declaration of `seatCount` caused by the Journey route refactor. The backend test job failed at module parse time before other tests executed. The duplicate input-validation block has been removed; a fresh GitHub Actions run must pass before the transaction fix is considered verified.
