@@ -889,7 +889,8 @@ app.post('/rides/:rideId/payment-method', requireAuth, async (req, res) => {
         const existingCash = ridePayments.find((item) => String(item.data.reference || '') === String(ride.cashPaymentReference));
         return { blocked: null, idempotent: true, reference: ride.cashPaymentReference, amount: Number(existingCash?.data.amount || ride.fare?.total) };
       }
-      if (['PAID', 'CASH_PAID'].includes(String(ride.paymentStatus || '').toUpperCase())) {
+      if (['PAID', 'CASH_PAID', 'DEFERRED'].includes(String(ride.paymentStatus || '').toUpperCase())
+          || String(ride.paymentMethod || '').toUpperCase() === 'PAY_LATER') {
         return { blocked: 'already-paid' };
       }
 
@@ -1931,60 +1932,108 @@ app.get('/insurance/policy/:userId', requireAuth, async (req, res) => {
 
 app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   try {
-    const { userId, rideId } = req.body;
+    const userId = sanitize(req.body?.userId, 160);
+    const rideId = sanitize(req.body?.rideId, 160);
     if (!userId || !rideId) return fail(res, 400, 'userId and rideId required');
 
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-
-    const rideRef = db.collection('rides').doc(sanitize(rideId));
-    const rideSnap = await rideRef.get();
-    if (!rideSnap.exists) return fail(res, 404, 'Ride not found');
-    const ride = rideSnap.data();
-    if (ride.userId !== u.ref.id) return fail(res, 403, 'Ride does not belong to the authenticated user');
-    if (String(ride.paymentStatus || '').toLowerCase() === 'paid') {
-      return fail(res, 400, 'Ride is already paid');
-    }
-
-    const requestedAmount = ride.fare?.total;
-    const a = Number(requestedAmount);
-    if (!Number.isFinite(a) || a <= 0) return fail(res, 400, 'Ride does not have a valid payable fare');
-
-    const existing = await db.collection('pay_later')
-      .where('rideId','==',rideRef.id)
-      .where('status','in',['deferred','overdue']).limit(1).get();
-    if (!existing.empty) return fail(res, 400, 'Pay Later is already active for this ride');
-
+    const rideRef = db.collection('rides').doc(rideId);
+    const payLaterRef = db.collection('pay_later').doc();
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + CFG.payLater.deferDays);
 
     const result = await db.runTransaction(async (trx) => {
-      const fresh = await trx.get(u.ref);
-      if (!fresh.exists) throw new Error('User not found');
+      const [freshUser, freshRide, existingPayLaterSnap, paymentSnap] = await Promise.all([
+        trx.get(u.ref),
+        trx.get(rideRef),
+        trx.get(db.collection('pay_later').where('rideId', '==', rideId)),
+        trx.get(db.collection('payments').where('rideId', '==', rideId)),
+      ]);
+      if (!freshUser.exists) return { blocked: 'user-not-found' };
+      if (!freshRide.exists) return { blocked: 'ride-not-found' };
+      const ride = freshRide.data();
+      if (ride.userId !== u.ref.id) return { blocked: 'forbidden' };
+      if (['completed', 'cancelled'].includes(String(ride.status || '').toLowerCase())) return { blocked: 'ride-closed' };
 
-      const pl = fresh.data()?.payLater || {};
-      const avail = Number(pl.limit || CFG.payLater.defaultLimit) - Number(pl.used || 0);
-      if (!Number.isFinite(avail) || a > avail) {
-        throw new Error(`Pay Later limit exceeded. Available: GH₵${Number.isFinite(avail) ? avail.toFixed(2) : '0.00'}`);
+      const existingRows = existingPayLaterSnap.docs.map((doc) => ({ ref: doc.ref, data: doc.data() }));
+      const activeExisting = existingRows.find((item) => ['deferred', 'overdue'].includes(String(item.data.status || '').toLowerCase()));
+      if (activeExisting && String(ride.paymentStatus || '').toUpperCase() === 'DEFERRED'
+          && String(ride.payLaterTxId || '') === activeExisting.ref.id) {
+        return { accepted: true, idempotent: true, payLaterTxId: activeExisting.ref.id, amount: Number(activeExisting.data.amount), dueDate: activeExisting.data.dueDate || dueDate };
+      }
+      if (activeExisting) return { blocked: 'already-active' };
+
+      const paymentStatus = String(ride.paymentStatus || '').toUpperCase();
+      const paymentMethod = String(ride.paymentMethod || '').toUpperCase();
+      if (['PAID', 'CASH_PAID'].includes(paymentStatus)) return { blocked: 'already-paid' };
+      if (paymentStatus === 'DEFERRED' || paymentMethod === 'PAY_LATER') return { blocked: 'deferred-review' };
+      if (paymentMethod === 'CASH' || paymentStatus === 'CASH_AWAITING_DRIVER') return { blocked: 'cash-selected' };
+
+      const ridePayments = paymentSnap.docs.map((doc) => doc.data()).filter((payment) => payment.purpose === 'ride');
+      const onlinePayments = ridePayments.filter((payment) => String(payment.provider || '').toLowerCase() !== 'cash');
+      const terminalStatuses = ['FAILED', 'ABANDONED', 'INITIALIZATION_FAILED', 'CANCELLED', 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED'];
+      if (onlinePayments.some((payment) => ['COMPLETED', 'COMPLETED_REFUND_REVIEW'].includes(String(payment.status || '').toUpperCase()))) {
+        return { blocked: 'online-payment-review' };
+      }
+      if (onlinePayments.some((payment) => !terminalStatuses.includes(String(payment.status || '').toUpperCase()))) {
+        return { blocked: 'online-payment-unresolved' };
       }
 
-      const ref = db.collection('pay_later').doc();
-      trx.set(ref, {
+      const amount = Number(ride.fare?.total);
+      if (!Number.isFinite(amount) || amount <= 0) return { blocked: 'invalid-fare' };
+      const pl = freshUser.data()?.payLater || {};
+      const configuredLimit = pl.limit == null ? CFG.payLater.defaultLimit : Number(pl.limit);
+      const used = Number(pl.used || 0);
+      const available = configuredLimit - used;
+      if (!Number.isFinite(available) || available < 0 || amount > available) {
+        return { blocked: 'limit-exceeded', available: Number.isFinite(available) ? available : 0 };
+      }
+
+      trx.set(payLaterRef, {
         userId: u.ref.id,
-        rideId: rideRef.id,
-        amount: a,
+        userCollection: u.col,
+        rideId,
+        amount: +amount.toFixed(2),
         status: 'deferred',
         dueDate,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      trx.update(u.ref, {
-        'payLater.used': admin.firestore.FieldValue.increment(a),
+      trx.update(u.ref, { 'payLater.used': admin.firestore.FieldValue.increment(amount) });
+      trx.update(rideRef, {
+        paymentMethod: 'pay_later',
+        payMethod: 'paylater',
+        paymentStatus: 'DEFERRED',
+        payLaterTxId: payLaterRef.id,
+        paymentReference: null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      return ref.id;
+      return { accepted: true, idempotent: false, payLaterTxId: payLaterRef.id, amount: +amount.toFixed(2), dueDate };
     });
 
-    return ok(res, { payLaterTxId: result, dueDate, amountDeferred: a });
+    if (result.blocked === 'user-not-found') return fail(res, 404, 'User not found');
+    if (result.blocked === 'ride-not-found') return fail(res, 404, 'Ride not found');
+    if (result.blocked === 'forbidden') return fail(res, 403, 'Ride does not belong to the authenticated user');
+    if (result.blocked === 'ride-closed') return fail(res, 409, 'Pay Later cannot be selected for a closed ride');
+    if (result.blocked === 'already-active') return fail(res, 409, 'Pay Later is already active for this ride');
+    if (result.blocked === 'already-paid') return fail(res, 409, 'Ride already has a successful payment');
+    if (result.blocked === 'deferred-review') return fail(res, 409, 'This ride already has or had a Pay Later settlement. Administrator review may be required.');
+    if (result.blocked === 'cash-selected') return fail(res, 409, 'Cash has already been selected for this ride. Resolve that path before choosing Pay Later.');
+    if (result.blocked === 'online-payment-review') return fail(res, 409, 'A provider payment succeeded or requires review. Do not create a Pay Later debt for this ride.');
+    if (result.blocked === 'online-payment-unresolved') return fail(res, 409, 'An online payment is still pending or its outcome is unknown. Verify it before choosing Pay Later.');
+    if (result.blocked === 'invalid-fare') return fail(res, 400, 'Ride does not have a valid payable fare');
+    if (result.blocked === 'limit-exceeded') return fail(res, 400, `Pay Later limit exceeded. Available: GH₵${Number(result.available).toFixed(2)}`);
+
+    return ok(res, {
+      payLaterTxId: result.payLaterTxId,
+      dueDate: result.dueDate,
+      amountDeferred: result.amount,
+      status: 'DEFERRED',
+      idempotent: !!result.idempotent,
+    });
   } catch (e) {
+    console.error('Pay Later request failed:', e.message);
     return fail(res, 500, e.message);
   }
 });
@@ -2196,8 +2245,8 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
       if (['completed', 'cancelled'].includes(String(ride.status || '').toLowerCase())) {
         return { blocked: 'ride-closed' };
       }
-      if (String(ride.paymentStatus || '').toUpperCase() === 'PAID'
-          || String(ride.paymentStatus || '').toUpperCase() === 'CASH_PAID') {
+      if (['PAID', 'CASH_PAID', 'DEFERRED'].includes(String(ride.paymentStatus || '').toUpperCase())
+          || String(ride.paymentMethod || '').toUpperCase() === 'PAY_LATER') {
         return { blocked: 'already-paid' };
       }
       if (String(ride.paymentMethod || '').toLowerCase() === 'cash'
