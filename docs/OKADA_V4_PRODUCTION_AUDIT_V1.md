@@ -537,3 +537,16 @@ Still open: durable Paystack attempt persistence/idempotency, ride completion li
 ## PASS 4.1 CI correction — 2026-10-17
 
 The first Node 22 CI run after adding the ride-acceptance source-level regression test failed because the new test's regex literals were over-escaped and could not be parsed. This was a test-source syntax error, not an application runtime failure. The test literals have been corrected; CI must be rerun and its result recorded before this pass is considered green.
+
+
+## PASS 4.1 runtime and atomic-acceptance verification result — 2026-10-17
+
+- Verified source/test commit: `fc1c136ef662bd5359a7bcec27a1f81921566476`.
+- GitHub Actions run #32: https://github.com/Anaase-Tech/Okada-online/actions/runs/39037327115 — **success**.
+- Backend ran on Node.js 22.23.3: **51 tests passed, 0 failed**.
+- Runtime structure assertions passed: Functions package engine `22`, Firebase runtime `nodejs22`, main entrypoint `v4Entry.js`.
+- Deprecated-config guard self-test passed.
+- Frontend CI used Node.js 24 and production build succeeded.
+- An earlier run for commit `5fdadd4` failed due over-escaped regex syntax in the newly added static test. This was corrected in `fc1c136`; the later run above is green.
+- No Firebase production deployment, Paystack sandbox transaction, or Firestore Emulator concurrency test was performed.
+- Ride acceptance is now transaction-wired in source; emulator-backed concurrent-driver proof remains open.
