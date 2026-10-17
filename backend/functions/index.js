@@ -2390,9 +2390,23 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
         console.error('payment init failure state could not be persisted:', persistError.message);
       }
       console.error('payment init error:', e.response?.data?.message || e.message);
-      return fail(res, providerRejected ? 400 : 502, providerRejected
-        ? (e.response?.data?.message || 'Paystack rejected the payment initialization')
-        : 'Payment initialization outcome is unknown. Do not start another attempt; verify or contact support.');
+      if (providerRejected) {
+        return fail(res, 400, e.response?.data?.message || 'Paystack rejected the payment initialization');
+      }
+      // The provider may have accepted the request even though the response was
+      // lost. Return the reserved reference so the client can verify that exact
+      // attempt instead of being trapped behind an unknown attempt it cannot query.
+      return ok(res, {
+        rideId,
+        reference,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        verified: false,
+        outcome: 'INITIALIZATION_UNKNOWN',
+        paymentStatus: 'INITIALIZATION_UNKNOWN',
+        requiresStatusCheck: true,
+        message: 'Payment initialization outcome is unknown. Verify this reference before retrying or switching to cash.',
+      });
     }
 
     const providerData = providerResponse.data?.data || {};
@@ -2408,7 +2422,17 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
           });
         }
       });
-      return fail(res, 502, 'Payment attempt is recorded but provider authorization could not be confirmed.');
+      return ok(res, {
+        rideId,
+        reference,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        verified: false,
+        outcome: 'INITIALIZATION_UNKNOWN',
+        paymentStatus: 'INITIALIZATION_UNKNOWN',
+        requiresStatusCheck: true,
+        message: 'Provider authorization could not be confirmed. Verify this reference before retrying or switching to cash.',
+      });
     }
 
     const finalState = await db.runTransaction(async (tx) => {

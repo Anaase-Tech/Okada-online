@@ -553,7 +553,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
               {payMethod==="paylater"&&(
                 <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:12,padding:12,marginBottom:12}}>
                   <p style={{fontWeight:700,fontSize:13,color:"#7c3aed",marginBottom:4}}>⏳ Pay Later · 7 day defer</p>
-                  <p className={`text-xs ${t.sub}`}>GH₵{fare.total} deducted from your Pay Later limit. Auto-charged to MoMo in 7 days.</p>
+                  <p className={`text-xs ${t.sub}`}>GH₵{fare.total} reserved against your Pay Later limit. Due in 7 days; automatic MoMo charging is not enabled by this flow.</p>
                 </div>
               )}
               <button disabled={!payMethod || !rideId || payStatus==="processing"} onClick={async()=>{
@@ -589,6 +589,16 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   if(result.verified===true && ["SUCCESS","ALREADY_PAID"].includes(String(result.outcome||"").toUpperCase())) {
                     setPayStatus("paid");
                     toast$("The server already has a verified payment for this ride.");
+                    return;
+                  }
+                  if(result.outcome==="INITIALIZATION_UNKNOWN" && result.reference) {
+                    localStorage.setItem("okada_pending_payment",JSON.stringify({
+                      rideId,pickup,dest,vehicle,reference:result.reference,
+                      fare:{...(fare||{}),total:Number(fare.total),serverFare:currentRide?.fare||fare?.serverFare},
+                    }));
+                    setPaymentReference(result.reference);
+                    setPayStatus("pending");
+                    toast$("The provider response was uncertain. No second attempt was started. Check this exact payment reference before choosing cash or retrying.","error");
                     return;
                   }
                   if(!result.authorizationUrl || !result.reference) throw new Error("Payment authorization could not be opened. The attempt remains recorded; verify its status before retrying.");

@@ -607,3 +607,8 @@ The latest CI run for commit `6c4501e` compiled the frontend but failed one back
 - The ride verification route now returns the ride ID and explicit `REQUIRES_REFUND_REVIEW` outcome so the browser callback can avoid reporting a conflicted capture as a normal payment success.
 - Passenger ride history uses actual backend records; the former randomized sample-history fallback is removed. The driver active ride panel has one Complete action for an in-progress ride rather than two.
 - This is still source-level implementation. CI, Paystack sandbox handling, emulator-based contention, and full Pay Later repayment race tests must pass before it can be declared verified. No production deployment occurred.
+
+
+## Payment recovery clarification — 2026-10-17
+
+When the server cannot determine whether Paystack initialization succeeded, it now returns the already-reserved reference with `outcome=INITIALIZATION_UNKNOWN` and `requiresStatusCheck=true`. The passenger PWA stores that reference and offers status verification rather than making another attempt or hiding the reference behind an HTTP error. A confirmed provider rejection remains a failure response; an uncertain outcome stays fail-closed for cash and Pay Later until verification resolves it. The Pay Later copy no longer promises automatic MoMo charging, which is not implemented by this flow.

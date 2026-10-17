@@ -189,3 +189,13 @@ test('passenger ride history uses server data rather than generated examples', (
   assert.match(passengerSource, /pickupLocation\?\.address/);
   assert.doesNotMatch(passengerSource, /Math\.random\(\)\s*\*\s*20|Kwame A\./);
 });
+
+
+test('unknown provider initialization returns the reserved reference for status recovery', () => {
+  const init = index.slice(index.indexOf("app.post('/payments/initialize'"), index.indexOf("app.get('/payments/verify/:ref'"));
+  assert.match(init, /outcome: 'INITIALIZATION_UNKNOWN'/);
+  assert.match(init, /requiresStatusCheck: true/);
+  assert.match(init, /reference,\s*$/m);
+  assert.match(passengerSource, /result\.outcome==="INITIALIZATION_UNKNOWN"/);
+  assert.match(passengerSource, /api\.verifyPayment\(paymentReference\)/);
+});
