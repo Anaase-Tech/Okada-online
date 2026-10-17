@@ -468,3 +468,58 @@ External work still required:
 - retire the old Paystack Runtime Config only after the migrated deployment is confirmed.
 
 No new Mobility OS feature was added by this migration.
+
+
+## Independent PASS 4.1 audit and runtime addendum — 2026-10-17
+
+This addendum supersedes the older verification snapshot dates above for the current branch state. It does not erase historical findings or certify production readiness.
+
+### Independently inspected source-control snapshot
+
+- Branch: `v4-mobility-os`
+- Parent HEAD before this addendum: `273ecb50e4c4cbede10666da7e99b95804045cb4`
+- GitHub Actions run #29 for that source snapshot: backend suite **50 passed / 0 failed**, deprecated-config guard self-test passed, and frontend build compiled.
+- A Vercel preview record exists for `273ecb50e4c4cbede10666da7e99b95804045cb4} (commit prefix `273ecb5`) and was marked READY. This is not a Firebase deployment or a production end-to-end test.
+- No Firebase production deployment, real Paystack sandbox round trip, or Firestore emulator concurrency test was performed as part of this independent audit.
+
+### Runtime migration
+
+Google Cloud's runtime schedule lists Node.js 20 decommissioning on 2026-10-30. Firebase's current Functions documentation lists Node.js 22 as supported. The active Functions configuration and package engine were still Node 20 at the audited snapshot. This change updates the Functions runtime declaration, package engine, lockfile root engine metadata, and CI validation to Node 22. The web frontend CI runtime is aligned to Node 24 to match `web-app/package.json` and the Vercel preview build requirement.
+
+This is a source/CI change only. It does **not** deploy Firebase Functions or prove the target project has been migrated. CI must pass on the new runtimes before a separately authorized deployment plan is prepared.
+
+### PASS 4 correction verification
+
+- Trotro admin approval route: `requireAuth` is now chained before `requireAdmin`; test coverage uses injected/test-double dependencies and does not prove live Firebase token verification.
+- Journey Paystack secret: active Journey router uses the shared `PAYSTACK_SECRET` Secret Manager parameter; no real Paystack sandbox round trip was verified.
+- Paystack webhook: global JSON middleware captures original bytes in `req.rawBody`; HMAC logic tests exist, but deployed Cloud Function → Firestore settlement integration remains unverified.
+- Ride completion: handler now runs a Firestore transaction and checks for unsettled online payment records. Its logic test uses a reduced handler copy and does not exercise all DTO, owner, loan, savings, and referral side effects.
+- Deprecated-config guard: GitHub Actions log shows self-test cases for normal and optional-chaining `functions.config` references passed. Guard scope remains active JavaScript under `backend/functions`, not a comprehensive repository-wide historical-source audit.
+
+### Newly confirmed risks from direct source inspection
+
+1. **Payment initialization persistence gap:** legacy `/payments/initialize` contacts Paystack before writing the Firestore payment record. If provider initialization succeeds and the later write fails or races ride completion, the completion gate may not see the online attempt. This needs durable attempt-state/idempotency design and failure-window tests.
+2. **Ride acceptance race:** `POST /rides/:rideId/accept` reads `requested` and updates to `accepted` outside a Firestore transaction. Concurrent drivers can both pass the initial check.
+3. **Ride completion state gate:** the transaction rejects already-completed/missing rides, but the inspected gate does not enforce a specific permitted pre-completion lifecycle state. Define the existing intended lifecycle before tightening it; do not invent a new status without product/source evidence.
+4. **Duplicate journey planning route:** `POST /transit/journeys/plan` appears in both `transitRoutes.js` and `transitHubRoutes.js`; the former is mounted first and normally handles the matching request, shadowing the latter.
+5. **Standalone booking idempotency/payment policy:** Trotro and Transit booking transactions protect inventory via shared-trip writes, but no emulator-backed contention test was found and booking retries can create additional booking records. Their payment behavior requires an explicit product decision.
+6. **Pickup/final-mile payload schema:** attach-pickup and attach-final-mile handlers accept caller objects and spread their fields into the stored Journey. Establish an allowlist and ensure all payable amounts remain server-authoritative.
+7. **Historical files:** root `backend/index.js` and `backend/package.json` retain legacy Twilio/config references outside the configured Firebase Functions source. `backend/functions/index.js.bak2` is inside the configured source directory and contains old references; deployment packaging should explicitly exclude backups without deleting them.
+8. **Firestore access contract:** V4 collection names inspected in the rules fall to the default deny. This is safe for backend-only access, but any direct client reads need explicit, ownership-scoped rules. The broad signed-in read of legacy `rides` remains a privacy concern.
+9. **Dependency audit:** CI installation reported 63 dependency vulnerabilities (12 low, 21 moderate, 27 high, 3 critical). This is not a finding that all are exploitable; triage production dependency reachability before targeted upgrades.
+
+### Current decision and next actions
+
+- PASS 4.1 order: (1) Node 22 runtime/CI migration and tests; (2) durable payment-attempt persistence and idempotency; (3) atomic ride acceptance; (4) explicit ride lifecycle gate; (5) resolve duplicate journey planning route without silently dropping behavior; (6) emulator-backed booking and completion concurrency tests; (7) input allowlists, backup packaging, Firestore access contract, dependency triage.
+- Product decision still required: when an online payment attempt fails or is abandoned and a passenger then pays cash, what is the intended resolution policy? Do not implement an invented answer.
+- No Firebase production deployment is authorized by this addendum.
+- Preserve all existing features and historical backups. No fake operational data or exposed secrets.
+
+### Team coordination
+
+A public Slack channel `#okada-v4-team` was created for human-led engineering coordination: https://anaase-tech.slack.com/archives/C0CAW0BGK3J. The kickoff message records branch, verification state, rules, and PASS 4.1 order. A Slack channel is not, by itself, an autonomous bridge between AI assistants: each assistant must actually have access to the workspace/channel and be prompted to read and respond. A Claude bot/user was not found by the current Slack user search, so automated AI-to-AI participation is not yet verified.
+
+### Official runtime references checked 2026-10-17
+
+- Firebase Functions runtime selection: https://firebase.google.com/docs/functions/manage-functions
+- Google Cloud Functions runtime lifecycle: https://docs.cloud.google.com/run/docs/runtimes/function-runtimes
