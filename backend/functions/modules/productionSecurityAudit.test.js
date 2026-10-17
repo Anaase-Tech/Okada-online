@@ -244,3 +244,24 @@ test('driver map receives a real next-stop navigation target and bounded reroute
   assert.ok(map.includes('Date.now() - lastDriverRoute.current.requestedAt >= 30000'));
   assert.ok(map.includes('This is not turn-by-turn or voice navigation.'));
 });
+
+
+test('driver ride queue has the required Firestore composite index', () => {
+  const indexConfig = JSON.parse(read('backend/firestore.indexes.json'));
+  const found = indexConfig.indexes.some((item) => item.collectionGroup === 'rides'
+    && item.queryScope === 'COLLECTION'
+    && item.fields.length === 3
+    && item.fields[0].fieldPath === 'status' && item.fields[0].order === 'ASCENDING'
+    && item.fields[1].fieldPath === 'rideType' && item.fields[1].order === 'ASCENDING'
+    && item.fields[2].fieldPath === 'createdAt' && item.fields[2].order === 'DESCENDING');
+  assert.ok(found, 'driver queue query needs status + rideType + createdAt composite index');
+});
+
+test('driver dispatch is not ready until server accepts a GPS write', () => {
+  const driver = read('web-app/src/screens/DriverApp.jsx');
+  const gps = driver.slice(driver.indexOf('// Real browser GPS only.'), driver.indexOf('// Keep the accepted ride state'));
+  assert.match(gps, /api\.updateLocation\(user\.id, lat, lng, position\.coords\.heading\)\.then/);
+  assert.match(gps, /setGpsReady\(true\)/);
+  assert.match(gps, /setGpsReady\(false\)/);
+  assert.doesNotMatch(gps, /driverSelfPosRef\.current = next;\s*setGpsReady\(true\);/);
+});

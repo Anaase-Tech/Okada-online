@@ -158,11 +158,16 @@ export function DriverApp({user,onLogout,dark,setDark}) {
         lastRenderedAt: shouldRender ? now : previous.lastRenderedAt,
       };
       driverSelfPosRef.current = next;
-      setGpsReady(true);
       if (shouldRender) setDriverSelfPos({ lat, lng, updatedAtMs: now });
       if (shouldPublish) {
-        api.updateLocation(user.id, lat, lng, position.coords.heading).catch((error) => {
+        api.updateLocation(user.id, lat, lng, position.coords.heading).then(() => {
+          setGpsReady(true);
+        }).catch((error) => {
+          // Do not advertise the driver as dispatch-ready if the backend did
+          // not persist the corresponding location timestamp.
+          setGpsReady(false);
           console.warn("Driver location update failed:", error.message);
+          toast$("GPS is available on this device, but dispatch cannot use it until the server receives a location update.", "error");
         });
       }
     }, (error) => {
