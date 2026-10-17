@@ -678,3 +678,14 @@ The first run after adding the Firestore Emulator suite caught a duplicate decla
 ### Transit route activation consistency — 2026-10-17
 
 The emulator fixture initially failed standalone Transit because its route lacked `active: true`, which the actual standalone Transit router intentionally requires. The fixture has been corrected to match the real creation contract. Review of that mismatch exposed a related gap: Journey booking checked that route documents existed but did not reject routes explicitly marked inactive. Journey now rejects `active: false` while retaining compatibility with older records where `active` is absent; an emulator regression test covers the explicitly inactive case.
+
+
+## Final source/CI snapshot verified — 2026-10-17
+
+The source snapshot audited for this handoff is a3841461ed8925198b94637193685749cc937f6d. GitHub Actions run https://github.com/Anaase-Tech/Okada-online/actions/runs/39074794848 completed successfully across all three jobs: backend/structure checks (86 tests, 82 passed, zero failed, four skipped; Node.js 22), Firestore Emulator concurrency suite (4 passed, zero failed), and frontend production build (Node.js 24). The four emulator cases were Trotro contention, standalone Transit contention, two-leg Journey contention, and inactive-route rejection. This does not prove all end-to-end payment/ride races or production navigation.
+
+Source inspection confirms the map uses browser GPS, Firestore listeners, Google Maps markers and a DirectionsService road-route overlay. It is not turn-by-turn or voice navigation. Production Google Maps rendering, authenticated browser E2E, Paystack sandbox behavior, ride acceptance/completion contention and exactly-once financial effects remain unverified.
+
+The latest frontend dependency install log reported 106 vulnerabilities (5 low, 23 moderate, 74 high, 4 critical); triage production dependency paths rather than blindly forcing upgrades. The main branch still declares web-app Node 20.x while v4-mobility-os uses Node 24.x. Backup packaging, broad signed-in reads of rides/drivers, duplicate /transit/journeys/plan route definitions, payment-channel selection contract, and bounded latest-25 driver dispatch query remain open.
+
+Slack #okada-v4-team was checked by the actual member list and had only @africanaihq; Claude/Anthropic membership is not verified. An hourly condition watch was configured to notify only when a Claude integration appears in the actual member list. No Firebase production deployment was performed.
