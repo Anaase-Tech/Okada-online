@@ -15,6 +15,8 @@ const transitBooking = read('backend/functions/modules/transitBookingRoutes.js')
 const trotro = read('backend/functions/modules/trotroRoutesV2.js');
 const vip = read('backend/functions/modules/vipTransitRoutes.js');
 const index = read('backend/functions/index.js');
+const passengerSource = read('web-app/src/screens/PassengerApp.jsx');
+const paymentService = read('backend/functions/modules/legacyPaymentService.js');
 const api = read('web-app/src/api.js');
 const authScreen = read('web-app/src/screens/AuthScreen.jsx');
 const functionsPackage = JSON.parse(read('backend/functions/package.json'));
@@ -147,4 +149,43 @@ test('driver location publishing uses browser geolocation, not generated coordin
   const driver = fs.readFileSync(path.resolve(__dirname, '../../../web-app/src/screens/DriverApp.jsx'), 'utf8');
   assert.match(driver, /navigator\.geolocation\.watchPosition/);
   assert.doesNotMatch(driver, /Math\.random\(\)-0\.5/);
+});
+
+
+test('Pay Later authorization is linked to the ride and is protected against retries and active online attempts', () => {
+  const route = index.slice(index.indexOf("app.post('/fintech/pay-later/request'"), index.indexOf("// GET /fintech/pay-later/history"));
+  assert.match(route, /db\.runTransaction/);
+  assert.match(route, /paymentMethod: 'pay_later'/);
+  assert.match(route, /paymentStatus: 'DEFERRED'/);
+  assert.match(route, /payLaterTxId: payLaterRef\.id/);
+  assert.match(route, /online-payment-unresolved/);
+  assert.match(route, /online-payment-review/);
+  assert.match(route, /idempotent: true/);
+});
+
+test('ride completion validates the stored Pay Later record before authorizing deferred settlement', () => {
+  const complete = index.slice(index.indexOf("app.post('/rides/:rideId/complete'"), index.indexOf('function calcFareSplits'));
+  assert.match(complete, /payLaterCreditRequired/);
+  assert.match(complete, /pay-later-record-missing/);
+  assert.match(complete, /pay-later-record-invalid/);
+  assert.match(complete, /payLaterCreditAuthorized/);
+});
+
+test('late Paystack success cancels an unpaid deferral or flags an already-repaid deferral for refund review', () => {
+  assert.match(paymentService, /ONLINE_SUCCESS_AFTER_PAY_LATER_REPAID/);
+  assert.match(paymentService, /cancelled_online_payment_succeeded/);
+  assert.match(paymentService, /payLater\.used/);
+  assert.match(paymentService, /REQUIRES_REVIEW/);
+});
+
+test('ride payment verification exposes ride ID and manual refund review state', () => {
+  const verify = index.slice(index.indexOf("app.get('/payments/verify/:ref'"), index.indexOf("app.post('/payments/webhook'"));
+  assert.match(verify, /rideId: payment\.rideId/);
+  assert.match(verify, /REQUIRES_REFUND_REVIEW/);
+});
+
+test('passenger ride history uses server data rather than generated examples', () => {
+  assert.match(passengerSource, /api\.getHistory\(user\.id\)/);
+  assert.match(passengerSource, /pickupLocation\?\.address/);
+  assert.doesNotMatch(passengerSource, /Math\.random\(\)\s*\*\s*20|Kwame A\./);
 });

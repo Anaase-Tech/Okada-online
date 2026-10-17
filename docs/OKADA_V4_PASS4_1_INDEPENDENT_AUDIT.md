@@ -128,7 +128,7 @@ The Passenger and Driver PWA paths are being aligned with the server-backed paym
 - Cash selection calls the backend payment-method endpoint and remains waiting until server state records the driver's cash confirmation.
 - Driver acceptance no longer reports success after a failed API call; the active ride listens for actual payment method/status changes.
 - Driver GPS publishing uses browser-provided geolocation; random coordinates and synthetic ETA/driver matches are no longer used in these paths.
-- The Pay Later frontend call now uses the real ride ID and only reports a server-accepted deferred request. Full Pay Later lifecycle integration with the ride completion payment gate remains to be independently verified.
+- The Pay Later frontend call uses the real ride ID and displays deferred status only after the server accepts the request. The following PASS 4.1 payment-policy addendum records the later server-side ride-state integration and still-open end-to-end verification.
 
 No production deployment was performed. Source changes require CI review before the next step.
 
@@ -136,3 +136,14 @@ No production deployment was performed. Source changes require CI review before 
 ## PASS 4.1 correction note — real history and single completion control — 2026-10-17
 
 The latest CI run for commit `6c4501e` compiled the frontend but failed one backend source-contract test because the Passenger screen still contained a fabricated sample-history fallback (random fares and a hard-coded example driver). This was a real no-fake-data violation, so the fix removes the fallback instead of weakening the test. Ride history now maps server records to the screen and shows an explicit error if the request fails. Unknown ratings are no longer displayed as five stars. The same patch removes the duplicate driver Complete button for an in-progress ride. CI must be green after the next commit before this state is marked verified.
+
+
+## PASS 4.1 payment-policy implementation snapshot — 2026-10-17
+
+- Pay Later request is transactional and idempotent for an already-active deferral. It rejects unknown/pending online attempts and provider successes/review states, checks available credit, stores the debit in the user's Pay Later ledger, and links the ride with `paymentMethod=pay_later`, `paymentStatus=DEFERRED`, and `payLaterTxId`.
+- Starting another Paystack attempt or selecting cash is blocked after Pay Later has been authorized.
+- Ride completion verifies the linked Pay Later record, ride/passenger identity, status, and amount. It will not complete a deferred ride if that record is missing or inconsistent, or if an online attempt remains unresolved.
+- If an online payment is later verified before the deferred balance is repaid, the settlement transaction cancels the outstanding Pay Later record and releases the used limit. If the deferred balance was already repaid, the online transaction is marked `REQUIRES_REVIEW` and the ride's earlier settlement/earnings are not repeated. This is manual refund reconciliation, not an automatic refund.
+- The ride verification route now returns the ride ID and explicit `REQUIRES_REFUND_REVIEW` outcome so the browser callback can avoid reporting a conflicted capture as a normal payment success.
+- Passenger ride history uses actual backend records; the former randomized sample-history fallback is removed. The driver active ride panel has one Complete action for an in-progress ride rather than two.
+- This is still source-level implementation. CI, Paystack sandbox handling, emulator-based contention, and full Pay Later repayment race tests must pass before it can be declared verified. No production deployment occurred.
