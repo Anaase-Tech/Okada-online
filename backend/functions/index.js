@@ -821,6 +821,146 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/rides/:rideId/start', requireAuth, async (req, res) => {
+  try {
+    const rideId = sanitize(req.params.rideId, 160);
+    const rideRef = db.collection('rides').doc(rideId);
+    const result = await db.runTransaction(async (tx) => {
+      const rideSnap = await tx.get(rideRef);
+      if (!rideSnap.exists) return { blocked: 'not-found' };
+      const ride = rideSnap.data();
+      if (String(ride.status || '').toLowerCase() === 'in_progress') {
+        if (!req.isAdmin && String(ride.driverId || '') !== String(req.uid)
+            && String(ride.driverFirebaseUid || '') !== String(req.uid)) return { blocked: 'forbidden' };
+        return { blocked: null, alreadyStarted: true };
+      }
+      if (String(ride.status || '').toLowerCase() !== 'accepted') return { blocked: 'invalid-state' };
+      if (!req.isAdmin && String(ride.driverId || '') !== String(req.uid)
+          && String(ride.driverFirebaseUid || '') !== String(req.uid)) return { blocked: 'forbidden' };
+      tx.update(rideRef, {
+        status: 'in_progress',
+        rideStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { blocked: null, alreadyStarted: false };
+    });
+    if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
+    if (result.blocked === 'forbidden') return fail(res, 403, 'Only the assigned driver can start this ride');
+    if (result.blocked === 'invalid-state') return fail(res, 409, 'Ride must be accepted before it can start');
+    return ok(res, { rideId, status: 'in_progress', alreadyStarted: !!result.alreadyStarted });
+  } catch (e) {
+    console.error('start-ride error:', e);
+    return fail(res, 500, e.message);
+  }
+});
+
+// Passenger cash selection is an auditable state transition, not a client-side
+// timer. Switching from Paystack is allowed only after every online attempt is
+// terminally failed/abandoned. Pending, unknown or successful payments block it.
+app.post('/rides/:rideId/payment-method', requireAuth, async (req, res) => {
+  try {
+    const rideId = sanitize(req.params.rideId, 160);
+    const method = String(req.body?.method || '').trim().toLowerCase();
+    if (!rideId || method !== 'cash') return fail(res, 400, 'Only the explicit cash method is accepted by this endpoint');
+
+    const rideRef = db.collection('rides').doc(rideId);
+    const initialRideSnap = await rideRef.get();
+    if (!initialRideSnap.exists) return fail(res, 404, 'Ride not found');
+    const initialRide = initialRideSnap.data();
+    const rider = await resolveUserRef(initialRide.userId, req);
+    if (!rider || rider.ref.id !== initialRide.userId) return fail(res, 403, 'Payment access denied');
+    const cashPaymentRef = db.collection('payments').doc();
+    const cashReference = `cash-${crypto.randomUUID()}`;
+
+    const result = await db.runTransaction(async (tx) => {
+      const rideSnap = await tx.get(rideRef);
+      if (!rideSnap.exists) return { blocked: 'not-found' };
+      const ride = rideSnap.data();
+      if (ride.userId !== initialRide.userId) return { blocked: 'ride-changed' };
+      if (['completed', 'cancelled'].includes(String(ride.status || '').toLowerCase())) return { blocked: 'ride-closed' };
+      const pSnap = await tx.get(db.collection('payments').where('rideId', '==', rideId));
+      const ridePayments = pSnap.docs
+        .map((doc) => ({ ref: doc.ref, data: doc.data() }))
+        .filter((item) => item.data.purpose === 'ride');
+
+      if (String(ride.paymentMethod || '').toLowerCase() === 'cash'
+          && String(ride.paymentStatus || '').toUpperCase() === 'CASH_AWAITING_DRIVER'
+          && ride.cashPaymentReference) {
+        const existingCash = ridePayments.find((item) => String(item.data.reference || '') === String(ride.cashPaymentReference));
+        return { blocked: null, idempotent: true, reference: ride.cashPaymentReference, amount: Number(existingCash?.data.amount || ride.fare?.total) };
+      }
+      if (['PAID', 'CASH_PAID'].includes(String(ride.paymentStatus || '').toUpperCase())) {
+        return { blocked: 'already-paid' };
+      }
+
+      const onlinePayments = ridePayments.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
+      const terminalStatuses = ['FAILED', 'ABANDONED', 'INITIALIZATION_FAILED', 'CANCELLED', 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED'];
+      const activeOrUnknown = onlinePayments.filter((item) => !terminalStatuses.includes(String(item.data.status || '').toUpperCase()));
+      if (onlinePayments.some((item) => ['COMPLETED', 'COMPLETED_REFUND_REVIEW'].includes(String(item.data.status || '').toUpperCase()))) {
+        return { blocked: 'already-paid' };
+      }
+      if (activeOrUnknown.length) return { blocked: 'online-payment-unresolved' };
+
+      const amount = Number(ride.fare?.total);
+      if (!Number.isFinite(amount) || amount <= 0) return { blocked: 'invalid-fare' };
+
+      tx.set(cashPaymentRef, {
+        rideId,
+        passengerId: req.uid,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        provider: 'cash',
+        paymentMethod: 'cash',
+        reference: cashReference,
+        status: 'cash_pending_confirmation',
+        purpose: 'ride',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      tx.update(rideRef, {
+        paymentMethod: 'cash',
+        payMethod: 'cash',
+        paymentStatus: 'CASH_AWAITING_DRIVER',
+        cashPaymentReference: cashReference,
+        cashFallbackStatus: onlinePayments.length ? 'FAILED_ONLINE_SWITCH_TO_CASH' : 'CASH_SELECTED',
+        cashSelectedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      if (ride.driverId) {
+        tx.set(db.collection('notifications').doc(), {
+          driverId: ride.driverId,
+          type: 'cash_payment_confirmation_requested',
+          message: 'Passenger selected cash for this ride. Confirm only after physically receiving the fare.',
+          rideId,
+          amount: +amount.toFixed(2),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      return { blocked: null, idempotent: false, reference: cashReference, amount: +amount.toFixed(2) };
+    });
+
+    if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
+    if (result.blocked === 'ride-changed') return fail(res, 409, 'Ride changed while selecting cash');
+    if (result.blocked === 'ride-closed') return fail(res, 409, 'This ride is already closed');
+    if (result.blocked === 'already-paid') return fail(res, 409, 'This ride already has a successful payment');
+    if (result.blocked === 'online-payment-unresolved') {
+      return fail(res, 409, 'Online payment is still pending or its outcome is unknown. Verify it before switching to cash.');
+    }
+    if (result.blocked === 'invalid-fare') return fail(res, 400, 'Ride does not have a valid payable fare');
+    return ok(res, {
+      rideId,
+      method: 'cash',
+      paymentStatus: 'CASH_AWAITING_DRIVER',
+      cashPaymentReference: result.reference,
+      amount: result.amount,
+      idempotent: !!result.idempotent,
+    });
+  } catch (e) {
+    console.error('ride payment-method error:', e);
+    return fail(res, 500, e.message);
+  }
+});
+
 app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
   try {
     const rideId = req.params.rideId;
@@ -852,37 +992,51 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
       }
       const driverData = driverDoc.data();
 
-      // Payment gate: this repository has no paymentMethod/"cash" field
-      // anywhere in its data model (confirmed by searching this file and
-      // legacyPaymentService.js) - a `payments` record with purpose:'ride'
-      // is only ever created by /payments/initialize, which only the
-      // online (Paystack) flow calls. So the presence of a payments
-      // record is itself the only existing signal that this ride went
-      // through online payment at all:
-      //   - no payments record for this rideId -> never put through
-      //     online payment -> this is the existing cash-ride path;
-      //     completion proceeds exactly as it always has, unconditionally.
-      //   - a payments record exists but neither it nor the ride shows a
-      //     completed/paid status -> an online payment was attempted and
-      //     has not succeeded yet -> this is exactly the gap PASS 1/PASS 3
-      //     found (earnings could release before payment settled) -> block.
-      //   - a payments record exists and is completed / ride.paymentStatus
-      //     is 'paid' -> proceeds as before.
-      // This adds no new payment state - it only reads the existing
-      // payments collection and ride.paymentStatus field, both already
-      // written by legacyPaymentService.js.settleRidePayment.
+      // Payment gate: inspect every attempt for the ride. Legacy rides with
+      // no payment metadata retain their existing completion path. New cash
+      // selection is not considered paid until the assigned driver explicitly
+      // confirms physical receipt; Paystack pending/unknown attempts cannot be
+      // bypassed by choosing cash.
       const paymentAttemptSnap = await tx.get(
-        db.collection('payments')
-          .where('rideId', '==', rideId)
-          .where('purpose', '==', 'ride')
-          .limit(1)
+        db.collection('payments').where('rideId', '==', rideId)
       );
-      if (!paymentAttemptSnap.empty) {
-        const paymentAttempt = paymentAttemptSnap.docs[0].data();
-        const ridePaid = String(rideData.paymentStatus || '').toLowerCase() === 'paid';
-        const paymentCompleted = String(paymentAttempt.status || '').toLowerCase() === 'completed';
-        if (!ridePaid && !paymentCompleted) {
+      const ridePaymentRecords = paymentAttemptSnap.docs
+        .map((doc) => ({ ref: doc.ref, data: doc.data() }))
+        .filter((item) => item.data.purpose === 'ride');
+      const paymentMethod = String(rideData.paymentMethod || '').toUpperCase();
+      const paymentStatus = String(rideData.paymentStatus || '').toUpperCase();
+      const cashConfirmationRequired = paymentMethod === 'CASH'
+        && paymentStatus === 'CASH_AWAITING_DRIVER';
+
+      let cashPaymentDoc = null;
+      if (cashConfirmationRequired) {
+        if (req.body?.confirmCash !== true) return { blocked: 'cash-confirmation-required' };
+        const onlineAttempts = ridePaymentRecords.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
+        const terminalStatuses = ['FAILED', 'ABANDONED', 'INITIALIZATION_FAILED', 'CANCELLED', 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED'];
+        if (onlineAttempts.some((item) => !terminalStatuses.includes(String(item.data.status || '').toUpperCase()))) {
           return { blocked: 'payment-not-settled' };
+        }
+        cashPaymentDoc = ridePaymentRecords.find((item) =>
+          String(item.data.reference || '') === String(rideData.cashPaymentReference || '')
+          && String(item.data.status || '').toUpperCase() === 'CASH_PENDING_CONFIRMATION'
+        ) || null;
+        if (!cashPaymentDoc) return { blocked: 'cash-record-missing' };
+      } else if (req.body?.confirmCash === true) {
+        return { blocked: 'cash-not-awaiting-confirmation' };
+      } else {
+        const onlineAttempts = ridePaymentRecords.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
+        if (onlineAttempts.length) {
+          const ridePaid = paymentStatus === 'PAID';
+          const currentPayment = onlineAttempts.find((item) => String(item.data.reference || '') === String(rideData.paymentReference || ''));
+          const currentPaymentCompleted = currentPayment
+            && String(currentPayment.data.status || '').toUpperCase() === 'COMPLETED';
+          const activeOtherAttempt = onlineAttempts.some((item) =>
+            String(item.data.reference || '') !== String(rideData.paymentReference || '')
+            && ['INITIALIZING', 'INITIALIZATION_UNKNOWN', 'PENDING', 'PROCESSING', 'ONGOING', 'QUEUED'].includes(String(item.data.status || '').toUpperCase())
+          );
+          if (activeOtherAttempt || (!ridePaid && !currentPaymentCompleted)) {
+            return { blocked: 'payment-not-settled' };
+          }
         }
       }
 
@@ -1083,6 +1237,16 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
         });
       }
 
+      if (cashConfirmationRequired && cashPaymentDoc) {
+        tx.update(cashPaymentDoc.ref, {
+          status: 'completed',
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          cashConfirmedBy: req.uid,
+          cashConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
       tx.update(rideRef, {
         status: 'completed',
         fare,
@@ -1094,6 +1258,13 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
         netOwnerEarnings: ownerDoc ? netOwner : null,
         earningsReleased: false, // released after 24hr hold
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(cashConfirmationRequired ? {
+          paymentMethod: 'cash',
+          payMethod: 'cash',
+          paymentStatus: 'CASH_PAID',
+          cashConfirmedBy: req.uid,
+          cashConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+        } : {}),
       });
 
       tx.set(db.collection('notifications').doc(), {
@@ -1118,6 +1289,15 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     if (result.blocked === 'forbidden') return fail(res, 403, 'Only the assigned driver can complete this ride');
     if (result.blocked === 'payment-not-settled') {
       return fail(res, 409, 'This ride has an online payment that has not completed yet - verify payment before completing the ride');
+    }
+    if (result.blocked === 'cash-confirmation-required') {
+      return fail(res, 409, 'The passenger selected cash. The assigned driver must confirm physical receipt before completing this ride.');
+    }
+    if (result.blocked === 'cash-not-awaiting-confirmation') {
+      return fail(res, 409, 'This ride is not waiting for a cash confirmation. Do not record a cash payment for an online-paid ride.');
+    }
+    if (result.blocked === 'cash-record-missing') {
+      return fail(res, 409, 'Cash confirmation record is missing. Ask an administrator to review before completing.');
     }
     return ok(res, result.response);
   } catch (e) {
@@ -1980,20 +2160,18 @@ app.post('/wallet/withdraw', requireAuth, async (req, res) => {
 
 app.post('/payments/initialize', requireAuth, async (req, res) => {
   try {
-    const { rideId, email, phone } = req.body;
+    const rideId = sanitize(req.body?.rideId, 160);
+    const { email, phone } = req.body || {};
     if (!rideId) return fail(res, 400, 'rideId required');
 
-    const rideRef = db.collection('rides').doc(sanitize(rideId));
-    const rideSnap = await rideRef.get();
-    if (!rideSnap.exists) return fail(res, 404, 'Ride not found');
-    const ride = rideSnap.data();
+    const rideRef = db.collection('rides').doc(rideId);
+    const initialRideSnap = await rideRef.get();
+    if (!initialRideSnap.exists) return fail(res, 404, 'Ride not found');
+    const initialRide = initialRideSnap.data();
+    const rider = await resolveUserRef(initialRide.userId, req);
+    if (!rider) return fail(res, 403, 'Payment access denied');
 
-    const rider = await resolveUserRef(ride.userId);
-    if (!rider || (rider.data?.firebaseUid !== req.uid && rider.ref.id !== req.uid)) {
-      return fail(res, 403, 'Payment access denied');
-    }
-
-    const amount = Number(ride.fare?.total);
+    const amount = Number(initialRide.fare?.total);
     if (!Number.isFinite(amount) || amount <= 0) {
       return fail(res, 400, 'Ride does not have a payable stored fare');
     }
@@ -2004,40 +2182,192 @@ app.post('/payments/initialize', requireAuth, async (req, res) => {
       return fail(res, 500, 'Payments are not configured yet');
     }
 
-    const r = await axios.post(
-      'https://api.paystack.co/transaction/initialize',
-      {
-        email: sanitize(email) || `${sanitize(phone || '').replace('+','')}@okadaonline.com`,
-        amount: Math.round(amount * 100),
-        currency: 'GHS',
-        reference: `ride-${sanitize(rideId)}-${Date.now()}`,
-        callback_url: 'https://okada-online.vercel.app/payment/callback',
-        metadata: { rideId: sanitize(rideId), phone: sanitize(phone || '') },
-      },
-      { headers: { Authorization: `Bearer ${paystackSecret}` } }
-    );
+    // Reserve a durable attempt before contacting Paystack. If the provider
+    // call succeeds but the next Firestore write or the HTTP response fails,
+    // the ride still has a persisted active attempt and cannot silently fall
+    // through to the cash completion path.
+    const attemptRef = db.collection('payments').doc();
+    const reference = `ride-${crypto.randomUUID()}`;
+    const reservation = await db.runTransaction(async (tx) => {
+      const rideSnap = await tx.get(rideRef);
+      if (!rideSnap.exists) return { blocked: 'ride-not-found' };
+      const ride = rideSnap.data();
+      if (ride.userId !== initialRide.userId) return { blocked: 'ride-changed' };
+      if (['completed', 'cancelled'].includes(String(ride.status || '').toLowerCase())) {
+        return { blocked: 'ride-closed' };
+      }
+      if (String(ride.paymentStatus || '').toUpperCase() === 'PAID'
+          || String(ride.paymentStatus || '').toUpperCase() === 'CASH_PAID') {
+        return { blocked: 'already-paid' };
+      }
+      if (String(ride.paymentMethod || '').toLowerCase() === 'cash'
+          || String(ride.paymentStatus || '').toUpperCase() === 'CASH_AWAITING_DRIVER') {
+        return { blocked: 'cash-selected' };
+      }
 
-    await db.collection('payments').add({
-      rideId: sanitize(rideId),
-      passengerId: req.uid,
-      amount: +amount.toFixed(2),
-      currency: 'GHS',
-      provider: 'paystack',
-      reference: r.data.data.reference,
-      status: 'pending',
-      purpose: 'ride',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      const paymentSnaps = await tx.get(db.collection('payments').where('rideId', '==', rideId));
+      const onlineAttempts = paymentSnaps.docs
+        .map((doc) => ({ ref: doc.ref, data: doc.data() }))
+        .filter((item) => item.data.purpose === 'ride' && String(item.data.provider || '').toLowerCase() !== 'cash');
+      const active = onlineAttempts.filter((item) => [
+        'INITIALIZING', 'INITIALIZATION_UNKNOWN', 'PENDING', 'PROCESSING', 'ONGOING', 'QUEUED',
+      ].includes(String(item.data.status || '').toUpperCase()));
+
+      if (active.length) {
+        if (active.length === 1
+            && String(active[0].data.status || '').toUpperCase() === 'PENDING'
+            && active[0].data.authorizationUrl) {
+          return {
+            reuse: true,
+            authorizationUrl: active[0].data.authorizationUrl,
+            reference: active[0].data.reference,
+            amount: active[0].data.amount,
+            currency: active[0].data.currency || 'GHS',
+            status: active[0].data.status,
+          };
+        }
+        return { blocked: 'attempt-unresolved' };
+      }
+      if (onlineAttempts.some((item) => String(item.data.status || '').toUpperCase() === 'COMPLETED')) {
+        return { blocked: 'already-paid' };
+      }
+
+      tx.set(attemptRef, {
+        rideId,
+        passengerId: req.uid,
+        amount: +amount.toFixed(2),
+        currency: 'GHS',
+        provider: 'paystack',
+        reference,
+        status: 'initializing',
+        purpose: 'ride',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      tx.update(rideRef, {
+        paymentMethod: 'paystack',
+        payMethod: 'paystack',
+        paymentStatus: 'pending',
+        paymentReference: reference,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { created: true, reference, amount: +amount.toFixed(2), currency: 'GHS' };
     });
 
+    if (reservation.blocked) {
+      if (reservation.blocked === 'ride-not-found') return fail(res, 404, 'Ride not found');
+      if (reservation.blocked === 'ride-changed') return fail(res, 409, 'Ride changed during payment initialization');
+      if (reservation.blocked === 'ride-closed') return fail(res, 409, 'This ride is already closed');
+      if (reservation.blocked === 'already-paid') return fail(res, 409, 'This ride already has a completed payment');
+      if (reservation.blocked === 'cash-selected') return fail(res, 409, 'Cash was selected for this ride; complete or resolve that payment path first');
+      return fail(res, 409, 'An online payment attempt is still being resolved. Verify the existing reference before retrying.');
+    }
+    if (reservation.reuse) {
+      return ok(res, {
+        authorizationUrl: reservation.authorizationUrl,
+        reference: reservation.reference,
+        amount: reservation.amount,
+        currency: reservation.currency,
+        reusedAttempt: true,
+      });
+    }
+
+    let providerResponse;
+    try {
+      providerResponse = await axios.post(
+        'https://api.paystack.co/transaction/initialize',
+        {
+          email: sanitize(email) || `${sanitize(phone || '').replace('+','')}@okadaonline.com`,
+          amount: Math.round(amount * 100),
+          currency: 'GHS',
+          reference,
+          callback_url: 'https://okada-online.vercel.app/payment/callback',
+          metadata: { rideId, phone: sanitize(phone || '') },
+        },
+        { headers: { Authorization: `Bearer ${paystackSecret}` } }
+      );
+    } catch (e) {
+      const providerRejected = !!e.response;
+      try {
+        await db.runTransaction(async (tx) => {
+          const [paymentSnap, rideSnap] = await Promise.all([tx.get(attemptRef), tx.get(rideRef)]);
+          if (!paymentSnap.exists) return;
+          if (String(paymentSnap.data().status || '').toUpperCase() !== 'INITIALIZING') return;
+          tx.update(attemptRef, {
+            status: providerRejected ? 'initialization_failed' : 'initialization_unknown',
+            failureReason: String(e.response?.data?.message || e.message || 'Payment initialization outcome unknown').slice(0, 300),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          if (rideSnap.exists && String(rideSnap.data().paymentReference || '') === reference
+              && String(rideSnap.data().paymentStatus || '').toUpperCase() !== 'PAID') {
+            tx.update(rideRef, {
+              paymentStatus: providerRejected ? 'failed' : 'initialization_unknown',
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        });
+      } catch (persistError) {
+        console.error('payment init failure state could not be persisted:', persistError.message);
+      }
+      console.error('payment init error:', e.response?.data?.message || e.message);
+      return fail(res, providerRejected ? 400 : 502, providerRejected
+        ? (e.response?.data?.message || 'Paystack rejected the payment initialization')
+        : 'Payment initialization outcome is unknown. Do not start another attempt; verify or contact support.');
+    }
+
+    const providerData = providerResponse.data?.data || {};
+    if (!providerData.authorization_url || String(providerData.reference || '') !== reference) {
+      console.error('Paystack initialization returned an incomplete or mismatched response');
+      await db.runTransaction(async (tx) => {
+        const paymentSnap = await tx.get(attemptRef);
+        if (paymentSnap.exists && String(paymentSnap.data().status || '').toUpperCase() === 'INITIALIZING') {
+          tx.update(attemptRef, {
+            status: 'initialization_unknown',
+            failureReason: 'Provider response missing authorization URL or reference mismatch',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      });
+      return fail(res, 502, 'Payment attempt is recorded but provider authorization could not be confirmed.');
+    }
+
+    const finalState = await db.runTransaction(async (tx) => {
+      const [paymentSnap, rideSnap] = await Promise.all([tx.get(attemptRef), tx.get(rideRef)]);
+      if (!paymentSnap.exists) throw new Error('Reserved payment attempt was not found');
+      const current = paymentSnap.data();
+      if (String(current.status || '').toUpperCase() === 'COMPLETED') {
+        return { paid: true };
+      }
+      tx.update(attemptRef, {
+        status: 'pending',
+        authorizationUrl: providerData.authorization_url,
+        accessCode: providerData.access_code || null,
+        providerReference: String(providerData.reference),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      if (rideSnap.exists && String(rideSnap.data().paymentReference || '') === reference
+          && String(rideSnap.data().paymentStatus || '').toUpperCase() !== 'PAID') {
+        tx.update(rideRef, {
+          paymentStatus: 'pending',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      return { paid: false };
+    });
+
+    if (finalState.paid) {
+      return ok(res, { reference, verified: true, outcome: 'SUCCESS', rideId, amount: +amount.toFixed(2), currency: 'GHS' });
+    }
     return ok(res, {
-      authorizationUrl: r.data.data.authorization_url,
-      reference: r.data.data.reference,
+      authorizationUrl: providerData.authorization_url,
+      reference,
+      rideId,
       amount: +amount.toFixed(2),
       currency: 'GHS',
     });
   } catch (e) {
-    console.error('payment init error:', e.response?.data || e.message);
-    return fail(res, 500, e.response?.data?.message || e.message);
+    console.error('payment init error:', e.message);
+    return fail(res, 500, e.message);
   }
 });
 
@@ -2100,6 +2430,7 @@ app.get('/payments/verify/:ref', requireAuth, async (req, res) => {
       if (['failed', 'abandoned'].includes(providerStatus)) {
         const settled = await markRidePaymentFailed({
           db, admin, reference, reason: `Paystack transaction status: ${providerStatus}`,
+          providerStatus,
         });
         return ok(res, { reference, verified: false, outcome: 'FAILED', ...settled });
       }

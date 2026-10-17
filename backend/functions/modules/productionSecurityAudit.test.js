@@ -101,3 +101,29 @@ test('legacy ride acceptance performs the ride state transition and notification
   assert.doesNotMatch(handler, /await rideRef\.get\(/);
   assert.doesNotMatch(handler, /await rideRef\.update\(/);
 });
+
+
+test('ride payment initialization reserves the attempt before contacting Paystack', () => {
+  const init = index.slice(index.indexOf("app.post('/payments/initialize'"), index.indexOf("app.get('/payments/verify/:ref'"));
+  assert.ok(init.indexOf("status: 'initializing'") >= 0);
+  assert.ok(init.indexOf("tx.set(attemptRef") < init.indexOf("axios.post("));
+  assert.match(init, /initialization_unknown/);
+  assert.match(init, /reference,\s*$/m);
+});
+
+test('cash fallback requires terminal online outcomes and a durable driver-confirmation record', () => {
+  const methodRoute = index.slice(index.indexOf("app.post('/rides/:rideId/payment-method'"), index.indexOf("app.post('/rides/:rideId/complete'"));
+  assert.match(methodRoute, /online-payment-unresolved/);
+  assert.match(methodRoute, /CASH_AWAITING_DRIVER/);
+  assert.match(methodRoute, /cash_pending_confirmation/);
+  const complete = index.slice(index.indexOf("app.post('/rides/:rideId/complete'"), index.indexOf("function calcFareSplits"));
+  assert.match(complete, /req\.body\?\.confirmCash !== true/);
+  assert.match(complete, /paymentStatus: 'CASH_PAID'/);
+});
+
+test('ride start is an authenticated atomic accepted-to-in-progress transition', () => {
+  const start = index.slice(index.indexOf("app.post('/rides/:rideId/start'"), index.indexOf("app.post('/rides/:rideId/payment-method'"));
+  assert.match(start, /db\.runTransaction/);
+  assert.match(start, /status: 'in_progress'/);
+  assert.match(start, /ride\.status.*accepted/s);
+});

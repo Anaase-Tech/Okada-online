@@ -104,3 +104,12 @@ The first run after the atomic ride-acceptance change exposed a syntax error in 
 GitHub Actions run #32 for source/test commit `fc1c136ef662bd5359a7bcec27a1f81921566476` completed successfully: backend tests **51 passed / 0 failed** on Node.js 22.23.3, Functions/Firebase runtime assertions passed, the deprecated-config guard self-test passed, and the Node.js 24 frontend production build succeeded. The earlier test syntax failure on `5fdadd4` was corrected in `fc1c136`.
 
 This confirms the source and CI migration gate only. It does not certify Firebase production deployment, live Paystack behavior, or Firestore Emulator contention. Atomic ride acceptance has source-level regression coverage but still requires an emulator-backed concurrent-driver test.
+
+
+## PASS 4.1 continued — cash fallback rule and implementation — 2026-10-17
+
+Decision: allow cash fallback only after every online payment attempt is conclusively failed/abandoned, and only count cash as paid after explicit assigned-driver confirmation. If the provider status is pending/ongoing/unknown, hold the ride/payment state and do not permit cash fallback. A late Paystack success after cash has been confirmed is flagged for refund review; it does not trigger a second ride payout or silently overwrite the cash settlement.
+
+Source changes added: durable Paystack attempt reservation before provider call; fail-closed handling of uncertain provider result; explicit cash selection record; authenticated atomic start endpoint; completion gate checking all payment attempts; late-success/refund-review reconciliation. These source edits require CI and emulator-backed verification; no production Firebase deployment was performed.
+
+The product rule minimizes double collection and prevents "abandoned" frontend redirects from being treated as proof that the provider charge definitively failed. An unknown/pending provider state must be reconciled before taking cash.

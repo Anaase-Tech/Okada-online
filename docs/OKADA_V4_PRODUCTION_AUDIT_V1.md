@@ -550,3 +550,26 @@ The first Node 22 CI run after adding the ride-acceptance source-level regressio
 - An earlier run for commit `5fdadd4` failed due over-escaped regex syntax in the newly added static test. This was corrected in `fc1c136`; the later run above is green.
 - No Firebase production deployment, Paystack sandbox transaction, or Firestore Emulator concurrency test was performed.
 - Ride acceptance is now transaction-wired in source; emulator-backed concurrent-driver proof remains open.
+
+
+## PASS 4.1 payment/cash policy and implementation — 2026-10-17
+
+### Recommended policy adopted in source
+
+A passenger can switch a ride to cash only after the backend has verified that every Paystack attempt for that ride is terminally failed/abandoned (or no online attempt exists). Pending, processing, queued, initializing, or unknown provider outcomes block cash fallback. Cash selection creates a durable `cash_pending_confirmation` payment record and marks the ride `CASH_AWAITING_DRIVER`. The ride is not considered cash-paid until the assigned driver submits explicit confirmation through ride completion. No timer or client toast constitutes payment proof.
+
+If Paystack succeeds after the passenger has selected cash but before the driver confirms cash, the server restores the ride's payment method to Paystack and tells both passenger/driver not to collect cash as well. If Paystack succeeds after the ride has been confirmed cash-paid (or another online reference already settled it), the payment is marked `completed_refund_review` / `REQUIRES_REVIEW`; the ride is not settled again and financial side effects are not repeated. This is a reconciliation alert, not an automatic refund.
+
+### Implementation added in PASS 4.1 continuation
+
+- Legacy ride payment initialization now reserves a durable `payments` record and payment reference inside a Firestore transaction before calling Paystack.
+- Repeated initialization reuses an existing pending authorization URL, or fails closed if an attempt's outcome remains unknown; it does not silently create a second attempt.
+- Provider failures distinguish confirmed initialization rejection from an unknown network outcome.
+- Added `POST /rides/:rideId/payment-method` for passenger cash selection, with online-attempt terminal-state checks and a stored cash confirmation record.
+- Added `POST /rides/:rideId/start` as a real, authenticated transition from accepted to in-progress so the passenger UI need not pretend a ride has started.
+- The ride completion transaction now examines every payment attempt and requires explicit driver confirmation for the new cash fallback path.
+- Legacy payment settlement detects a Paystack success arriving after cash payment or another successful online reference, and flags refund review without changing the already-settled ride or crediting earnings again.
+
+### Verification status at time of this addendum
+
+These changes are source edits awaiting the CI result. Unit/source regression coverage is being added. No live Paystack sandbox, Firebase Emulator contention test, refund execution, or Firebase production deployment has been performed. Do not call this production-ready until those gaps are closed.
