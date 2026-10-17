@@ -201,3 +201,10 @@ This is source-level hardened and regression-tested; actual GPS silence/recovery
 Direct source inspection found a real Firestore transaction-order defect in `createJourneyBookingRouter`: the multi-leg loop could queue writes for leg one and then execute a route or active-booking `tx.get()` for leg two. Firestore requires every transaction read before the first write; a multi-leg booking could fail despite pure journey-state tests passing.
 
 The route now separates read and compute phases from the write phase: reads all unique trips, referenced routes and active-booking queries first; validates all segment capacity including overlapping legs within the same Journey; only then updates each trip inventory counter, writes per-leg payment holds and writes the parent Journey. A source-level regression guard now verifies there are no transaction reads after the first write. This does not replace the Firestore Emulator contention tests added in the separate CI job.
+
+
+## Firestore Emulator stress suite — 2026-10-17
+
+Added a dedicated GitHub Actions job to start Firestore Emulator and exercise the actual Trotro, standalone Transit, and Journey booking router factories with concurrent HTTP requests. Each case submits four simultaneous one-seat requests against capacity two and asserts exactly two accepted bookings and no seat over-allocation. The Journey case uses two legs and covers the multi-leg read-before-write defect.
+
+The emulator suite is opt-in (`OKADA_FIRESTORE_EMULATOR=1`) and skips in the ordinary fast unit suite. Its dedicated CI result must be checked independently; no emulator result is claimed until that job runs green. The injected test-auth middleware isolates transactional booking logic and does not replace Firebase ID-token verification tests.

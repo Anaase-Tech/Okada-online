@@ -344,3 +344,15 @@ test('Journey multi-leg transaction reads all trips, routes and active bookings 
   assert.equal(writePhase.includes('await tx.get('), false, 'transaction reads must not follow the first write');
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
 });
+
+
+test('Journey multi-leg transaction reads trip, route, and booking state before its first write', () => {
+  const start = journeyRoutes.indexOf("router.post('/book', requireAuth");
+  const end = journeyRoutes.indexOf("router.post('/:journeyId/confirm'", start);
+  const route = journeyRoutes.slice(start, end);
+  const writes = [route.indexOf('tx.update('), route.indexOf('tx.set(')].filter((value) => value >= 0);
+  assert.ok(writes.length > 0);
+  const firstWrite = Math.min(...writes);
+  assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
+  assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
+});

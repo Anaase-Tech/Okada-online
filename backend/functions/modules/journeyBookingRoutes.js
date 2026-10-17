@@ -50,6 +50,18 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         }
       }
 
+      const seatCount = Number(req.body?.seatCount || 1);
+      if (legs.some((leg) => leg.tripId) && (!Number.isInteger(seatCount) || seatCount < 1 || seatCount > 10)) {
+        return fail(res, 400, 'seatCount must be between 1 and 10');
+      }
+      for (const [label, option] of [['Pickup', req.body?.pickup], ['Final-mile', req.body?.finalMile]]) {
+        if (!option || option.fare == null || option.fare === '') continue;
+        const suppliedFare = Number(option.fare);
+        if (!Number.isFinite(suppliedFare) || suppliedFare !== 0) {
+          return fail(res, 400, label + ' fare must be priced by a trusted backend quote before charging');
+        }
+      }
+
       const result = await db.runTransaction(async (tx) => {
         // READ PHASE 1: load/validate all trips.
         const tripRefs = [...new Set(legs.map((leg) => leg.tripId).filter(Boolean))]
@@ -68,9 +80,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (!trip.routeId) throw new Error('Transit trip ' + leg.tripId + ' has no configured route');
         }
 
-        // READ PHASE 2: load every route and every active-booking query before
-        // any writes are queued. Firestore transactions cannot perform reads
-        // after the first write; the former per-leg loop violated that rule.
+        // READ PHASE 2: load every referenced route before any transaction writes.
         const routeIds = [...new Set(tripRefs.map((ref) => String(trips.get(ref.id).data().routeId)))];
         const routeRefs = routeIds.map((id) => db.collection('transitRoutes').doc(id));
         const routeSnaps = await Promise.all(routeRefs.map((ref) => tx.get(ref)));
@@ -79,6 +89,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           if (!snap.exists) throw new Error('Transit route not found: ' + routeId);
         }
 
+        // READ PHASE 3: fetch all active booking/hold inventories before writes.
         const bookingSnaps = await Promise.all(tripRefs.map((ref) => tx.get(
           db.collection('transitBookings')
             .where('tripId', '==', ref.id)
@@ -98,7 +109,7 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         const trustedLegFares = [];
         const bookingRefs = [];
 
-        // COMPUTE PHASE: validate all segments/capacity before writing.
+        // COMPUTE PHASE: validate segments/capacity before queuing any write.
         for (const leg of legs) {
           if (!leg.tripId) continue;
           const trip = trips.get(leg.tripId).data();
@@ -126,10 +137,10 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
           });
           const existingSeats = existing.reduce((sum, doc) => sum + Number(doc.data().seatCount || 0), 0);
           const earlierLegs = plannedByTrip.get(leg.tripId) || [];
-          const seatsWithinJourney = earlierLegs
+          const journeySeats = earlierLegs
             .filter((planned) => planned.from < to && from < planned.to)
             .reduce((sum, planned) => sum + planned.seatCount, 0);
-          if (existingSeats + seatsWithinJourney + seatCount > Number(trip.capacity || 0)) {
+          if (existingSeats + journeySeats + seatCount > Number(trip.capacity || 0)) {
             throw new Error('No seats available on ' + leg.origin + ' → ' + leg.destination);
           }
 
@@ -146,8 +157,8 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
 
         const totalFare = trustedLegFares.reduce((sum, fare) => sum + Number(fare || 0), 0);
 
-        // WRITE PHASE: every read is complete. One trip write per unique trip
-        // serializes competing bookings; increment by the number of journey legs.
+        // WRITE PHASE: all reads are complete. Serialize through each shared
+        // trip document to protect capacity under concurrent bookings.
         const legCountByTrip = new Map();
         for (const planned of plannedLegs) {
           legCountByTrip.set(planned.tripId, (legCountByTrip.get(planned.tripId) || 0) + 1);
