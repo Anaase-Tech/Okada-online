@@ -74,8 +74,8 @@ What should happen when an online payment attempt fails or is abandoned and the 
 ## PASS 4.1 execution order
 
 1. Verify Node 22 backend runtime + Node 24 frontend CI on this branch; no deployment.
-2. Design and implement durable payment-attempt persistence/idempotency, with regression tests.
-3. Make ride acceptance atomic.
+2. **Completed in source, awaiting CI result:** make ride acceptance atomic and write its notification in the winning transaction; a source-level regression test was added. Emulator-backed two-driver contention testing remains required.
+3. Design and implement durable payment-attempt persistence/idempotency, with regression tests.
 4. Enforce a validated ride completion lifecycle without changing legitimate behavior.
 5. Reconcile duplicate journey-plan route behavior.
 6. Add emulator-backed contention and retry tests.

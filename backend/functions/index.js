@@ -762,38 +762,61 @@ app.post('/rides/request', requireAuth, async (req, res) => {
 
 app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
   try {
-    const rideRef = db.collection('rides').doc(req.params.rideId);
-    const ride = await rideRef.get();
-    if (!ride.exists) return fail(res, 404, 'Ride not found');
-    if (ride.data().status !== 'requested')
-      return fail(res, 400, 'Ride no longer available');
+    const rideId = sanitize(req.params.rideId, 160);
+    const driverId = sanitize(req.body?.driverId, 160);
+    if (!rideId || !driverId) return fail(res, 400, 'rideId and driverId required');
 
-    const driver = await db.collection('drivers').doc(sanitize(req.body.driverId)).get();
-    if (!driver.exists || !driver.data().isVerified)
-      return fail(res, 403, 'Driver not verified');
-    if (!req.isAdmin && driver.data()?.firebaseUid !== req.uid && driver.id !== req.uid)
+    const rideRef = db.collection('rides').doc(rideId);
+    const driverRef = db.collection('drivers').doc(driverId);
+    // Allocate the notification reference before entering the transaction;
+    // only the winning state transition writes it. This keeps the ride
+    // assignment and its notification atomic and prevents two drivers from
+    // both accepting the same requested ride.
+    const notificationRef = db.collection('notifications').doc();
+
+    const result = await db.runTransaction(async (tx) => {
+      const rideSnap = await tx.get(rideRef);
+      if (!rideSnap.exists) return { blocked: 'not-found' };
+      const rideData = rideSnap.data();
+      if (rideData.status !== 'requested') return { blocked: 'unavailable' };
+
+      const driverSnap = await tx.get(driverRef);
+      if (!driverSnap.exists || !driverSnap.data().isVerified) {
+        return { blocked: 'driver-not-verified' };
+      }
+      const driverData = driverSnap.data();
+      if (!req.isAdmin && driverData?.firebaseUid !== req.uid && driverSnap.id !== req.uid) {
+        return { blocked: 'forbidden' };
+      }
+
+      tx.update(rideRef, {
+        driverId: driverSnap.id,
+        driverName: sanitize(driverData.name),
+        driverPhone: sanitize(driverData.phone),
+        driverRating: driverData.rating || 5.0,
+        status: 'accepted',
+        acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      tx.set(notificationRef, {
+        userId: rideData.userId,
+        type: 'ride_accepted',
+        message: `🏍️ ${driverData.name} is on the way!`,
+        rideId,
+        read: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { blocked: null };
+    });
+
+    if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
+    if (result.blocked === 'unavailable') return fail(res, 400, 'Ride no longer available');
+    if (result.blocked === 'driver-not-verified') return fail(res, 403, 'Driver not verified');
+    if (result.blocked === 'forbidden') {
       return fail(res, 403, 'Driver identity does not match the authenticated user');
-
-    await rideRef.update({
-      driverId:    driver.id,
-      driverName:  sanitize(driver.data().name),
-      driverPhone: sanitize(driver.data().phone),
-      driverRating: driver.data().rating || 5.0,
-      status:      'accepted',
-      acceptedAt:  admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // Notify passenger via Firestore notification
-    await db.collection('notifications').add({
-      userId:   ride.data().userId,
-      type:     'ride_accepted',
-      message:  `🏍️ ${driver.data().name} is on the way!`,
-      rideId:   req.params.rideId,
-      read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
+    }
     return ok(res, { message: 'Ride accepted' });
   } catch (e) {
+    console.error('accept-ride error:', e);
     return fail(res, 500, e.message);
   }
 });

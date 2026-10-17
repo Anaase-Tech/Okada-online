@@ -523,3 +523,12 @@ A public Slack channel `#okada-v4-team` was created for human-led engineering co
 
 - Firebase Functions runtime selection: https://firebase.google.com/docs/functions/manage-functions
 - Google Cloud Functions runtime lifecycle: https://docs.cloud.google.com/run/docs/runtimes/function-runtimes
+
+
+## PASS 4.1 update — atomic ride acceptance — 2026-10-17
+
+Direct inspection of the active legacy handler confirmed a read-then-update race in `POST /rides/:rideId/accept`. The route now reads the ride and driver inside a Firestore transaction, re-checks that the ride is still `requested`, verifies the assigned driver's existing authorization/verification conditions, and writes both the ride assignment and passenger notification inside the same winning transaction. The existing success response and error meanings are preserved. A source-level regression test verifies the transactional wiring; this is not a substitute for an emulator-backed concurrent two-driver test.
+
+The runtime/CI migration to Node 22 (Functions) and Node 24 (frontend CI) is being validated by GitHub Actions. No Firebase production deployment was performed or authorized.
+
+Still open: durable Paystack attempt persistence/idempotency, ride completion lifecycle state policy, duplicate journey plan route, emulator contention tests, pickup/final-mile allowlists, backup packaging, Firestore access contract, dependency triage, and the cash-after-failed-online-payment product decision.
