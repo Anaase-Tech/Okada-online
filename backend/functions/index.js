@@ -727,6 +727,11 @@ app.post('/rides/request', requireAuth, async (req, res) => {
       return fail(res, 400, 'Pickup and destination must be different');
     }
 
+    const requestId = req.body?.requestId == null ? null : String(req.body.requestId).trim();
+    if (requestId && !/^[A-Za-z0-9_-]{8,120}$/.test(requestId)) {
+      return fail(res, 400, 'requestId must be an 8-120 character idempotency key');
+    }
+
     const userProfile = await resolveUserRef(userId, req);
     if (!userProfile) return fail(res, 403, 'Ride requester is not owned by the authenticated user');
     const userDoc = userProfile.ref.get ? await userProfile.ref.get() : null;
@@ -758,34 +763,122 @@ app.post('/rides/request', requireAuth, async (req, res) => {
       createdAt:         admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    const ref = await db.collection('rides').add(ride);
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({
+      userId: userProfile.ref.id,
+      pickup: { address: ride.pickupLocation.address, latitude: pickupLat, longitude: pickupLng },
+      destination: { address: ride.destination.address, latitude: destinationLat, longitude: destinationLng },
+      rideType: requestedVehicleType,
+    })).digest('hex');
+    const idempotencyRef = requestId
+      ? db.collection('ride_request_idempotency').doc(crypto.createHash('sha256').update(String(req.uid) + ':' + requestId).digest('hex'))
+      : null;
+    const proposedRideRef = db.collection('rides').doc();
 
-    // Notify nearby verified online drivers
-    const drivers = await db.collection('drivers')
-      .where('isOnline', '==', true)
-      .where('isVerified', '==', true).get();
+    // Atomically bind this retry key to one ride before sending notifications.
+    // A lost HTTP response can be retried without duplicating a ride.
+    const created = await db.runTransaction(async (tx) => {
+      if (idempotencyRef) {
+        const keySnap = await tx.get(idempotencyRef);
+        if (keySnap.exists) {
+          const record = keySnap.data();
+          if (record.fingerprint !== fingerprint || record.passengerUid !== req.uid) return { blocked: 'key-reused' };
+          const existingRideRef = db.collection('rides').doc(String(record.rideId || ''));
+          const existingRideSnap = await tx.get(existingRideRef);
+          if (!existingRideSnap.exists) return { blocked: 'orphaned-key' };
+          const existingRide = existingRideSnap.data();
+          return { blocked: null, created: false, rideId: existingRideRef.id, ride: existingRide, fare: existingRide.fare };
+        }
+      }
+      tx.set(proposedRideRef, ride);
+      if (idempotencyRef) {
+        tx.create(idempotencyRef, {
+          passengerUid: req.uid, userId: userProfile.ref.id, requestId, fingerprint,
+          rideId: proposedRideRef.id, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      return { blocked: null, created: true, rideId: proposedRideRef.id, ride, fare };
+    });
+    if (created.blocked === 'key-reused') return fail(res, 409, 'This requestId was already used for a different ride request. Start a new request.');
+    if (created.blocked === 'orphaned-key') return fail(res, 409, 'The previous ride request record is missing. Contact support before retrying.');
+
+    // Notification trouble must not turn an already-created ride into an HTTP 500.
+    // Stable notification IDs make retrying delivery safe.
     let notified = 0;
-    for (const d of drivers.docs) {
-      const driverData = d.data();
-      if (normalizeVehicleType(driverData.vehicleType || 'okada') !== requestedVehicleType) continue;
-      const loc = driverData.location;
-      const driverLat = Number(loc?.latitude);
-      const driverLng = Number(loc?.longitude);
-      const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
-      if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs) continue;
-      if (Date.now() - lastUpdatedMs > 60000) continue;
-      if (haversine(pickupLat, pickupLng, driverLat, driverLng) > 5) continue;
-      await db.collection('notifications').add({
-        driverId: d.id, type: 'new_ride', rideId: ref.id,
-        message:  `New ride: ${ride.pickupLocation.address} → ${ride.destination.address} | ₵${fare.total}`,
-        read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      notified++;
+    let dispatchWarnings = 0;
+    try {
+      const drivers = await db.collection('drivers').where('isOnline', '==', true).where('isVerified', '==', true).get();
+      for (const d of drivers.docs) {
+        const driverData = d.data();
+        if (normalizeVehicleType(driverData.vehicleType || 'okada') !== requestedVehicleType) continue;
+        const loc = driverData.location;
+        const driverLat = Number(loc?.latitude);
+        const driverLng = Number(loc?.longitude);
+        const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
+        if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs) continue;
+        if (Date.now() - lastUpdatedMs > 60000) continue;
+        if (haversine(pickupLat, pickupLng, driverLat, driverLng) > 5) continue;
+        const notificationId = crypto.createHash('sha256').update(created.rideId + ':' + d.id + ':new_ride').digest('hex');
+        try {
+          await db.collection('notifications').doc(notificationId).create({
+            driverId: d.id, type: 'new_ride', rideId: created.rideId,
+            message: 'New ride: ' + created.ride.pickupLocation.address + ' → ' + created.ride.destination.address + ' | ₵' + created.fare.total,
+            read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          notified++;
+        } catch (notificationError) {
+          const alreadyExists = notificationError.code === 6 || notificationError.code === 'already-exists' || notificationError.code === 'ALREADY_EXISTS';
+          if (!alreadyExists) {
+            dispatchWarnings++;
+            console.error('ride dispatch notification failed:', notificationError.message);
+          }
+        }
+      }
+    } catch (dispatchError) {
+      dispatchWarnings++;
+      console.error('ride request saved but driver notification query failed:', dispatchError.message);
     }
 
-    return ok(res, { rideId: ref.id, fare, nearbyDriversNotified: notified });
+    return ok(res, {
+      rideId: created.rideId, fare: created.fare, nearbyDriversNotified: notified, idempotent: !created.created,
+      ...(dispatchWarnings ? { dispatchWarnings } : {}),
+    });
   } catch (e) {
     return fail(res, 500, e.message);
+  }
+});
+
+app.post('/rides/:rideId/cancel', requireAuth, async (req, res) => {
+  try {
+    const rideId = sanitize(req.params.rideId, 160);
+    const rideRef = db.collection('rides').doc(rideId);
+    const initialSnap = await rideRef.get();
+    if (!initialSnap.exists) return fail(res, 404, 'Ride not found');
+    const initialRide = initialSnap.data();
+    const passenger = await resolveUserRef(initialRide.userId, req);
+    if (!passenger) return fail(res, 403, 'Only the passenger who created the ride can cancel it');
+
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(rideRef);
+      if (!snap.exists) return { blocked: 'not-found' };
+      const rideData = snap.data();
+      if (rideData.userId !== initialRide.userId) return { blocked: 'ownership-changed' };
+      const status = String(rideData.status || '').toLowerCase();
+      if (status === 'cancelled') return { blocked: null, idempotent: true };
+      if (status !== 'requested') return { blocked: 'already-assigned-or-started' };
+      tx.update(rideRef, {
+        status: 'cancelled', cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancelledBy: req.uid, cancellationReason: 'passenger_cancelled_before_assignment',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { blocked: null, idempotent: false };
+    });
+    if (result.blocked === 'not-found') return fail(res, 404, 'Ride not found');
+    if (result.blocked === 'ownership-changed') return fail(res, 409, 'Ride ownership changed; refresh before retrying');
+    if (result.blocked === 'already-assigned-or-started') return fail(res, 409, 'This ride has already been assigned or started. Contact the driver/support; it was not cancelled.');
+    return ok(res, { rideId, status: 'cancelled', idempotent: !!result.idempotent });
+  } catch (e) {
+    console.error('cancel-ride error:', e.message);
+    return fail(res, 500, 'Ride cancellation could not be confirmed. Check the ride status before retrying.');
   }
 });
 
