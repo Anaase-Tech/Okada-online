@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db } from "../firebase";
 import { collection, doc, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { MapPin, Navigation, Star, X, Moon, Sun, AlertCircle, CheckCircle, LogOut, Eye, EyeOff, Copy, Fuel, Wrench, ArrowDownCircle, Clock } from "lucide-react";
@@ -14,8 +14,32 @@ import { WithdrawSheet } from "./WithdrawSheet";
 import { DriverPickups } from "./DriverPickups";
 import { DriveToOwn } from "./DriveToOwn";
 
+function normalizeClientVehicleType(value) {
+  const normalized = String(value || "").trim().toLowerCase().replaceAll(" ", "").replaceAll("-", "").replaceAll("_", "");
+  const aliases = {
+    okada: "okada", motorcycle: "okada", motorbike: "okada",
+    car: "car", sedan: "car",
+    tricycle: "tricycle", keke: "tricycle",
+    bicycle: "bicycle", ebicycle: "bicycle", electricbicycle: "bicycle",
+  };
+  return aliases[normalized] || null;
+}
+
+function distanceKm(a, b) {
+  if (!a || !b) return Infinity;
+  const toRad = (n) => n * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
+}
+
 export function DriverApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
+  const driverVehicleType = normalizeClientVehicleType(user.vehicleType || "okada");
+  const driverSelfPosRef = useRef(null);
+  const [gpsReady, setGpsReady] = useState(false);
+  const [declinedRideIds, setDeclinedRideIds] = useState(() => new Set());
   const [view,setView]=useState("home");
   const [online,setOnline]=useState(false);
   const [driverSelfPos,setDriverSelfPos]=useState(null);
@@ -48,73 +72,104 @@ export function DriverApp({user,onLogout,dark,setDark}) {
       });
   },[user.id, user.firebaseUid]);
 
-  // Real-time ride requests via Firestore
-  useEffect(()=>{
-    if(!online||incoming||activeRide||cashConfirm) return;
-    // Try real Firestore listener first
-    let unsub = null;
-    const tryRealtime = async () => {
-      try {
-        // db already imported at module level
-        const q = query(
-          collection(db, 'rides'),
-          where('status','==','requested'),
-          where('rideType','==','okada'),
-          orderBy('createdAt','desc'),
-          limit(1)
-        );
-        unsub = onSnapshot(q, (snap) => {
-          if(!snap.empty) {
-            const doc = snap.docs[0];
-            const r = doc.data();
-            setIncoming({
-              id: doc.id,
-              passenger: r.userName || 'Passenger',
-              phone: r.userPhone || '',
-              from: r.pickupLocation?.address || 'Pickup',
-              to: r.destination?.address || 'Destination',
-              dist: r.distance ? `${r.distance} km` : '—',
-              dur: r.estimatedDuration ? `${r.estimatedDuration} min` : '—',
-              fare: 'GH₵' + (r.fare?.total || '0'),
-              // Displayed estimate only — the real, authoritative split
-              // (including any female/EV bonus) is computed server-side
-              // when the ride is actually completed via calcFareSplits.
-              earn: 'GH₵' + (r.fare?.driver ?? ((r.fare?.total||0) * 0.25)).toFixed(2),
-              payMethod: r.payMethod || 'mtn',
-            });
-          }
-        }, () => {
-          console.error("Live ride request listener failed:", error);
-          toast$("Live ride requests are unavailable. No demo ride was created.", "error");
-        });
-      } catch(err) {
-        console.error("Live ride request setup failed:", err);
-        toast$("Live ride requests could not be loaded. Check network/authentication.", "error");
-      }
-    };
-    tryRealtime();
-    return ()=>{ if(unsub) unsub(); };
-  },[online,incoming,activeRide,cashConfirm]);
-
-  // Broadcast only browser-provided GPS while online; never invent coordinates.
+  // Real-time ride requests: only the driver's verified vehicle type,
+  // a bounded queue, locally declined IDs skipped, and fresh-GPS proximity.
   useEffect(() => {
-    if (!online) { setDriverSelfPos(null); return undefined; }
+    if (!online || incoming || activeRide || cashConfirm) return undefined;
+    if (!driverVehicleType) {
+      toast$("This verified driver profile has an unsupported vehicle type. Ask admin to review it before accepting rides.", "error");
+      return undefined;
+    }
+    if (!gpsReady || !driverSelfPosRef.current) return undefined;
+    let unsub = null;
+    try {
+      const q = query(
+        collection(db, "rides"),
+        where("status", "==", "requested"),
+        where("rideType", "==", driverVehicleType),
+        orderBy("createdAt", "desc"),
+        limit(25)
+      );
+      unsub = onSnapshot(q, (snap) => {
+        const currentPoint = driverSelfPosRef.current;
+        if (!currentPoint) { setIncoming(null); return; }
+        const nextDoc = snap.docs.find((candidate) => {
+          if (declinedRideIds.has(candidate.id)) return false;
+          const ride = candidate.data();
+          const pickupLat = Number(ride.pickupLocation?.latitude);
+          const pickupLng = Number(ride.pickupLocation?.longitude);
+          if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) return false;
+          return distanceKm(currentPoint, { lat: pickupLat, lng: pickupLng }) <= 5;
+        });
+        if (!nextDoc) { setIncoming(null); return; }
+        const r = nextDoc.data();
+        setIncoming((current) => current?.id === nextDoc.id ? current : ({
+          id: nextDoc.id,
+          passenger: r.userName || "Passenger",
+          phone: r.userPhone || "",
+          from: r.pickupLocation?.address || "Pickup",
+          to: r.destination?.address || "Destination",
+          pickupLocation: r.pickupLocation || null,
+          destination: r.destination || null,
+          dist: r.distance ? `${r.distance} km` : "—",
+          dur: r.estimatedDuration ? `${r.estimatedDuration} min` : "—",
+          fare: "GH₵" + (r.fare?.total || "0"),
+          earn: "GH₵" + (r.fare?.driver ?? ((r.fare?.total || 0) * 0.25)).toFixed(2),
+          payMethod: r.payMethod || r.paymentMethod || "unknown",
+        }));
+      }, (error) => {
+        console.error("Live ride request listener failed:", error);
+        toast$(`Live ride requests are unavailable (${error.code || "network/auth"}). No demo ride was created.`, "error");
+      });
+    } catch (error) {
+      console.error("Live ride request setup failed:", error);
+      toast$(error?.message || "Live ride requests could not be loaded.", "error");
+    }
+    return () => { if (unsub) unsub(); };
+  }, [online, incoming, activeRide, cashConfirm, driverVehicleType, gpsReady, declinedRideIds]);
+
+  // Real browser GPS only. Throttle backend writes to meaningful movement or
+  // a 15-second heartbeat, while updating the map marker at most every 5 sec.
+  useEffect(() => {
+    if (!online) {
+      driverSelfPosRef.current = null;
+      setDriverSelfPos(null);
+      setGpsReady(false);
+      return undefined;
+    }
     if (!navigator.geolocation) {
       toast$("This device/browser does not provide GPS. Live driver location is unavailable.", "error");
+      setGpsReady(false);
       return undefined;
     }
     let errorShown = false;
     const watchId = navigator.geolocation.watchPosition((position) => {
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      setDriverSelfPos({ lat, lng });
-      api.updateLocation(user.id, lat, lng).catch((error) => {
-        console.warn("Driver location update failed:", error.message);
-      });
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+      const now = Date.now();
+      const previous = driverSelfPosRef.current;
+      const movedMeters = previous ? distanceKm(previous, { lat, lng }) * 1000 : Infinity;
+      const shouldPublish = !previous || movedMeters >= 25 || now - Number(previous.lastPublishedAt || 0) >= 15000;
+      const shouldRender = !previous || movedMeters >= 5 || now - Number(previous.lastRenderedAt || 0) >= 5000;
+      const next = {
+        lat, lng, updatedAtMs: now,
+        lastPublishedAt: shouldPublish ? now : previous.lastPublishedAt,
+        lastRenderedAt: shouldRender ? now : previous.lastRenderedAt,
+      };
+      driverSelfPosRef.current = next;
+      setGpsReady(true);
+      if (shouldRender) setDriverSelfPos({ lat, lng, updatedAtMs: now });
+      if (shouldPublish) {
+        api.updateLocation(user.id, lat, lng, position.coords.heading).catch((error) => {
+          console.warn("Driver location update failed:", error.message);
+        });
+      }
     }, (error) => {
       console.warn("Browser GPS unavailable:", error.message);
+      driverSelfPosRef.current = null;
       setDriverSelfPos(null);
+      setGpsReady(false);
       if (!errorShown) {
         errorShown = true;
         toast$("Enable location permission to share real GPS. No simulated coordinates are being sent.", "error");
@@ -143,6 +198,8 @@ export function DriverApp({user,onLogout,dark,setDark}) {
           phone: ride.userPhone || prev.phone,
           from: ride.pickupLocation?.address || prev.from,
           to: ride.destination?.address || prev.to,
+          pickupLocation: ride.pickupLocation || prev.pickupLocation,
+          destination: ride.destination || prev.destination,
           fare: `GH₵${Number(ride.fare?.total ?? String(prev.fare || "").replace("GH₵","")).toFixed(2)}`,
         };
       });
@@ -169,10 +226,31 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     }
   };
 
-  const toggleOnline=async()=>{
-    try{await api.toggleOnline(user.id,!online,"okada");}catch(err){ console.warn("Error:",err); }
-    setOnline(!online);
-    toast$(online?"You're offline":"Online! Waiting for rides 🏍️");
+  const toggleOnline = async () => {
+    const nextOnline = !online;
+    if (nextOnline && !driverVehicleType) {
+      toast$("Your verified vehicle type is missing or unsupported. Ask admin to review the driver profile.", "error");
+      return;
+    }
+    try {
+      await api.toggleOnline(user.id, nextOnline);
+      setOnline(nextOnline);
+      toast$(nextOnline ? `Online as ${driverVehicleType}. Waiting for nearby matching rides.` : "You're offline.");
+    } catch (error) {
+      console.error("Driver online status update failed:", error);
+      toast$(error?.message || "Your online status was not changed. Check the connection and retry.", "error");
+    }
+  };
+
+  const declineIncoming = () => {
+    if (incoming?.id) {
+      setDeclinedRideIds((existing) => {
+        const next = new Set(existing);
+        next.add(incoming.id);
+        return next;
+      });
+    }
+    setIncoming(null);
   };
 
   const accept = async () => {
@@ -181,13 +259,14 @@ export function DriverApp({user,onLogout,dark,setDark}) {
       return;
     }
     try {
-      await api.acceptRide(incoming.id,user.id);
+      await api.acceptRide(incoming.id, user.id);
       setActiveRide({ ...incoming, status: "accepted" });
       setIncoming(null);
       toast$("Ride acceptance was recorded by the server.");
     } catch (error) {
       console.error("Ride acceptance failed:", error);
       toast$(error?.message || "Ride could not be accepted. The request was not assigned to you.", "error");
+      if (error?.message?.toLowerCase().includes("no longer available")) setIncoming(null);
     }
   };
 
@@ -306,7 +385,7 @@ export function DriverApp({user,onLogout,dark,setDark}) {
               </div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <button onClick={()=>setIncoming(null)} style={{padding:"14px",border:"1px solid #f87171",color:"#ef4444",borderRadius:16,fontWeight:700}}>Decline</button>
+              <button onClick={declineIncoming} style={{padding:"14px",border:"1px solid #f87171",color:"#ef4444",borderRadius:16,fontWeight:700}}>Decline</button>
               <button onClick={accept} style={{padding:"14px",background:"#16a34a",color:"#fff",borderRadius:16,fontWeight:700}}>Accept ✅</button>
             </div>
           </div>
@@ -327,7 +406,17 @@ export function DriverApp({user,onLogout,dark,setDark}) {
 
         {view==="home"&&(
           <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
-            <Map dark={dark} height={150} status={online?"ongoing":"idle"} driverPos={driverSelfPos}/>
+            <Map
+              dark={dark}
+              height={220}
+              status={String(activeRide?.status || "").toLowerCase() === "in_progress" ? "ongoing" : activeRide ? "matched" : online ? "searching" : "idle"}
+              driverPos={driverSelfPos}
+              pickup={activeRide?.pickupLocation ? { lat: Number(activeRide.pickupLocation.latitude), lng: Number(activeRide.pickupLocation.longitude) } : null}
+              destination={activeRide?.destination ? { lat: Number(activeRide.destination.latitude), lng: Number(activeRide.destination.longitude) } : null}
+              navigationTarget={activeRide ? (String(activeRide.status || "").toLowerCase() === "in_progress"
+                ? (activeRide.destination ? { lat: Number(activeRide.destination.latitude), lng: Number(activeRide.destination.longitude) } : null)
+                : (activeRide.pickupLocation ? { lat: Number(activeRide.pickupLocation.latitude), lng: Number(activeRide.pickupLocation.longitude) } : null)) : null}
+            />
             <button onClick={toggleOnline} style={{width:"100%",padding:"14px",borderRadius:16,fontWeight:900,fontSize:16,color:"#fff",background:online?"#dc2626":"#16a34a"}}>
               {online?"🔴 Go Offline":"🟢 Go Online — Start Earning"}
             </button>

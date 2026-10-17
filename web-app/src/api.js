@@ -46,8 +46,8 @@ class Api {
   setRidePaymentMethod(rideId, method)           { return this.req("POST", `/rides/${rideId}/payment-method`, { method }); }
   confirmCashPayment(rideId)                     { return this.req("POST", `/rides/${rideId}/complete`, { confirmCash: true }); }
   completeRide(rideId)                           { return this.req("POST", `/rides/${rideId}/complete`, {}); }
-  toggleOnline(id, isOnline, vehicleType)        { return this.req("PUT", `/drivers/${id}/status`, { isOnline, vehicleType }); }
-  updateLocation(id, lat, lng)                   { return this.req("PUT", `/drivers/${id}/location`, { latitude: lat, longitude: lng }); }
+  toggleOnline(id, isOnline)                     { return this.req("PUT", `/drivers/${id}/status`, { isOnline }); }
+  updateLocation(id, lat, lng, heading)           { return this.req("PUT", `/drivers/${id}/location`, { latitude: lat, longitude: lng, heading }); }
   getOwnerDash(id)                               { return this.req("GET", `/owners/${id}/dashboard`); }
   getStats()                                     { return this.req("GET", "/admin/stats"); }
   getHistory(uid)                                { return this.req("GET", `/rides/history/${uid}`); }
