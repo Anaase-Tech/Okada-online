@@ -192,7 +192,7 @@ const ok = (res, data) =>
   res.status(200).json({ ok: true, ...data });
 
 function normalizeVehicleType(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[\\s_-]+/g, '');
+  const normalized = String(value || '').trim().toLowerCase().replaceAll(' ', '').replaceAll('-', '').replaceAll('_', '');
   const aliases = {
     okada: 'okada', motorcycle: 'okada', motorbike: 'okada',
     car: 'car', sedan: 'car',

@@ -73,6 +73,11 @@ export function Map({ dark, pickup, destination, driverPos, status = "idle", hei
   const navigationMode = !!targetPoint;
   const routeOrigin = navigationMode ? driverPoint : pickupPoint;
   const routeDestination = navigationMode ? targetPoint : destinationPoint;
+  const routeOriginLat = navigationMode ? driverPoint?.lat : pickupPoint?.lat;
+  const routeOriginLng = navigationMode ? driverPoint?.lng : pickupPoint?.lng;
+  const routeDestinationLat = navigationMode ? targetPoint?.lat : destinationPoint?.lat;
+  const routeDestinationLng = navigationMode ? targetPoint?.lng : destinationPoint?.lng;
+  const routeOriginUpdatedAtMs = navigationMode ? driverPos?.updatedAtMs : undefined;
 
   useEffect(() => {
     if (!driverPos) return undefined;
@@ -99,11 +104,14 @@ export function Map({ dark, pickup, destination, driverPos, status = "idle", hei
       || distanceMeters(lastDriverRoute.current.origin, routeOrigin) > 250;
     const routeTimedOut = !lastDriverRoute.current
       || Date.now() - lastDriverRoute.current.requestedAt >= 30000;
-    if (navigationMode && directions && !targetChanged && !driverMoved && !routeTimedOut) return undefined;
+    if (navigationMode && !targetChanged && !driverMoved && !routeTimedOut) return undefined;
 
     const requestId = ++requestSequence.current;
     setRouteState("loading");
     const timer = setTimeout(() => {
+      if (navigationMode) {
+        lastDriverRoute.current = { origin: routeOrigin, target: routeDestination, requestedAt: Date.now() };
+      }
       const service = new window.google.maps.DirectionsService();
       service.route({
         origin: routeOrigin,
@@ -114,9 +122,6 @@ export function Map({ dark, pickup, destination, driverPos, status = "idle", hei
         if (resultStatus === "OK" && result) {
           setDirections(result);
           setRouteState("ready");
-          if (navigationMode) {
-            lastDriverRoute.current = { origin: routeOrigin, target: routeDestination, requestedAt: Date.now() };
-          }
         } else {
           setDirections(null);
           setRouteState("unavailable");
@@ -126,11 +131,10 @@ export function Map({ dark, pickup, destination, driverPos, status = "idle", hei
 
     return () => clearTimeout(timer);
   }, [
-    isLoaded, loadError,
-    pickup?.lat, pickup?.lng,
-    destination?.lat, destination?.lng,
-    driverPos?.lat, driverPos?.lng, driverPos?.updatedAtMs,
-    navigationTarget?.lat, navigationTarget?.lng,
+    isLoaded, loadError, navigationMode,
+    routeOriginLat, routeOriginLng,
+    routeDestinationLat, routeDestinationLng,
+    routeOriginUpdatedAtMs,
   ]);
 
   const label = STATUS_LABEL[status] || "Ride status unavailable";
