@@ -183,6 +183,21 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [online,user.id]);
 
+  // A browser may silently stop producing GPS samples without an error callback.
+  // Expire dispatch readiness independently; the backend also enforces its own
+  // 60-second server timestamp check at ride acceptance.
+  useEffect(() => {
+    if (!online) return undefined;
+    const timer = setInterval(() => {
+      const point = driverSelfPosRef.current;
+      const updatedAtMs = Number(point?.updatedAtMs || 0);
+      if (!point || !updatedAtMs || Date.now() - updatedAtMs > 45000) {
+        setGpsReady(false);
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [online]);
+
   // Keep the accepted ride state and selected payment method synchronized
   // with the server, including passenger cash selection and late Paystack success.
   useEffect(() => {
@@ -282,7 +297,9 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   // and maintenance pools. Demo rides (no backend record) still get the
   // old client-side simulation so the demo experience keeps working.
   const finishRide = async (ride, confirmCash = false) => {
+    if (!ride || completing) return;
     setCompleting(true);
+    let completionConfirmed = false;
     try {
       if (!ride.demo) {
         const res = confirmCash ? await api.confirmCashPayment(ride.id) : await api.completeRide(ride.id);
@@ -301,13 +318,20 @@ export function DriverApp({user,onLogout,dark,setDark}) {
         setTimeout(()=>setWallet(w=>({available:+(w.available+earned).toFixed(2),pending:Math.max(0,+(w.pending-earned).toFixed(2))})),5000);
         toast$(`Ride complete! +GH₵${earned.toFixed(2)} (demo) 💰`);
       }
+      completionConfirmed = true;
     } catch (e) {
+      // Retain the ride/cash-confirmation sheet after a failed request. A
+      // timeout does not prove whether the server committed; Firestore state
+      // remains authoritative and the driver can retry/reconcile.
       console.error("completeRide failed:", e);
-      toast$(`Couldn't complete the ride on the server (${e.message}) — nothing was charged`, "error");
+      toast$(`Couldn't confirm ride completion with the server (${e.message}). The ride remains available for retry/reconciliation.`, "error");
+    } finally {
+      setCompleting(false);
+      if (completionConfirmed) {
+        setCashConfirm(null);
+        setActiveRide(null);
+      }
     }
-    setCompleting(false);
-    setCashConfirm(null);
-    setActiveRide(null);
   };
 
   const confirmCash = () => finishRide(cashConfirm, true);

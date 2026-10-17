@@ -612,3 +612,34 @@ The latest CI run for commit `6c4501e` compiled the frontend but failed one back
 ## Payment recovery clarification — 2026-10-17
 
 When the server cannot determine whether Paystack initialization succeeded, it now returns the already-reserved reference with `outcome=INITIALIZATION_UNKNOWN` and `requiresStatusCheck=true`. The passenger PWA stores that reference and offers status verification rather than making another attempt or hiding the reference behind an HTTP error. A confirmed provider rejection remains a failure response; an uncertain outcome stays fail-closed for cash and Pay Later until verification resolves it. The Pay Later copy no longer promises automatic MoMo charging, which is not implemented by this flow.
+
+
+## Navigation, live-map, and stress audit — 2026-10-17
+
+### Source-verified navigation behavior
+
+- Passenger ride state follows the actual Firestore ride document through `onSnapshot`; the passenger's driver marker follows the assigned driver's Firestore `location` document.
+- Driver location is acquired through browser `navigator.geolocation.watchPosition`. The UI renders local GPS samples approximately every 5 seconds / 5 metres, and server writes are throttled to meaningful movement or a 15-second heartbeat.
+- Backend dispatch only notifies online, verified, vehicle-matched drivers with stored GPS no older than 60 seconds and within 5 km of pickup. The acceptance endpoint repeats online, vehicle, timestamp, and proximity checks inside the ride-accept transaction.
+- The Map component draws a Google Maps road-route overlay. An active driver ride targets pickup until status becomes `in_progress`, then targets the destination. Route requests are debounced and refreshed after approximately 250 metres of driver movement or 30 seconds.
+- This is **a live-GPS marker plus a road-route overlay, not turn-by-turn or voice navigation**. Spoken instructions, lane guidance, and a dedicated navigation session are not implemented.
+- `REACT_APP_GOOGLE_MAPS_KEY` is configured in Vercel for Production only. Current Preview deployments do not receive it, so Preview builds show the “Google Maps is not configured” fallback. Actual Production browser rendering still requires a smoke test for Google API/referrer/billing restrictions.
+
+### Additional defects addressed in this continuation
+
+1. Driver ride completion previously cleared `activeRide` and the cash-confirmation sheet after either success or failure. This could strand a still-open ride when payment was unresolved or a request timed out. The driver now clears those UI states only after completion returns success; failure retains the ride for retry/reconciliation.
+2. If the driver's browser silently stops emitting GPS samples, dispatch readiness could remain true from an earlier successful write. A 5-second watchdog now expires readiness when the last local sample is older than 45 seconds. Server-side 60-second freshness remains authoritative.
+3. Passenger payment UI previously updated to failed only if the current local state was `processing`. It now reflects FAILED/ABANDONED/INITIALIZATION_FAILED whenever the live ride document reports that state.
+
+### CI / stress-test evidence
+
+- Audited starting source: `893fc81e2aa3a85d3f9e30fdf6f6b52e4b93a028`.
+- GitHub Actions run #39045001526: backend suite **77 passed / 0 failed**; frontend production build succeeded. Link: https://github.com/Anaase-Tech/Okada-online/actions/runs/39045001526
+- Those are unit/source regression checks, **not** authenticated browser E2E or live Firestore Emulator contention tests. The source edits in this continuation require a new CI run.
+- CI install reports **62 frontend dependency vulnerabilities: 3 low, 16 moderate, 40 high, 3 critical**. This is a triage signal, not proof all are exploitable.
+- Driver dispatch currently queries only the newest 25 requested rides of a vehicle type, then filters by the driver's local 5 km proximity. Under a burst of more than 25 newer requests outside the driver's radius, an older nearby ride can fall outside the query window. The backend writes per-driver nearby ride notifications, but DriverApp currently uses the bounded rides query rather than consuming those notifications. This is a scale/load risk.
+- Firestore rules still allow any signed-in client to read ride and driver documents to support the current direct listeners. That exposes more passenger/driver information than a least-privilege production design should. Do not tighten these rules until the direct dispatch/tracking paths migrate to scoped collections/endpoints.
+
+### Next stress-test stage
+
+Run Firebase Emulator-backed tests for two-driver acceptance contention; Trotro/Transit/Journey inventory contention; duplicate/cancelled ride-request retries; payment initialization with provider success followed by Firestore failure; cash fallback vs late Paystack success; payment expiry vs ride completion; and exactly-once financial side effects. Run authenticated browser E2E with a correctly restricted Google Maps key for location permissions, marker updates, route rerouting, map-load failure, background/resume, poor connectivity and cancellation/payment races. These tests have not yet passed and must not be represented as completed.

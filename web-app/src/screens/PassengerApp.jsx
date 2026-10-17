@@ -154,7 +154,7 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
       if (paymentStatus === "CASH_AWAITING_DRIVER") setPayStatus("awaiting-driver");
       if (paymentStatus === "DEFERRED") setPayStatus("deferred");
       if (paymentStatus === "CASH_PAID" || paymentStatus === "PAID") setPayStatus("paid");
-      if (paymentStatus === "FAILED" || paymentStatus === "ABANDONED") setPayStatus((old) => old === "processing" ? "failed" : old);
+      if (["FAILED", "ABANDONED", "INITIALIZATION_FAILED"].includes(paymentStatus)) setPayStatus("failed");
     }, (error) => {
       console.error("Ride listener failed:", error);
       toast$("Live ride updates are unavailable. Check your connection before proceeding.", "error");
