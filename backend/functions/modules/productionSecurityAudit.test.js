@@ -309,23 +309,24 @@ test('passenger restores unresolved ride request key and route after reload', ()
 test('driver completion keeps the real active ride on server/network failure', () => {
   const driver = read('web-app/src/screens/DriverApp.jsx');
   const finish = driver.slice(driver.indexOf('const finishRide = async'), driver.indexOf('const confirmCash'));
-  assert.match(finish, /let completionConfirmed = false/);
-  assert.match(finish, /completionConfirmed = true/);
-  assert.match(finish, /if \\(completionConfirmed\\) \\{/);
-  assert.match(finish, /setCashConfirm\\(null\\);\\s*setActiveRide\\(null\\);/);
+  assert.ok(finish.includes('let completionConfirmed = false'));
+  assert.ok(finish.includes('completionConfirmed = true'));
+  assert.ok(finish.includes('if (completionConfirmed) {'));
+  assert.ok(finish.includes('setCashConfirm(null);') && finish.includes('setActiveRide(null);'));
   assert.ok(finish.indexOf('if (completionConfirmed)') > finish.indexOf('catch (e)'));
 });
 
 test('driver dispatch readiness expires when geolocation stops sending updates', () => {
   const driver = read('web-app/src/screens/DriverApp.jsx');
   const freshness = driver.slice(driver.indexOf('A browser may silently stop producing GPS samples'), driver.indexOf('// Keep the accepted ride state'));
-  assert.match(freshness, /Date\\.now\\(\\) - updatedAtMs > 45000/);
-  assert.match(freshness, /setGpsReady\\(false\\)/);
-  assert.match(driver, /api\\.updateLocation\\(user\\.id, lat, lng, position\\.coords\\.heading\\)\\.then/);
+  assert.ok(freshness.includes('Date.now() - updatedAtMs > 45000'));
+  assert.ok(freshness.includes('setGpsReady(false)'));
+  assert.ok(driver.includes('api.updateLocation(user.id, lat, lng, position.coords.heading).then'));
 });
 
 test('passenger live payment state switches to failed whenever the server records a failed attempt', () => {
   const passenger = read('web-app/src/screens/PassengerApp.jsx');
-  assert.match(passenger, /\\["FAILED", "ABANDONED", "INITIALIZATION_FAILED"\\]\\.includes\\(paymentStatus\\)\\) setPayStatus\\("failed"\\)/);
-  assert.match(passenger, /api\\.verifyPayment\\(paymentReference\\)/);
+  assert.ok(passenger.includes('["FAILED", "ABANDONED", "INITIALIZATION_FAILED"].includes(paymentStatus)'));
+  assert.ok(passenger.includes('setPayStatus("failed")'));
+  assert.ok(passenger.includes('api.verifyPayment(paymentReference)'));
 });
