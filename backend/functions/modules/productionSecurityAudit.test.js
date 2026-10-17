@@ -232,7 +232,7 @@ test('backend ride dispatch validates coordinates, vehicle match, fresh location
   assert.ok(index.includes('function normalizeVehicleType'));
   assert.ok(index.includes('Unsupported ride vehicle type'));
   assert.ok(index.includes('requestedVehicleType !== driverVehicleType'));
-  assert.ok(index.includes('Date.now() - lastUpdatedMs > 60000'));
+  assert.ok(index.includes('Date.now() - lastUpdatedMs > 45000'));
   assert.ok(index.includes("return { blocked: 'driver-too-far' }"));
 });
 
@@ -321,6 +321,7 @@ test('driver dispatch readiness expires when geolocation stops sending updates',
   const freshness = driver.slice(driver.indexOf('A browser may silently stop producing GPS samples'), driver.indexOf('// Keep the accepted ride state'));
   assert.ok(freshness.includes('Date.now() - updatedAtMs > 45000'));
   assert.ok(freshness.includes('setGpsReady(false)'));
+  assert.ok(freshness.includes('setIncoming(null)'));
   assert.ok(driver.includes('api.updateLocation(user.id, lat, lng, position.coords.heading).then'));
 });
 

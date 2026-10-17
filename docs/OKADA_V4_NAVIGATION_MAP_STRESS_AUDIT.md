@@ -68,3 +68,10 @@ These tests do not prove live Firestore or Google Maps integration.
 9. Browser E2E: Google Maps key restriction/API/billing; current GPS movement, pickup→destination reroute, stale/offline state, route API failure, tab/background/resume, and poor network.
 
 The emulator and browser tests above have not yet run or passed. Do not claim full stress completion or production readiness until they actually do.
+
+
+## GPS freshness alignment hardening — 2026-10-17
+
+A second navigation-state review found a race between local GPS expiry and backend acceptance: the driver UI could retain an already-rendered incoming ride after its 45-second local GPS watchdog disabled dispatch, and the server still allowed acceptance up to 60 seconds after its last persisted location. Updated both server dispatch notifications and transactional ride acceptance to the same 45-second maximum, and clear any already-visible incoming offer when the local watchdog expires. GPS marker is shown stale from 35 seconds, local dispatch readiness expires at 45 seconds, and backend remains authoritative at 45 seconds.
+
+This is source-level hardened and regression-tested; actual GPS silence/recovery and two-driver acceptance still require browser/Firestore Emulator tests.

@@ -824,7 +824,7 @@ app.post('/rides/request', requireAuth, async (req, res) => {
         const driverLng = Number(loc?.longitude);
         const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
         if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs) continue;
-        if (Date.now() - lastUpdatedMs > 60000) continue;
+        if (Date.now() - lastUpdatedMs > 45000) continue;
         if (haversine(pickupLat, pickupLng, driverLat, driverLng) > 5) continue;
         const notificationId = crypto.createHash('sha256').update(created.rideId + ':' + d.id + ':new_ride').digest('hex');
         try {
@@ -961,7 +961,7 @@ app.post('/rides/:rideId/accept', requireAuth, async (req, res) => {
       const driverLng = Number(loc?.longitude);
       const lastUpdatedMs = typeof loc?.lastUpdated?.toMillis === 'function' ? loc.lastUpdated.toMillis() : 0;
       if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng) || !lastUpdatedMs
-          || Date.now() - lastUpdatedMs > 60000) return { blocked: 'location-stale' };
+          || Date.now() - lastUpdatedMs > 45000) return { blocked: 'location-stale' };
       if (!Number.isFinite(Number(rideData.pickupLocation?.latitude))
           || !Number.isFinite(Number(rideData.pickupLocation?.longitude))
           || haversine(Number(rideData.pickupLocation.latitude), Number(rideData.pickupLocation.longitude), driverLat, driverLng) > 5) {

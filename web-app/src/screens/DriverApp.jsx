@@ -193,6 +193,9 @@ export function DriverApp({user,onLogout,dark,setDark}) {
       const updatedAtMs = Number(point?.updatedAtMs || 0);
       if (!point || !updatedAtMs || Date.now() - updatedAtMs > 45000) {
         setGpsReady(false);
+        // Remove any already-visible offer from the queue once this driver's
+        // own GPS is no longer fresh enough to accept it.
+        setIncoming(null);
       }
     }, 5000);
     return () => clearInterval(timer);

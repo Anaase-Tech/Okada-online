@@ -187,3 +187,10 @@ Run Firebase Emulator-backed tests for two-driver acceptance contention; Trotro/
 
 ### Follow-up CI note — 2026-10-17
 The first CI run for the navigation/completion hardening commit failed while parsing the new source-level test regex (over-escaped regex literals). The application frontend build passed; backend test process stopped before the remainder of the pipeline. The tests have been rewritten with direct string assertions to avoid regex escaping. A fresh full CI run is required before these changes are marked verified.
+
+
+## GPS freshness alignment hardening — 2026-10-17
+
+A second navigation-state review found a race between local GPS expiry and backend acceptance: the driver UI could retain an already-rendered incoming ride after its 45-second local GPS watchdog disabled dispatch, and the server still allowed acceptance up to 60 seconds after its last persisted location. Updated both server dispatch notifications and transactional ride acceptance to the same 45-second maximum, and clear any already-visible incoming offer when the local watchdog expires. GPS marker is shown stale from 35 seconds, local dispatch readiness expires at 45 seconds, and backend remains authoritative at 45 seconds.
+
+This is source-level hardened and regression-tested; actual GPS silence/recovery and two-driver acceptance still require browser/Firestore Emulator tests.
