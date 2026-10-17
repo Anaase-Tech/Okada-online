@@ -104,7 +104,7 @@ emulatorTest('Firestore Emulator: concurrent standalone Transit bookings never o
   const tripId = unique('transit_trip');
   await db.collection('transitRoutes').doc(routeId).set({
     origin: 'Akosombo', stops: ['Atimpoku', 'Kpong'], destination: 'Koforidua',
-    serviceClass: 'STANDARD', fare: 20,
+    serviceClass: 'STANDARD', fare: 20, active: true,
   });
   await db.collection('transitTrips').doc(tripId).set({
     routeId, status: 'SCHEDULED', active: true, capacity: 2, serviceClass: 'STANDARD', fare: 20,
@@ -130,10 +130,10 @@ emulatorTest('Firestore Emulator: multi-leg Journey reads before writes and cann
   const tripTwoId = unique('journey_trip_two');
   await Promise.all([
     db.collection('transitRoutes').doc(routeOneId).set({
-      origin: 'Akosombo', stops: [], destination: 'Koforidua', serviceClass: 'STANDARD', fare: 25,
+      origin: 'Akosombo', stops: [], destination: 'Koforidua', serviceClass: 'STANDARD', fare: 25, active: true,
     }),
     db.collection('transitRoutes').doc(routeTwoId).set({
-      origin: 'Koforidua', stops: [], destination: 'Kumasi', serviceClass: 'STANDARD', fare: 45,
+      origin: 'Koforidua', stops: [], destination: 'Kumasi', serviceClass: 'STANDARD', fare: 45, active: true,
     }),
     db.collection('transitTrips').doc(tripOneId).set({
       routeId: routeOneId, status: 'SCHEDULED', active: true, capacity: 2, serviceClass: 'STANDARD', fare: 25,
@@ -167,4 +167,25 @@ emulatorTest('Firestore Emulator: multi-leg Journey reads before writes and cann
   assert.equal(seatsTwo, 2, JSON.stringify(results));
   assert.equal(one.docs.filter((doc) => doc.data().journeyId).length, 2);
   assert.equal(two.docs.filter((doc) => doc.data().journeyId).length, 2);
+});
+
+emulatorTest('Firestore Emulator: Journey booking rejects a route explicitly marked inactive', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+  const routeId = unique('inactive_journey_route');
+  const tripId = unique('inactive_journey_trip');
+  await db.collection('transitRoutes').doc(routeId).set({
+    origin: 'Akosombo', stops: [], destination: 'Koforidua', serviceClass: 'STANDARD', fare: 25, active: false,
+  });
+  await db.collection('transitTrips').doc(tripId).set({
+    routeId, status: 'SCHEDULED', active: true, capacity: 2, serviceClass: 'STANDARD', fare: 25,
+  });
+  const response = await postJson(app.baseUrl, '/journeys/book', 'inactive-route-passenger', {
+    origin: 'Akosombo', destination: 'Koforidua', serviceClass: 'STANDARD', seatCount: 1,
+    legs: [{ mode: 'TRANSIT', tripId, origin: 'Akosombo', destination: 'Koforidua' }],
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.body.error || '', /route is inactive/i);
+  const bookings = await db.collection('transitBookings').where('tripId', '==', tripId).get();
+  assert.equal(bookings.size, 0);
 });

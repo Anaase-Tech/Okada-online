@@ -75,6 +75,9 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
         const routes = new Map(routeSnaps.map((snap, index) => [routeIds[index], snap]));
         for (const [routeId, snap] of routes) {
           if (!snap.exists) throw new Error('Transit route not found: ' + routeId);
+          // Explicitly disabled routes must not accept new Journey bookings.
+          // Older route records without an active field remain compatible.
+          if (snap.data().active === false) throw new Error('Transit route is inactive: ' + routeId);
         }
 
         // READ PHASE 3: fetch all active booking/hold inventories before writes.

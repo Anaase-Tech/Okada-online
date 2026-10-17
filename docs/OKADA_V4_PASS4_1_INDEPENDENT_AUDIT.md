@@ -213,3 +213,8 @@ The emulator suite is opt-in (`OKADA_FIRESTORE_EMULATOR=1`) and skips in the ord
 ### Follow-up CI finding — 2026-10-17
 
 The first run after adding the Firestore Emulator suite caught a duplicate declaration of `seatCount` caused by the Journey route refactor. The backend test job failed at module parse time before other tests executed. The duplicate input-validation block has been removed; a fresh GitHub Actions run must pass before the transaction fix is considered verified.
+
+
+### Transit route activation consistency — 2026-10-17
+
+The emulator fixture initially failed standalone Transit because its route lacked `active: true`, which the actual standalone Transit router intentionally requires. The fixture has been corrected to match the real creation contract. Review of that mismatch exposed a related gap: Journey booking checked that route documents existed but did not reject routes explicitly marked inactive. Journey now rejects `active: false` while retaining compatibility with older records where `active` is absent; an emulator regression test covers the explicitly inactive case.
