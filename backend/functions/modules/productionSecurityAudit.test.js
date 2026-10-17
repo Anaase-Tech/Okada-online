@@ -331,3 +331,16 @@ test('passenger live payment state switches to failed whenever the server record
   assert.ok(passenger.includes('setPayStatus("failed")'));
   assert.ok(passenger.includes('api.verifyPayment(paymentReference)'));
 });
+
+
+test('Journey multi-leg transaction reads all trips, routes and active bookings before its first write', () => {
+  const start = journeyRoutes.indexOf("router.post('/book', requireAuth");
+  const end = journeyRoutes.indexOf("router.post('/:journeyId/confirm'", start);
+  const route = journeyRoutes.slice(start, end);
+  const writes = [route.indexOf('tx.update('), route.indexOf('tx.set(')].filter((value) => value >= 0);
+  assert.ok(writes.length > 0, 'Journey booking has writes');
+  const firstWrite = Math.min(...writes);
+  const writePhase = route.slice(firstWrite);
+  assert.equal(writePhase.includes('await tx.get('), false, 'transaction reads must not follow the first write');
+  assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
+});

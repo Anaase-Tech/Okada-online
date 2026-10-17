@@ -75,3 +75,10 @@ The emulator and browser tests above have not yet run or passed. Do not claim fu
 A second navigation-state review found a race between local GPS expiry and backend acceptance: the driver UI could retain an already-rendered incoming ride after its 45-second local GPS watchdog disabled dispatch, and the server still allowed acceptance up to 60 seconds after its last persisted location. Updated both server dispatch notifications and transactional ride acceptance to the same 45-second maximum, and clear any already-visible incoming offer when the local watchdog expires. GPS marker is shown stale from 35 seconds, local dispatch readiness expires at 45 seconds, and backend remains authoritative at 45 seconds.
 
 This is source-level hardened and regression-tested; actual GPS silence/recovery and two-driver acceptance still require browser/Firestore Emulator tests.
+
+
+## Journey multi-leg transaction correction — 2026-10-17
+
+Direct source inspection found a real Firestore transaction-order defect in `createJourneyBookingRouter`: the multi-leg loop could queue writes for leg one and then execute a route or active-booking `tx.get()` for leg two. Firestore requires every transaction read before the first write; a multi-leg booking could fail despite pure journey-state tests passing.
+
+The route now separates read and compute phases from the write phase: reads all unique trips, referenced routes and active-booking queries first; validates all segment capacity including overlapping legs within the same Journey; only then updates each trip inventory counter, writes per-leg payment holds and writes the parent Journey. A source-level regression guard now verifies there are no transaction reads after the first write. This does not replace the Firestore Emulator contention tests added in the separate CI job.

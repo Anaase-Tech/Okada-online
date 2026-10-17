@@ -38,79 +38,161 @@ function createJourneyBookingRouter({ express, db, admin, requireAuth, fail, ok 
       const journeyRef = db.collection('journeys').doc();
       const journeyCode = makeJourneyCode(journeyRef.id);
 
+      const seatCount = Number(req.body?.seatCount || 1);
+      if (legs.some((leg) => leg.tripId) && (!Number.isInteger(seatCount) || seatCount < 1 || seatCount > 10)) {
+        return fail(res, 400, 'seatCount must be between 1 and 10');
+      }
+      for (const [label, option] of [['Pickup', req.body?.pickup], ['Final-mile', req.body?.finalMile]]) {
+        if (!option || option.fare == null || option.fare === '') continue;
+        const suppliedFare = Number(option.fare);
+        if (!Number.isFinite(suppliedFare) || suppliedFare !== 0) {
+          return fail(res, 400, label + ' fare must be priced by a trusted backend quote before charging');
+        }
+      }
+
       const result = await db.runTransaction(async (tx) => {
-        const tripRefs = [...new Set(legs.map((l) => l.tripId).filter(Boolean))].map((id) => db.collection('transitTrips').doc(id));
+        // READ PHASE 1: load/validate all trips.
+        const tripRefs = [...new Set(legs.map((leg) => leg.tripId).filter(Boolean))]
+          .map((id) => db.collection('transitTrips').doc(id));
         const tripSnaps = await Promise.all(tripRefs.map((ref) => tx.get(ref)));
-        const trips = new Map(tripSnaps.map((snap, i) => [tripRefs[i].id, snap]));
+        const trips = new Map(tripSnaps.map((snap, index) => [tripRefs[index].id, snap]));
+
         for (const leg of legs) {
           if (!leg.tripId) continue;
           const snap = trips.get(leg.tripId);
-          if (!snap?.exists) throw new Error(`Transit trip not found: ${leg.tripId}`);
+          if (!snap || !snap.exists) throw new Error('Transit trip not found: ' + leg.tripId);
           const trip = snap.data();
-          if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(trip.status) || trip.active === false) throw new Error(`Transit trip ${leg.tripId} is not accepting bookings`);
+          if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(trip.status) || trip.active === false) {
+            throw new Error('Transit trip ' + leg.tripId + ' is not accepting bookings');
+          }
+          if (!trip.routeId) throw new Error('Transit trip ' + leg.tripId + ' has no configured route');
         }
-        const bookingRefs = [];
+
+        // READ PHASE 2: load every route and every active-booking query before
+        // any writes are queued. Firestore transactions cannot perform reads
+        // after the first write; the former per-leg loop violated that rule.
+        const routeIds = [...new Set(tripRefs.map((ref) => String(trips.get(ref.id).data().routeId)))];
+        const routeRefs = routeIds.map((id) => db.collection('transitRoutes').doc(id));
+        const routeSnaps = await Promise.all(routeRefs.map((ref) => tx.get(ref)));
+        const routes = new Map(routeSnaps.map((snap, index) => [routeIds[index], snap]));
+        for (const [routeId, snap] of routes) {
+          if (!snap.exists) throw new Error('Transit route not found: ' + routeId);
+        }
+
+        const bookingSnaps = await Promise.all(tripRefs.map((ref) => tx.get(
+          db.collection('transitBookings')
+            .where('tripId', '==', ref.id)
+            .where('status', 'in', ['PAYMENT_PENDING', 'CONFIRMED', 'BOARDED'])
+        )));
+        const bookingsByTrip = new Map(bookingSnaps.map((snap, index) => [tripRefs[index].id, snap]));
+
+        const activeHold = (booking) => {
+          if (String(booking.status || '').toUpperCase() !== 'PAYMENT_PENDING') return true;
+          const expiry = booking.paymentExpiresAt?.toDate
+            ? booking.paymentExpiresAt.toDate()
+            : new Date(booking.paymentExpiresAt || 0);
+          return !Number.isNaN(expiry.getTime()) && expiry.getTime() > Date.now();
+        };
+        const plannedByTrip = new Map();
+        const plannedLegs = [];
         const trustedLegFares = [];
-        const routeSnapshots = new Map();
+        const bookingRefs = [];
+
+        // COMPUTE PHASE: validate all segments/capacity before writing.
         for (const leg of legs) {
           if (!leg.tripId) continue;
           const trip = trips.get(leg.tripId).data();
-          const routeSnap = routeSnapshots.get(trip.routeId) || await tx.get(db.collection('transitRoutes').doc(trip.routeId));
-          if (!routeSnap.exists) throw new Error(`Route not found for trip ${leg.tripId}`);
-          routeSnapshots.set(trip.routeId, routeSnap);
-          const route = routeSnap.data();
-          const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(route.fare);
+          const routeSnap = routes.get(String(trip.routeId));
+          const routeData = routeSnap.data();
+          const configuredFare = Number.isFinite(Number(trip.fare)) ? Number(trip.fare) : Number(routeData.fare);
           if (!Number.isFinite(configuredFare) || configuredFare < 0) {
-            throw new Error(`Transit trip ${leg.tripId} has no configured fare`);
+            throw new Error('Transit trip ' + leg.tripId + ' has no configured fare');
           }
-          const stops = [route.origin, ...(route.stops || []), route.destination];
-          const norm = (x) => text(x).toLowerCase();
+
+          const stops = [routeData.origin, ...(routeData.stops || []), routeData.destination];
+          const norm = (value) => text(value).toLowerCase();
           const from = stops.map(norm).indexOf(norm(leg.origin));
           const to = stops.map(norm).indexOf(norm(leg.destination));
-          if (from < 0 || to < 0 || from >= to) throw new Error(`Invalid transit segment: ${leg.origin} → ${leg.destination}`);
-          const active = await tx.get(
-            db.collection('transitBookings')
-              .where('tripId', '==', leg.tripId)
-              .where('status', 'in', ['PAYMENT_PENDING', 'CONFIRMED', 'BOARDED'])
-          );
-          const now = new Date();
-          const overlapping = active.docs.filter((d) => {
-            const b = d.data();
-            if (String(b.status || '').toUpperCase() === 'PAYMENT_PENDING') {
-              const expiry = b.paymentExpiresAt?.toDate ? b.paymentExpiresAt.toDate() : new Date(b.paymentExpiresAt || 0);
-              if (Number.isNaN(expiry.getTime()) || expiry.getTime() <= now.getTime()) return false;
-            }
-            const bf = stops.map(norm).indexOf(norm(b.pickupStop));
-            const bt = stops.map(norm).indexOf(norm(b.dropoffStop));
-            return bf >= 0 && bt >= 0 && bf < to && from < bt;
+          if (from < 0 || to < 0 || from >= to) {
+            throw new Error('Invalid transit segment: ' + leg.origin + ' → ' + leg.destination);
+          }
+
+          const existing = bookingsByTrip.get(leg.tripId).docs.filter((doc) => {
+            const booking = doc.data();
+            if (!activeHold(booking)) return false;
+            const bookingFrom = stops.map(norm).indexOf(norm(booking.pickupStop));
+            const bookingTo = stops.map(norm).indexOf(norm(booking.dropoffStop));
+            return bookingFrom >= 0 && bookingTo >= 0 && bookingFrom < to && from < bookingTo;
           });
-          const used = overlapping.reduce((sum, d) => sum + Number(d.data().seatCount || 0), 0);
-          const seatCount = Number(req.body?.seatCount || 1);
-          if (!Number.isInteger(seatCount) || seatCount < 1 || seatCount > 10) throw new Error('seatCount must be between 1 and 10');
-          if (used + seatCount > Number(trip.capacity || 0)) throw new Error(`No seats available on ${leg.origin} → ${leg.destination}`);
+          const existingSeats = existing.reduce((sum, doc) => sum + Number(doc.data().seatCount || 0), 0);
+          const earlierLegs = plannedByTrip.get(leg.tripId) || [];
+          const seatsWithinJourney = earlierLegs
+            .filter((planned) => planned.from < to && from < planned.to)
+            .reduce((sum, planned) => sum + planned.seatCount, 0);
+          if (existingSeats + seatsWithinJourney + seatCount > Number(trip.capacity || 0)) {
+            throw new Error('No seats available on ' + leg.origin + ' → ' + leg.destination);
+          }
+
           const bookingRef = db.collection('transitBookings').doc();
-          bookingRefs.push(bookingRef);
           const chargedFare = +(configuredFare * seatCount).toFixed(2);
-          trustedLegFares.push(chargedFare);
           const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
-          tx.update(
-            db.collection('transitTrips').doc(leg.tripId),
-            {
-              inventoryVersion: admin.firestore.FieldValue.increment(1),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            }
-          );
-          tx.set(bookingRef, { passengerId: req.uid, tripId: leg.tripId, routeId: trip.routeId, pickupStop: leg.origin, dropoffStop: leg.destination, seatCount, serviceClass: trip.serviceClass || serviceClass, fare: chargedFare, currency: 'GHS', status: 'PAYMENT_PENDING', paymentStatus: 'PENDING', paymentExpiresAt, journeyId: journeyRef.id, journeyCode, ticketCode: `OKV-${bookingRef.id.slice(0, 10).toUpperCase()}`, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          plannedLegs.push({
+            leg, tripId: leg.tripId, trip, bookingRef, seatCount, chargedFare, paymentExpiresAt,
+          });
+          bookingRefs.push(bookingRef);
+          trustedLegFares.push(chargedFare);
+          plannedByTrip.set(leg.tripId, [...earlierLegs, { from, to, seatCount }]);
         }
-        const pickupFare = Number(req.body?.pickup?.fare || 0);
-        const finalMileFare = Number(req.body?.finalMile?.fare || 0);
-        if ((Number.isFinite(pickupFare) && pickupFare !== 0) || (Number.isFinite(finalMileFare) && finalMileFare !== 0)) {
-          throw new Error('Pickup and final-mile fares must be priced by a trusted backend quote before charging');
-        }
+
         const totalFare = trustedLegFares.reduce((sum, fare) => sum + Number(fare || 0), 0);
+
+        // WRITE PHASE: every read is complete. One trip write per unique trip
+        // serializes competing bookings; increment by the number of journey legs.
+        const legCountByTrip = new Map();
+        for (const planned of plannedLegs) {
+          legCountByTrip.set(planned.tripId, (legCountByTrip.get(planned.tripId) || 0) + 1);
+        }
+        for (const [tripId, legCount] of legCountByTrip) {
+          tx.update(db.collection('transitTrips').doc(tripId), {
+            inventoryVersion: admin.firestore.FieldValue.increment(legCount),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+        for (const planned of plannedLegs) {
+          const leg = planned.leg;
+          const trip = planned.trip;
+          const bookingRef = planned.bookingRef;
+          tx.set(bookingRef, {
+            passengerId: req.uid,
+            tripId: planned.tripId,
+            routeId: trip.routeId,
+            pickupStop: leg.origin,
+            dropoffStop: leg.destination,
+            seatCount: planned.seatCount,
+            serviceClass: trip.serviceClass || serviceClass,
+            fare: planned.chargedFare,
+            currency: 'GHS',
+            status: 'PAYMENT_PENDING',
+            paymentStatus: 'PENDING',
+            paymentExpiresAt: planned.paymentExpiresAt,
+            journeyId: journeyRef.id,
+            journeyCode,
+            ticketCode: 'OKV-' + bookingRef.id.slice(0, 10).toUpperCase(),
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
         const paymentExpiresAt = holdExpiryTimestamp(admin, PAYMENT_HOLD_MINUTES);
-        tx.set(journeyRef, { passengerId: req.uid, journeyCode, origin, destination, serviceClass, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', paymentExpiresAt, legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null, totalFare: +totalFare.toFixed(2), currency: 'GHS', bookingIds: bookingRefs.map((r) => r.id), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        return { bookingIds: bookingRefs.map((r) => r.id), totalFare: +totalFare.toFixed(2), paymentExpiresAt };
+        tx.set(journeyRef, {
+          passengerId: req.uid, journeyCode, origin, destination, serviceClass,
+          status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', paymentExpiresAt,
+          legs, pickup: req.body?.pickup || null, finalMile: req.body?.finalMile || null,
+          totalFare: +totalFare.toFixed(2), currency: 'GHS',
+          bookingIds: bookingRefs.map((ref) => ref.id),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return { bookingIds: bookingRefs.map((ref) => ref.id), totalFare: +totalFare.toFixed(2), paymentExpiresAt };
       });
       return ok(res, { journeyId: journeyRef.id, journeyCode, status: 'PENDING_PAYMENT', paymentStatus: 'PENDING', ...result }, 201);
     } catch (e) { return fail(res, 400, e.message || 'Unable to create journey booking'); }
