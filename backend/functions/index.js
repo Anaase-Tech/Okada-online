@@ -1008,6 +1008,34 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
       const paymentStatus = String(rideData.paymentStatus || '').toUpperCase();
       const cashConfirmationRequired = paymentMethod === 'CASH'
         && paymentStatus === 'CASH_AWAITING_DRIVER';
+      const payLaterCreditRequired = paymentMethod === 'PAY_LATER' && paymentStatus === 'DEFERRED';
+      let payLaterCreditAuthorized = false;
+      if (payLaterCreditRequired) {
+        const payLaterId = String(rideData.payLaterTxId || '');
+        if (!payLaterId) return { blocked: 'pay-later-record-missing' };
+        const deferredSnap = await tx.get(db.collection('pay_later').doc(payLaterId));
+        if (!deferredSnap.exists) return { blocked: 'pay-later-record-missing' };
+        const deferredRecord = deferredSnap.data();
+        const deferredStatus = String(deferredRecord.status || '').toUpperCase();
+        const deferredAmount = Number(deferredRecord.amount);
+        if (String(deferredRecord.rideId || '') !== rideId
+            || String(deferredRecord.userId || '') !== String(rideData.userId || '')
+            || !['DEFERRED', 'OVERDUE', 'PAID'].includes(deferredStatus)
+            || !Number.isFinite(deferredAmount)
+            || Math.round(deferredAmount * 100) !== Math.round(Number(rideData.fare?.total) * 100)) {
+          return { blocked: 'pay-later-record-invalid' };
+        }
+        const onlineAttempts = ridePaymentRecords.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
+        const onlineStatuses = onlineAttempts.map((item) => String(item.data.status || '').toUpperCase());
+        const terminalStatuses = ['FAILED', 'ABANDONED', 'INITIALIZATION_FAILED', 'CANCELLED', 'CANCELLED_ONLINE_PAYMENT_SUCCEEDED'];
+        if (onlineStatuses.some((status) => ['COMPLETED', 'COMPLETED_REFUND_REVIEW'].includes(status))) {
+          return { blocked: 'payment-not-settled' };
+        }
+        if (onlineStatuses.some((status) => !terminalStatuses.includes(status))) {
+          return { blocked: 'payment-not-settled' };
+        }
+        payLaterCreditAuthorized = true;
+      }
 
       let cashPaymentDoc = null;
       if (cashConfirmationRequired) {
@@ -1024,7 +1052,7 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
         if (!cashPaymentDoc) return { blocked: 'cash-record-missing' };
       } else if (req.body?.confirmCash === true) {
         return { blocked: 'cash-not-awaiting-confirmation' };
-      } else {
+      } else if (!payLaterCreditAuthorized) {
         const onlineAttempts = ridePaymentRecords.filter((item) => String(item.data.provider || '').toLowerCase() !== 'cash');
         if (onlineAttempts.length) {
           const ridePaid = paymentStatus === 'PAID';
@@ -1299,6 +1327,9 @@ app.post('/rides/:rideId/complete', requireAuth, async (req, res) => {
     }
     if (result.blocked === 'cash-record-missing') {
       return fail(res, 409, 'Cash confirmation record is missing. Ask an administrator to review before completing.');
+    }
+    if (result.blocked === 'pay-later-record-missing' || result.blocked === 'pay-later-record-invalid') {
+      return fail(res, 409, 'Pay Later authorization is missing or inconsistent. Do not complete or charge the ride until it is reviewed.');
     }
     return ok(res, result.response);
   } catch (e) {
