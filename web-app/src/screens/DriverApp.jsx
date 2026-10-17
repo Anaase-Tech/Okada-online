@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "../firebase";
-import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { collection, doc, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { MapPin, Navigation, Star, X, Moon, Sun, AlertCircle, CheckCircle, LogOut, Eye, EyeOff, Copy, Fuel, Wrench, ArrowDownCircle, Clock } from "lucide-react";
 import { api } from "../api";
 import { T } from "../theme";
@@ -84,38 +84,90 @@ export function DriverApp({user,onLogout,dark,setDark}) {
             });
           }
         }, () => {
-          // Firestore unavailable — demo simulation fallback
-          const tm = setTimeout(()=>setIncoming({id:'demo_ride_'+Date.now(),demo:true,passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
-          return ()=>clearTimeout(tm);
+          console.error("Live ride request listener failed:", error);
+          toast$("Live ride requests are unavailable. No demo ride was created.", "error");
         });
       } catch(err) {
-        // Demo fallback
-        const tm = setTimeout(()=>setIncoming({id:'demo_ride_'+Date.now(),demo:true,passenger:'Ama Owusu',phone:'+233205556789',from:'Akosombo',to:'Atimpoku',dist:'4.2 km',dur:'12 min',fare:'GH₵13.50',earn:'GH₵3.38',payMethod:['mtn','cash','vodafone'][Math.floor(Math.random()*3)]}),5000);
-        return ()=>clearTimeout(tm);
+        console.error("Live ride request setup failed:", err);
+        toast$("Live ride requests could not be loaded. Check network/authentication.", "error");
       }
     };
     tryRealtime();
     return ()=>{ if(unsub) unsub(); };
   },[online,incoming,activeRide,cashConfirm]);
 
-  // Broadcast live GPS while online — also drives the on-screen map pin
-  useEffect(()=>{
-    if(!online){ setDriverSelfPos(null); return; }
-    const tick=()=>{
-      const lat=6.2966+(Math.random()-0.5)*0.01, lng=0.0568+(Math.random()-0.5)*0.01;
-      setDriverSelfPos({lat,lng});
-      api.updateLocation(user.id,lat,lng).catch(()=>{});
-    };
-    tick();
-    const iv=setInterval(tick,5000);
-    return()=>clearInterval(iv);
-  },[online,user.id]);
+  // Broadcast only browser-provided GPS while online; never invent coordinates.
+  useEffect(() => {
+    if (!online) { setDriverSelfPos(null); return undefined; }
+    if (!navigator.geolocation) {
+      toast$("This device/browser does not provide GPS. Live driver location is unavailable.", "error");
+      return undefined;
+    }
+    let errorShown = false;
+    const watchId = navigator.geolocation.watchPosition((position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setDriverSelfPos({ lat, lng });
+      api.updateLocation(user.id, lat, lng).catch((error) => {
+        console.warn("Driver location update failed:", error.message);
+      });
+    }, (error) => {
+      console.warn("Browser GPS unavailable:", error.message);
+      setDriverSelfPos(null);
+      if (!errorShown) {
+        errorShown = true;
+        toast$("Enable location permission to share real GPS. No simulated coordinates are being sent.", "error");
+      }
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [online,user.id]);
 
-  useEffect(()=>{
-    if(!activeRide||activeRide.payMethod!=="cash") return;
-    const tm=setTimeout(()=>setCashConfirm(activeRide),8000);
-    return()=>clearTimeout(tm);
-  },[activeRide]);
+  // Keep the accepted ride state and selected payment method synchronized
+  // with the server, including passenger cash selection and late Paystack success.
+  useEffect(() => {
+    const activeId = activeRide?.id;
+    if (!activeId || activeRide?.demo) return undefined;
+    return onSnapshot(doc(db, "rides", activeId), (snap) => {
+      if (!snap.exists()) return;
+      const ride = snap.data();
+      setActiveRide((prev) => {
+        if (!prev || prev.id !== activeId) return prev;
+        return {
+          ...prev,
+          status: ride.status,
+          payMethod: ride.payMethod || ride.paymentMethod || prev.payMethod,
+          paymentStatus: ride.paymentStatus,
+          paymentReference: ride.paymentReference,
+          passenger: ride.userName || prev.passenger,
+          phone: ride.userPhone || prev.phone,
+          from: ride.pickupLocation?.address || prev.from,
+          to: ride.destination?.address || prev.to,
+          fare: `GH₵${Number(ride.fare?.total ?? String(prev.fare || "").replace("GH₵","")).toFixed(2)}`,
+        };
+      });
+      if (String(ride.status || "").toLowerCase() === "completed") {
+        setCashConfirm(null);
+        setActiveRide(null);
+      }
+    }, (error) => {
+      console.error("Active ride listener failed:", error);
+      toast$("Active ride updates are unavailable. Confirm with the server before closing.", "error");
+    });
+  }, [activeRide?.id]);
+
+  const startActiveRide = async () => {
+    if (!activeRide?.id || activeRide.demo) {
+      toast$("A server-backed ride is required to start a trip.", "error");
+      return;
+    }
+    try {
+      await api.startRide(activeRide.id);
+      toast$("Ride start recorded by the server.");
+    } catch (error) {
+      toast$(error?.message || "Ride could not be started on the server.", "error");
+    }
+  };
 
   const toggleOnline=async()=>{
     try{await api.toggleOnline(user.id,!online,"okada");}catch(err){ console.warn("Error:",err); }
@@ -123,10 +175,20 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     toast$(online?"You're offline":"Online! Waiting for rides 🏍️");
   };
 
-  const accept=async()=>{
-    try{await api.acceptRide(incoming.id,user.id);}catch(err){ console.warn("Error:",err); }
-    setActiveRide(incoming);setIncoming(null);
-    toast$("Ride accepted! Navigate to passenger 📍");
+  const accept = async () => {
+    if (!incoming?.id || incoming.demo) {
+      toast$("A real server ride is required for acceptance.", "error");
+      return;
+    }
+    try {
+      await api.acceptRide(incoming.id,user.id);
+      setActiveRide({ ...incoming, status: "accepted" });
+      setIncoming(null);
+      toast$("Ride acceptance was recorded by the server.");
+    } catch (error) {
+      console.error("Ride acceptance failed:", error);
+      toast$(error?.message || "Ride could not be accepted. The request was not assigned to you.", "error");
+    }
   };
 
   // Finishes a ride for real: calls the backend's /rides/:id/complete,
@@ -135,11 +197,11 @@ export function DriverApp({user,onLogout,dark,setDark}) {
   // any active Drive to Own or loan installment, and tops up the fuel
   // and maintenance pools. Demo rides (no backend record) still get the
   // old client-side simulation so the demo experience keeps working.
-  const finishRide = async (ride) => {
+  const finishRide = async (ride, confirmCash = false) => {
     setCompleting(true);
     try {
       if (!ride.demo) {
-        const res = await api.completeRide(ride.id);
+        const res = confirmCash ? await api.confirmCashPayment(ride.id) : await api.completeRide(ride.id);
         setEarnings(e=>({
           today: +(e.today + res.netDriverEarnings).toFixed(2),
           week:  +(e.week  + res.netDriverEarnings).toFixed(2),
@@ -164,8 +226,15 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     setActiveRide(null);
   };
 
-  const confirmCash = () => finishRide(cashConfirm);
-  const complete    = () => finishRide(activeRide);
+  const confirmCash = () => finishRide(cashConfirm, true);
+  const complete = () => {
+    if (!activeRide) return;
+    if (!activeRide.demo && String(activeRide.payMethod || "").toLowerCase() === "cash") {
+      setCashConfirm(activeRide);
+      return;
+    }
+    finishRide(activeRide);
+  };
 
   if(showKyc) return <KycVerify role="driver" dark={dark} onVerified={()=>setShowKyc(false)}/>;
 
@@ -301,11 +370,20 @@ export function DriverApp({user,onLogout,dark,setDark}) {
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <a href={`tel:${activeRide.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                  <button onClick={complete} disabled={completing}
-                    style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>
-                    {completing?"Completing…":"✅ Complete"}
-                  </button>
+                  {String(activeRide.status || "").toLowerCase() !== "in_progress" && !activeRide.demo
+                    ? <button onClick={startActiveRide} disabled={completing}
+                        style={{padding:"10px",background:"#0891b2",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>▶ Start ride</button>
+                    : <button onClick={complete} disabled={completing}
+                        style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,opacity:completing?0.6:1}}>
+                        {completing?"Completing…":String(activeRide.payMethod || "").toLowerCase()==="cash"?"💵 Confirm cash":"✅ Complete"}
+                      </button>}
                 </div>
+                {String(activeRide.status || "").toLowerCase() === "in_progress" && (
+                  <button onClick={complete} disabled={completing}
+                    style={{width:"100%",marginTop:8,padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:800,fontSize:12,opacity:completing?0.6:1}}>
+                    {completing?"Completing…":String(activeRide.payMethod || "").toLowerCase()==="cash"?"💵 Confirm cash receipt":"✅ Complete ride"}
+                  </button>
+                )}
               </div>
             )}
 

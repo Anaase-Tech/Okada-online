@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { MapPin, Navigation, Star, X, Moon, Sun, AlertCircle, CheckCircle, LogOut } from "lucide-react";
 import { api } from "../api";
+import { db } from "../firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 import { T } from "../theme";
 import { VEHICLES, LOCS, LOCATION_COORDS } from "../constants";
 import { Toast } from "../components/Toast";
@@ -15,6 +17,19 @@ import { RentalHub } from "./RentalHub";
 import { DeliveryApp } from "./DeliveryApp";
 import { JourneyApp } from "./JourneyApp";
 
+function approximateTownDistanceKm(a, b) {
+  if (!a || !b) return null;
+  const toRad = (value) => value * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  // This is a town-centre estimate, not live routing or a guaranteed road distance.
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h))) * 1.25;
+}
+
 export function PassengerApp({user,onLogout,dark,setDark}) {
   const t=T(dark);
   const [view,setView]=useState(()=>localStorage.getItem("okada_pending_journey") ? "journey" : "home");
@@ -22,6 +37,9 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
   const [dest,setDest]=useState("");
   const [vehicle,setVehicle]=useState("okada");
   const [fare,setFare]=useState(null);
+  const [rideId,setRideId]=useState(null);
+  const [currentRide,setCurrentRide]=useState(null);
+  const [paymentReference,setPaymentReference]=useState(null);
   const [status,setStatus]=useState("idle");
   const [driver,setDriver]=useState(null);
   const [driverPos,setDriverPos]=useState(null);
@@ -48,7 +66,9 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
     };
     const key1 = pickup+'-'+dest;
     const key2 = dest+'-'+pickup;
-    const baseKm = DIST[key1]||DIST[key2]||parseFloat((2+Math.random()*20).toFixed(1));
+    const routeEstimate = DIST[key1] || DIST[key2];
+    const baseKm = routeEstimate || approximateTownDistanceKm(LOCATION_COORDS[pickup], LOCATION_COORDS[dest]);
+    if (!Number.isFinite(baseKm) || baseKm <= 0) { setFare(null); return; }
     // Time-of-day surge (7-9am, 5-7pm = 1.3x)
     const hr = new Date().getHours();
     const surge = (hr>=7&&hr<=9)||(hr>=17&&hr<=19) ? 1.3 : (hr>=22||hr<=5) ? 1.5 : 1.0;
@@ -58,24 +78,145 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
     setFare({km:baseKm, total:totalFare, dur, surge, breakdown:{base:parseFloat(baseFare.toFixed(2)),surgeLabel:surge>1?(surge===1.5?'Late Night':'Rush Hour'):'Normal'}});
   },[pickup,dest,vehicle]);
 
-  useEffect(()=>{
-    if(status==="matched"&&eta>0){
-      const iv=setInterval(()=>setEta(e=>{if(e<=1){clearInterval(iv);setStatus("arrived");return 0;}return e-1;}),1000);
-      return()=>clearInterval(iv);
-    }
-  },[status,eta]);
+  // Subscribe to the actual ride document. Matching, start, completion, and
+  // payment state come from the backend; no simulated driver or countdown.
+  useEffect(() => {
+    if (!rideId) return undefined;
+    const rideRef = doc(db, "rides", rideId);
+    const unsub = onSnapshot(rideRef, (snap) => {
+      if (!snap.exists()) {
+        toast$("The ride record is no longer available.", "error");
+        return;
+      }
+      const ride = snap.data();
+      setCurrentRide(ride);
+      if (ride.pickupLocation?.address) setPickup(ride.pickupLocation.address);
+      if (ride.destination?.address) setDest(ride.destination.address);
+      if (ride.fare?.total != null) {
+        setFare((old) => ({
+          ...(old || {}),
+          total: Number(ride.fare.total),
+          serverFare: ride.fare,
+          km: Number(ride.distance || old?.km || 0),
+          breakdown: { ...(old?.breakdown || {}), serverCalculated: true },
+        }));
+      }
 
-  // Live driver pin: offset near pickup while matched, at pickup on arrival,
-  // midpoint of the route while the ride is ongoing.
-  useEffect(()=>{
-    const p = LOCATION_COORDS[pickup];
-    const d = LOCATION_COORDS[dest];
-    if(!p){ setDriverPos(null); return; }
-    if(status==="matched"){ setDriverPos({ lat:p.lat+0.01, lng:p.lng+0.008 }); }
-    else if(status==="arrived"){ setDriverPos(p); }
-    else if(status==="ongoing"&&d){ setDriverPos({ lat:(p.lat+d.lat)/2, lng:(p.lng+d.lng)/2 }); }
-    else { setDriverPos(null); }
-  },[status,pickup,dest]);
+      const rideStatus = String(ride.status || "").toLowerCase();
+      if (rideStatus === "requested") {
+        setStatus("searching");
+        setDriver(null);
+      } else if (rideStatus === "accepted" || rideStatus === "in_progress") {
+        const vehicleInfo = VEHICLES.find((v) => v.id === ride.rideType) || VEHICLES[0];
+        setDriver({
+          id: ride.driverId,
+          name: ride.driverName || "Assigned driver",
+          phone: ride.driverPhone || "",
+          rating: Number.isFinite(Number(ride.driverRating)) ? Number(ride.driverRating) : null,
+          vehicle: vehicleInfo.label,
+          icon: vehicleInfo.icon,
+          plate: ride.vehiclePlate || "Vehicle details not supplied",
+          photo: vehicleInfo.icon,
+          rides: Number.isFinite(Number(ride.driverTotalRides)) ? Number(ride.driverTotalRides) : null,
+        });
+        setEta(0);
+        setStatus(rideStatus === "in_progress" ? "ongoing" : "matched");
+      } else if (rideStatus === "completed") {
+        const pay = String(ride.paymentStatus || "").toUpperCase();
+        if (pay === "PAID" || pay === "CASH_PAID") {
+          setPayStatus("paid");
+          toast$(pay === "CASH_PAID" ? "Cash receipt was confirmed by the driver." : "Payment verified by the server.");
+          setTimeout(() => setPayStatus("idle"), 3500);
+        } else if (pay === "DEFERRED") {
+          setPayStatus("deferred");
+        } else {
+          toast$("The ride was completed. Payment status still needs review.", "error");
+        }
+        setStatus("idle");
+        setDriver(null);
+        setCurrentRide(null);
+        setRideId(null);
+        localStorage.removeItem("okada_pending_ride");
+        localStorage.removeItem("okada_pending_payment");
+      } else if (rideStatus === "cancelled") {
+        setStatus("idle");
+        setDriver(null);
+        setCurrentRide(null);
+        setRideId(null);
+        toast$("The ride was cancelled.", "error");
+      }
+
+      const paymentStatus = String(ride.paymentStatus || "").toUpperCase();
+      if (paymentStatus === "CASH_AWAITING_DRIVER") setPayStatus("awaiting-driver");
+      if (paymentStatus === "CASH_PAID" || paymentStatus === "PAID") setPayStatus("paid");
+      if (paymentStatus === "FAILED" || paymentStatus === "ABANDONED") setPayStatus((old) => old === "processing" ? "failed" : old);
+    }, (error) => {
+      console.error("Ride listener failed:", error);
+      toast$("Live ride updates are unavailable. Check your connection before proceeding.", "error");
+    });
+    return unsub;
+  }, [rideId]);
+
+  // Only display a driver location the backend actually recorded.
+  useEffect(() => {
+    if (!driver?.id) { setDriverPos(null); return undefined; }
+    return onSnapshot(doc(db, "drivers", driver.id), (snap) => {
+      const location = snap.exists() ? snap.data()?.location : null;
+      if (Number.isFinite(Number(location?.latitude)) && Number.isFinite(Number(location?.longitude))) {
+        setDriverPos({ lat: Number(location.latitude), lng: Number(location.longitude) });
+      } else {
+        setDriverPos(null);
+      }
+    }, (error) => {
+      console.warn("Driver location listener failed:", error.message);
+      setDriverPos(null);
+    });
+  }, [driver?.id]);
+
+  // A Paystack redirect returns to the PWA with a provider reference. Verify
+  // it server-side; never infer payment success from a redirect or timeout.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get("reference") || params.get("trxref");
+    if (!reference) return;
+    const stored = localStorage.getItem("okada_pending_payment");
+    if (stored) {
+      try {
+        const pending = JSON.parse(stored);
+        if (pending.rideId) setRideId(pending.rideId);
+        if (pending.pickup) setPickup(pending.pickup);
+        if (pending.dest) setDest(pending.dest);
+        if (pending.vehicle) setVehicle(pending.vehicle);
+        if (pending.fare) setFare(pending.fare);
+      } catch (error) {
+        console.warn("Could not restore pending payment context:", error);
+      }
+    }
+    setPaymentReference(reference);
+    setPayStatus("processing");
+    api.verifyPayment(reference).then((result) => {
+      if (result.rideId) setRideId(result.rideId);
+      const outcome = String(result.outcome || "").toUpperCase();
+      if (result.verified === true && ["SUCCESS", "ALREADY_PAID"].includes(outcome)) {
+        setPayStatus("paid");
+        toast$("Paystack confirmed the payment with the server.");
+      } else if (outcome === "FAILED") {
+        setPayStatus("failed");
+        toast$("Paystack confirmed the attempt failed. You may retry or choose cash.", "error");
+      } else if (outcome === "REQUIRES_REFUND_REVIEW") {
+        setPayStatus("review");
+        toast$("A captured payment needs administrator review. Do not pay this fare again.", "error");
+      } else {
+        setPayStatus("pending");
+        toast$("Payment is not yet confirmed. Do not pay cash until the status is resolved.", "error");
+      }
+    }).catch((error) => {
+      setPayStatus("pending");
+      toast$((error?.message || "Payment status could not be verified.") + " Do not pay again yet.", "error");
+    }).finally(() => {
+      window.history.replaceState({}, document.title, "/");
+    });
+  }, [user.id]);
 
   useEffect(()=>{
     if(view==="history"){
@@ -85,16 +226,54 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
     }
   },[view,user.id]);
 
-  const bookRide=async()=>{
-    if(!pickup||!dest){toast$("Enter pickup & destination","error");return;}
-    setLoading(true);setStatus("searching");
-    try{await api.requestRide({userId:user.id,pickupLocation:{address:pickup,latitude:6.0998,longitude:0.1},destination:{address:dest,latitude:6.15,longitude:0.15},rideType:vehicle});}catch(err){ console.warn("Error:",err); }
-    setTimeout(()=>{
-      const v=VEHICLES.find(v=>v.id===vehicle);
-      setDriver({name:"Kwame Asante",phone:"+233241234567",rating:4.9,vehicle:v.label,icon:v.icon,plate:"ER-1234-26",photo:"👨🏿‍🦱",rides:1247,id:"drv_001"});
-      setStatus("matched");setEta(180);toast$(`${v.label} driver matched! ${v.icon}`);
-    },3500);
-    setLoading(false);
+  const bookRide = async () => {
+    if (!pickup || !dest) { toast$("Enter pickup & destination", "error"); return; }
+    if (pickup === dest) { toast$("Choose two different locations", "error"); return; }
+    const pickupCoords = LOCATION_COORDS[pickup];
+    const destCoords = LOCATION_COORDS[dest];
+    if (!pickupCoords || !destCoords) {
+      toast$("Coordinates are not configured for this location. The ride was not submitted.", "error");
+      return;
+    }
+    setLoading(true);
+    setStatus("searching");
+    try {
+      const result = await api.requestRide({
+        userId: user.id,
+        pickupLocation: { address: pickup, latitude: pickupCoords.lat, longitude: pickupCoords.lng },
+        destination: { address: dest, latitude: destCoords.lat, longitude: destCoords.lng },
+        rideType: vehicle,
+      });
+      if (!result.rideId || !result.fare || !Number.isFinite(Number(result.fare.total))) {
+        throw new Error("The server did not return a valid ride record and fare.");
+      }
+      setRideId(result.rideId);
+      setCurrentRide({ id: result.rideId, status: "requested", fare: result.fare });
+      setFare((old) => ({
+        ...(old || {}),
+        total: Number(result.fare.total),
+        serverFare: result.fare,
+        breakdown: { ...(old?.breakdown || {}), serverCalculated: true },
+      }));
+      localStorage.setItem("okada_pending_ride", JSON.stringify({
+        rideId: result.rideId, pickup, dest, vehicle,
+        fare: { ...(fare || {}), total: Number(result.fare.total), serverFare: result.fare },
+      }));
+      setDriver(null);
+      setEta(0);
+      setStatus("searching");
+      toast$(Number(result.nearbyDriversNotified || 0) > 0
+        ? "Ride request sent to nearby verified drivers. Waiting for a real driver to accept."
+        : "Ride request was recorded. Waiting for an available driver.");
+    } catch (error) {
+      console.error("Ride request failed:", error);
+      setStatus("idle");
+      setRideId(null);
+      setCurrentRide(null);
+      toast$(error?.message || "Ride request failed. No driver has been assigned.", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if(showKyc) return <KycVerify role="passenger" dark={dark} onVerified={()=>setShowKyc(false)}/>;
@@ -210,12 +389,12 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                         <span className={`text-xs ${t.sub}`}>{driver.rating} · {driver.rides} rides</span>
                       </div>
                     </div>
-                    {status==="matched"&&<div style={{textAlign:"center"}}><p style={{fontWeight:900,color:"#16a34a",fontSize:20}}>{Math.floor(eta/60)}:{String(eta%60).padStart(2,"0")}</p><p className={`text-xs ${t.sub}`}>ETA</p></div>}
+                    {status==="matched"&&<div style={{textAlign:"center"}}><p className={`text-xs ${t.sub}`}>Driver assigned</p><p style={{fontWeight:800,color:"#16a34a",fontSize:13}}>Awaiting trip start</p></div>}
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                     <button onClick={()=>setStatus("idle")} style={{padding:"10px",border:"1px solid #f87171",color:"#ef4444",borderRadius:12,fontWeight:700,fontSize:12}}>Cancel</button>
                     <a href={`tel:${driver.phone}`} style={{padding:"10px",background:"#2563eb",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center",display:"block"}}>📞 Call</a>
-                    <button onClick={()=>setStatus("ongoing")} style={{padding:"10px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:12}}>Start →</button>
+                    <span style={{padding:"10px",background:dark?"#374151":"#f3f4f6",color:dark?"#d1d5db":"#4b5563",borderRadius:12,fontWeight:700,fontSize:12,textAlign:"center"}}>Waiting for driver to start</span>
                   </div>
                 </div>
               )}
@@ -236,7 +415,11 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                     <button onClick={()=>toast$("🚨 Emergency services notified!","error")} style={{padding:"12px",background:"#dc2626",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
                       <AlertCircle style={{width:16,height:16}}/> SOS
                     </button>
-                    <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Pay 💳</button>
+                    {payStatus==="paid"
+                      ? <span style={{padding:"12px",background:dark?"#14532d":"#dcfce7",color:"#166534",borderRadius:12,fontWeight:800,fontSize:13,textAlign:"center"}}>Payment verified</span>
+                      : payStatus==="awaiting-driver"
+                        ? <span style={{padding:"12px",background:dark?"#422006":"#fef3c7",color:"#92400e",borderRadius:12,fontWeight:800,fontSize:13,textAlign:"center"}}>Waiting for cash confirmation</span>
+                        : <button onClick={()=>setPayStatus("selecting")} style={{padding:"12px",background:"#16a34a",color:"#fff",borderRadius:12,fontWeight:700,fontSize:13}}>Payment options</button>}
                   </div>
                 </div>
               )}
@@ -245,6 +428,32 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   <div style={{fontSize:48,marginBottom:8}}>✅</div>
                   <p className={`font-black ${t.text}`}>Payment Complete!</p>
                   <p className={`text-xs ${t.sub} mt-1`}>Thanks for riding Okada Online 🇬🇭</p>
+                </div>
+              )}
+              {payStatus==="failed"&&(
+                <div style={{background:dark?"#3f1d1d":"#fef2f2",borderRadius:12,padding:12,marginTop:10}}>
+                  <p className="font-bold text-sm" style={{color:"#b91c1c"}}>Online payment failed</p>
+                  <p className="text-xs mt-1" style={{color:dark?"#fecaca":"#7f1d1d"}}>The server confirmed this attempt failed. You can retry online or select cash; cash still requires driver confirmation.</p>
+                  <button onClick={()=>setPayStatus("selecting")} style={{marginTop:10,padding:"10px 14px",background:"#16a34a",color:"#fff",borderRadius:10,fontWeight:800}}>Choose another method</button>
+                </div>
+              )}
+              {payStatus==="pending"&&(
+                <div style={{background:dark?"#422006":"#fffbeb",borderRadius:12,padding:12,marginTop:10}}>
+                  <p className="font-bold text-sm" style={{color:"#92400e"}}>Payment outcome not yet confirmed</p>
+                  <p className="text-xs mt-1" style={{color:"#92400e"}}>Do not pay cash or start another attempt until the online status is resolved.</p>
+                  <button onClick={async()=>{if(!paymentReference)return;setPayStatus("processing");try{const r=await api.verifyPayment(paymentReference);const o=String(r.outcome||"").toUpperCase();if(o==="FAILED")setPayStatus("failed");else if(o==="REQUIRES_REFUND_REVIEW")setPayStatus("review");else if(r.verified&&["SUCCESS","ALREADY_PAID"].includes(o))setPayStatus("paid");else setPayStatus("pending");}catch(e){setPayStatus("pending");toast$(e.message||"Payment verification failed","error");}}} style={{marginTop:10,padding:"10px 14px",background:"#b45309",color:"#fff",borderRadius:10,fontWeight:800}}>Check payment status</button>
+                </div>
+              )}
+              {payStatus==="review"&&(
+                <div style={{background:dark?"#3f1d1d":"#fef2f2",borderRadius:12,padding:12,marginTop:10}}>
+                  <p className="font-bold text-sm" style={{color:"#b91c1c"}}>Payment needs review</p>
+                  <p className="text-xs mt-1" style={{color:dark?"#fecaca":"#7f1d1d"}}>A charge was confirmed but could not be safely matched to this ride payment. Do not pay this fare again; administrator review is required.</p>
+                </div>
+              )}
+              {payStatus==="deferred"&&(
+                <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:12,padding:12,marginTop:10}}>
+                  <p className="font-bold text-sm" style={{color:"#6d28d9"}}>Pay Later recorded</p>
+                  <p className="text-xs mt-1" style={{color:"#6d28d9"}}>The amount is deferred under your Pay Later balance. It is not marked as an online payment.</p>
                 </div>
               )}
             </div>
@@ -309,24 +518,54 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   <p className={`text-xs ${t.sub}`}>GH₵{fare.total} deducted from your Pay Later limit. Auto-charged to MoMo in 7 days.</p>
                 </div>
               )}
-              <button disabled={!payMethod} onClick={async()=>{
+              <button disabled={!payMethod || !rideId || payStatus==="processing"} onClick={async()=>{
                 if(!payMethod) return;
+                if(!rideId){toast$("No active server ride was found. Book the ride again before paying.","error");return;}
                 if(payMethod==="cash"){
-                  setPayStatus("awaiting-driver");
-                  setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$("Cash confirmed by driver ✅");setTimeout(()=>setPayStatus("idle"),2500);},4000);
+                  setPayStatus("processing");
+                  try {
+                    await api.setRidePaymentMethod(rideId,"cash");
+                    setPayStatus("awaiting-driver");
+                    toast$("Cash selection recorded. The driver must confirm physical receipt before the ride can close.");
+                  } catch(error) {
+                    setPayStatus("selecting");
+                    toast$(error?.message || "Cash selection failed. No payment was recorded.", "error");
+                  }
                   return;
                 }
                 if(payMethod==="paylater"){
-                  try{await api.payLaterRequest("ride_"+Date.now(),user.id);}catch(err){ console.warn("Error:",err); }
-                  setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");
-                  toast$(`GH₵${fare.total} deferred — Pay Later used ⏳`);setTimeout(()=>setPayStatus("idle"),3000);
+                  setPayStatus("processing");
+                  try {
+                    await api.payLaterRequest(rideId,user.id,Number(fare.total));
+                    setPayStatus("deferred");
+                    toast$(`GH₵${fare.total} was accepted by the Pay Later service as a deferred balance; it is not an online payment.`);
+                  } catch(error) {
+                    setPayStatus("selecting");
+                    toast$(error?.message || "Pay Later request failed. No success is recorded.", "error");
+                  }
                   return;
                 }
                 setPayStatus("processing");
-                try{await api.initPayment("ride_"+Date.now(),fare.total,email||user.phone+"@okada.gh",momoPhone);}catch(err){ console.warn("Error:",err); }
-                setTimeout(()=>{setPayStatus("paid");setStatus("idle");setDriver(null);setPickup("");setDest("");setFare(null);toast$(`GH₵${fare.total} paid via ${payMethod.toUpperCase()} ✅`);setTimeout(()=>setPayStatus("idle"),3000);},2500);
+                try {
+                  const result = await api.initPayment(rideId,Number(fare.total),email||user.email||((user.phone||"").replace("+","")+"@okada.gh"),momoPhone);
+                  if(result.verified===true && ["SUCCESS","ALREADY_PAID"].includes(String(result.outcome||"").toUpperCase())) {
+                    setPayStatus("paid");
+                    toast$("The server already has a verified payment for this ride.");
+                    return;
+                  }
+                  if(!result.authorizationUrl || !result.reference) throw new Error("Payment authorization could not be opened. The attempt remains recorded; verify its status before retrying.");
+                  localStorage.setItem("okada_pending_payment",JSON.stringify({
+                    rideId,pickup,dest,vehicle,reference:result.reference,
+                    fare:{...(fare||{}),total:Number(fare.total),serverFare:currentRide?.fare||fare?.serverFare},
+                  }));
+                  setPaymentReference(result.reference);
+                  window.location.assign(result.authorizationUrl);
+                } catch(error) {
+                  setPayStatus("selecting");
+                  toast$(error?.message || "Payment could not be initialized. The server has not confirmed payment.", "error");
+                }
               }} style={{width:"100%",padding:"14px",background:!payMethod?"#9ca3af":"#16a34a",color:"#fff",borderRadius:16,fontWeight:900,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:!payMethod?0.5:1}}>
-                {payStatus==="processing"?<><Spin/>Processing…</>:payMethod==="cash"?`Notify Driver — GH₵${fare.total} Cash`:payMethod==="paylater"?`Defer GH₵${fare.total} — Pay Later`:`Pay GH₵${fare.total} via Paystack 🔒`}
+                {payStatus==="processing"?<><Spin/>Processing…</>:payMethod==="cash"?`Select Cash — GH₵${fare.total}`:payMethod==="paylater"?`Request Pay Later — GH₵${fare.total}`:`Continue to Paystack — GH₵${fare.total} 🔒`}
               </button>
               <p className={`text-xs text-center mt-2 ${t.sub}`}>🔒 Secured by Paystack · MTN · Vodafone · Airtel</p>
             </div>

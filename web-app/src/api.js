@@ -42,10 +42,9 @@ class Api {
   // ── Rides ──────────────────────────────────────────
   requestRide(data)                              { return this.req("POST", "/rides/request", data); }
   acceptRide(rideId, driverId)                   { return this.req("POST", `/rides/${rideId}/accept`, { driverId }); }
-  // There is no separate "confirm cash" endpoint — a cash-paid ride is
-  // still completed through the same /complete route as any other ride;
-  // the payment method itself doesn't change how the backend settles it.
-  confirmCashPayment(rideId)                     { return this.req("POST", `/rides/${rideId}/complete`, {}); }
+  startRide(rideId)                              { return this.req("POST", `/rides/${rideId}/start`, {}); }
+  setRidePaymentMethod(rideId, method)           { return this.req("POST", `/rides/${rideId}/payment-method`, { method }); }
+  confirmCashPayment(rideId)                     { return this.req("POST", `/rides/${rideId}/complete`, { confirmCash: true }); }
   completeRide(rideId)                           { return this.req("POST", `/rides/${rideId}/complete`, {}); }
   toggleOnline(id, isOnline, vehicleType)        { return this.req("PUT", `/drivers/${id}/status`, { isOnline, vehicleType }); }
   updateLocation(id, lat, lng)                   { return this.req("PUT", `/drivers/${id}/location`, { latitude: lat, longitude: lng }); }

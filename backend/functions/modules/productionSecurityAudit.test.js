@@ -127,3 +127,24 @@ test('ride start is an authenticated atomic accepted-to-in-progress transition',
   assert.match(start, /status: 'in_progress'/);
   assert.match(start, /ride\.status.*accepted/s);
 });
+
+
+test('passenger online payment opens provider authorization and verifies callback instead of showing timer success', () => {
+  const passenger = fs.readFileSync(path.resolve(__dirname, '../../../web-app/src/screens/PassengerApp.jsx'), 'utf8');
+  assert.match(passenger, /window\.location\.assign\(result\.authorizationUrl\)/);
+  assert.match(passenger, /api\.verifyPayment\(reference\)/);
+  assert.doesNotMatch(passenger, /setTimeout\(\(\)=>\{setPayStatus\("paid"\)/);
+});
+
+test('passenger real ride request does not manufacture a driver match', () => {
+  const passenger = fs.readFileSync(path.resolve(__dirname, '../../../web-app/src/screens/PassengerApp.jsx'), 'utf8');
+  assert.match(passenger, /const result = await api\.requestRide/);
+  assert.match(passenger, /onSnapshot\(rideRef/);
+  assert.doesNotMatch(passenger, /Kwame Asante|drv_001|Math\.random\(\)\*20/);
+});
+
+test('driver location publishing uses browser geolocation, not generated coordinates', () => {
+  const driver = fs.readFileSync(path.resolve(__dirname, '../../../web-app/src/screens/DriverApp.jsx'), 'utf8');
+  assert.match(driver, /navigator\.geolocation\.watchPosition/);
+  assert.doesNotMatch(driver, /Math\.random\(\)-0\.5/);
+});

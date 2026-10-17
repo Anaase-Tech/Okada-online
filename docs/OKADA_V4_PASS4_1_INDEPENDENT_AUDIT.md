@@ -117,3 +117,17 @@ The product rule minimizes double collection and prevents "abandoned" frontend r
 
 ### Payment gate/acceptance regression verification note — 2026-10-17
 The first CI run for the payment/cash continuation passed 53 of 54 tests. The failure was a source-level acceptance test whose handler slice extended into the new routes and therefore incorrectly detected the new route's legitimate pre-transaction read. The assertion boundary was narrowed to the end of the actual acceptance handler. The same patch hardens ride-start authorization by checking the assigned driver's Firebase UID through the driver document rather than assuming the Firestore document ID always equals the Firebase UID. A subsequent CI run is required to confirm the correction.
+
+
+## Frontend payment-truth hardening — 2026-10-17
+
+The Passenger and Driver PWA paths are being aligned with the server-backed payment and ride states:
+
+- Passenger ride creation now retains the real server ride ID, uses configured town-centre coordinates rather than fixed coordinates, and waits for the Firestore ride status to show a real acceptance/start.
+- Online payment redirects to Paystack's returned authorization URL and verifies the returned reference with the backend. It no longer displays success merely after a timeout or after swallowing an API error.
+- Cash selection calls the backend payment-method endpoint and remains waiting until server state records the driver's cash confirmation.
+- Driver acceptance no longer reports success after a failed API call; the active ride listens for actual payment method/status changes.
+- Driver GPS publishing uses browser-provided geolocation; random coordinates and synthetic ETA/driver matches are no longer used in these paths.
+- The Pay Later frontend call now uses the real ride ID and only reports a server-accepted deferred request. Full Pay Later lifecycle integration with the ride completion payment gate remains to be independently verified.
+
+No production deployment was performed. Source changes require CI review before the next step.
