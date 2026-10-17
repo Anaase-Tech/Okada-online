@@ -800,6 +800,15 @@ app.post('/rides/request', requireAuth, async (req, res) => {
     });
     if (created.blocked === 'key-reused') return fail(res, 409, 'This requestId was already used for a different ride request. Start a new request.');
     if (created.blocked === 'orphaned-key') return fail(res, 409, 'The previous ride request record is missing. Contact support before retrying.');
+    if (String(created.ride.status || '').toLowerCase() !== 'requested') {
+      return ok(res, {
+        rideId: created.rideId,
+        fare: created.fare,
+        status: created.ride.status,
+        nearbyDriversNotified: 0,
+        idempotent: true,
+      });
+    }
 
     // Notification trouble must not turn an already-created ride into an HTTP 500.
     // Stable notification IDs make retrying delivery safe.

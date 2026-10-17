@@ -288,3 +288,11 @@ test('passenger cancellation is server-backed and only cancels unassigned reques
   assert.ok(passenger.includes('await api.cancelRide(rideId)'));
   assert.ok(!passenger.includes('onClick={()=>setStatus("idle")}'));
 });
+
+
+test('an idempotent retry of an accepted/cancelled/completed ride does not redispatch it', () => {
+  const request = index.slice(index.indexOf("app.post('/rides/request'"), index.indexOf("app.post('/rides/:rideId/cancel'"));
+  assert.ok(request.includes("String(created.ride.status || '').toLowerCase() !== 'requested'"));
+  assert.ok(request.indexOf("String(created.ride.status || '').toLowerCase() !== 'requested'")
+    < request.indexOf("const drivers = await db.collection('drivers')"));
+});
