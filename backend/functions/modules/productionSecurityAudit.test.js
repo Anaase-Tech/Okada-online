@@ -497,3 +497,25 @@ test('shared-trip join uses a transaction to enforce current capacity and reject
   assert.match(route, /joinSharedTripTransaction\(\{ db, tripRef, joinerId:joiner\.ref\.id \}\)/);
   assert.doesNotMatch(route, /const snap\s*=\s*await ref\.get\(\)|await ref\.update\(\{ passengers:newP/);
 });
+
+
+test('Firebase token phone claim is captured and create-profile binds only to the verified phone', () => {
+  assert.match(index, /req\.phoneNumber = typeof decoded\.phone_number === 'string' \? decoded\.phone_number : null/);
+  const start = index.indexOf("app.post('/auth/create-profile'");
+  const end = index.indexOf('// GET /auth/profile/:uid', start);
+  assert.ok(start >= 0 && end > start, 'create-profile route boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /validateRequestedPhoneAgainstClaim\(phone, req\.phoneNumber\)/);
+  assert.match(route, /existingProfile\.firebaseUid !== req\.uid/);
+  assert.match(route, /Account recovery is required; no profile was changed/);
+  assert.match(route, /phone:\s+phoneIdentity\.phone/);
+  assert.doesNotMatch(route, /return ok\(res, \{ user: \{ id: existing\.docs\[0\]\.id/);
+});
+
+test('create-profile does not trust a caller-supplied Firebase UID', () => {
+  const start = index.indexOf("app.post('/auth/create-profile'");
+  const end = index.indexOf('// GET /auth/profile/:uid', start);
+  const route = index.slice(start, end);
+  assert.match(route, /firebaseUid:\s*req\.uid/);
+  assert.doesNotMatch(route, /firebaseUid:\s*sanitize\(firebaseUid\)/);
+});

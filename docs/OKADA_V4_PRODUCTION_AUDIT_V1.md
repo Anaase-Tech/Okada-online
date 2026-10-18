@@ -861,3 +861,19 @@ The legacy shared-trip join route read status/passengers/capacity before writing
 
 ### Limits
 This fixes the capacity race at the service/helper layer; end-to-end auth and route behavior is still verified by source-contract tests rather than an HTTP emulator test for the legacy monolith route.
+
+
+## Repair batch — Firebase phone identity binding (2026-10-18; CI pending)
+
+### Finding and source verification
+At the audited base, `requireAuth` validated the Firebase ID token and retained its UID, but did not retain/check the verified `phone_number` claim. `POST /auth/create-profile` trusted the request-body phone and, if a profile had that phone but another/missing Firebase UID, returned that profile as an idempotent login result.
+
+### Change
+- Authentication middleware now retains `decoded.phone_number` as `req.phoneNumber`.
+- Create-profile requires the requested phone to be a valid E.164 number matching the token's verified phone claim; the stored phone is derived from this verified match, not from an arbitrary body value.
+- A profile already bound to the same UID is returned only when its stored phone matches the verified claim. A number linked to another UID or a legacy unbound record returns HTTP 409 and directs the caller to controlled recovery; no profile takeover, silent rebinding or existing-data mutation occurs.
+- Caller-supplied `firebaseUid` remains ignored; stored identity continues to derive from `req.uid`.
+- Added unit tests for E.164 normalization/claim matching and source-contract regression checks.
+
+### Migration/recovery limitation
+Existing records with missing Firebase UID or phone formatting that does not normalize to E.164 may now require manual, audited account recovery. We deliberately do not rebind these records automatically. No existing user record was changed by this patch.
