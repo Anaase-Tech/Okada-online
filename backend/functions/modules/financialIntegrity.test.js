@@ -16,7 +16,7 @@ test('valid fractional event deposit percentages are preserved', () => {
 });
 
 test('negative, zero, non-finite, empty, and over-100% ratios are rejected', () => {
-  for (const value of [-0.01, 0, 1.01, NaN, Infinity, -Infinity, '', 'not-a-number']) {
+  for (const value of [-0.01, 0, 1.01, NaN, Infinity, -Infinity, '', ' ', 'not-a-number', true, false, [], {}]) {
     assert.equal(parseEventDepositPercent(value), null, String(value));
   }
 });

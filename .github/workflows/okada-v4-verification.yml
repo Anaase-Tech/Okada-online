@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - v4-mobility-os
-      - repair/**
   pull_request:
     branches:
       - v4-mobility-os
-      - repair/**
   workflow_dispatch:
 
 permissions:
