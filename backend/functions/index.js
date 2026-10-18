@@ -2275,11 +2275,8 @@ app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
   }
 });
 
-// Supports two calling patterns:
-//   { userId, payLaterTxId }  — repay one specific known record
-//   { userId, amount }        — no specific record known (this is how
-//     FintechHub actually calls it, since it only tracks a lump total
-//     owed); settles oldest pending/overdue records up to that amount.
+// Repayment intentionally fails closed until this API can link a verified
+// incoming payment or an authorized, auditable reconciliation to the debt.
 app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
   try {
     const { userId, payLaterTxId, amount } = req.body || {};

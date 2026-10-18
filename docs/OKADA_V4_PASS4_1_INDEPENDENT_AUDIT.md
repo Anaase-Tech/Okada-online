@@ -312,7 +312,7 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 
 No Firebase production deployment was performed.
 
-## Repair branch verification — 2026-10-18 (CI pending)
+## Repair branch verification — 2026-10-18 (CI verified for commit 7821f956)
 
 ### Starting point and working-tree limitation
 - Repair branch: repair/p0-financial-integrity-2026-10-18
@@ -331,7 +331,16 @@ No Firebase production deployment was performed.
 ### Regression tests added (not yet executed here)
 - backend/functions/modules/financialIntegrity.test.js: event deposit percentage range/default tests.
 - productionSecurityAudit.test.js: source-contract tests for fail-closed savings/Pay Later routes and event transaction atomicity.
-- The GitHub connector cannot run a local shell/test process. Workflow results must be checked before marking tests passed.
+- The GitHub connector cannot provide a local checkout for git status, but the GitHub Actions runner did execute the configured Node/backend, Firestore Emulator and web-build jobs. Exact results are recorded below.
+
+### CI evidence for commit `7821f956cf6b8071ced5ecbc35196e0d6fe5514c`
+- GitHub Actions run #65 completed successfully: https://github.com/Anaase-Tech/Okada-online/actions/runs/39089076536
+- Backend tests + deployment structure: **93 tests, 89 passed, 0 failed, 4 skipped**. The four skips are existing fast-suite skips; the separate emulator job ran independently.
+- Firestore Emulator concurrency suite: **4 passed, 0 failed, 0 skipped** (Trotro contention, standalone Transit contention, two-leg Journey contention, inactive-route rejection). These do not exercise the new P0 event/savings/repayment endpoints.
+- Web production build: `npm run build` completed with “Compiled successfully” under Node.js 24.
+- Regression assertions for P0-A, P0-B and P0-C passed in the backend suite. These include source-contract checks and the event-ratio helper unit tests; they are not a live provider test nor a full Firestore wallet-race test.
+- The Expo/native app was **not built** by this workflow and remains an open P0 release blocker.
+- No Firebase deploy, Paystack sandbox/live transaction, production service call, or real-money movement was run.
 
 ### Remaining risks after this batch
 - Existing historical savings transactions and Pay Later records are not migrated or retroactively reclassified; doing so may alter financial records and requires a separate reconciliation review.
