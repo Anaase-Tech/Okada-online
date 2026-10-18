@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "../firebase";
-import { collection, doc, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { collection, doc, query, where, onSnapshot, orderBy, limit, updateDoc } from "firebase/firestore";
 import { MapPin, Navigation, Star, X, Moon, Sun, AlertCircle, CheckCircle, LogOut, Eye, EyeOff, Copy, Fuel, Wrench, ArrowDownCircle, Clock } from "lucide-react";
 import { api } from "../api";
 import { T } from "../theme";
@@ -72,17 +72,77 @@ export function DriverApp({user,onLogout,dark,setDark}) {
       });
   },[user.id, user.firebaseUid]);
 
-  // Real-time ride requests: only the driver's verified vehicle type,
-  // a bounded queue, locally declined IDs skipped, and fresh-GPS proximity.
+  // Real-time ride requests are sourced from both:
+  // (1) the existing bounded rides query as a compatibility/backfill path, and
+  // (2) server fan-out notifications that are already filtered to nearby, online,
+  //     verified drivers. This avoids filtering only after 25 unrelated requests.
   useEffect(() => {
-    if (!online || incoming || activeRide || cashConfirm) return undefined;
+    if (!online || activeRide || cashConfirm) return undefined;
     if (!driverVehicleType) {
       toast$("This verified driver profile has an unsupported vehicle type. Ask admin to review it before accepting rides.", "error");
       return undefined;
     }
     if (!gpsReady || !driverSelfPosRef.current) return undefined;
-    let unsub = null;
+
+    let directUnsub = null;
+    let fanoutUnsub = null;
+    const directCandidates = new Map();
+    const fanoutCandidates = new Map();
+    const notificationListeners = new Map();
+
+    const createdAtMillis = (value) => {
+      if (value && typeof value.toMillis === "function") return value.toMillis();
+      const parsed = Date.parse(value || "");
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const asIncoming = (candidate) => {
+      const ride = candidate.ride;
+      return {
+        id: candidate.id,
+        passenger: ride.userName || "Passenger",
+        phone: ride.userPhone || "",
+        from: ride.pickupLocation?.address || "Pickup",
+        to: ride.destination?.address || "Destination",
+        pickupLocation: ride.pickupLocation || null,
+        destination: ride.destination || null,
+        dist: ride.distance ? String(ride.distance) + " km" : "—",
+        dur: ride.estimatedDuration ? String(ride.estimatedDuration) + " min" : "—",
+        fare: "GH₵" + (ride.fare?.total || "0"),
+        earn: "GH₵" + (ride.fare?.driver ?? ((ride.fare?.total || 0) * 0.25)).toFixed(2),
+        payMethod: ride.payMethod || ride.paymentMethod || "unknown",
+        notificationId: candidate.notificationId || null,
+      };
+    };
+
+    const recomputeIncoming = () => {
+      const currentPoint = driverSelfPosRef.current;
+      if (!currentPoint) {
+        setIncoming(null);
+        return;
+      }
+
+      const merged = new Map(directCandidates);
+      for (const [id, candidate] of fanoutCandidates) merged.set(id, candidate);
+      const eligible = [...merged.values()]
+        .filter(({id, ride}) => {
+          if (declinedRideIds.has(id) || ride.status !== "requested" || ride.rideType !== driverVehicleType) return false;
+          const pickupLat = Number(ride.pickupLocation?.latitude);
+          const pickupLng = Number(ride.pickupLocation?.longitude);
+          if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) return false;
+          return distanceKm(currentPoint, { lat: pickupLat, lng: pickupLng }) <= 5;
+        })
+        .sort((a,b) => createdAtMillis(b.ride.createdAt) - createdAtMillis(a.ride.createdAt));
+
+      setIncoming((current) => {
+        const stillEligible = current && eligible.find(candidate => candidate.id === current.id);
+        if (stillEligible) return asIncoming(stillEligible);
+        return eligible.length ? asIncoming(eligible[0]) : null;
+      });
+    };
+
     try {
+      // Compatibility/backfill: rides already requested before this driver came online.
       const q = query(
         collection(db, "rides"),
         where("status", "==", "requested"),
@@ -90,43 +150,97 @@ export function DriverApp({user,onLogout,dark,setDark}) {
         orderBy("createdAt", "desc"),
         limit(25)
       );
-      unsub = onSnapshot(q, (snap) => {
-        const currentPoint = driverSelfPosRef.current;
-        if (!currentPoint) { setIncoming(null); return; }
-        const nextDoc = snap.docs.find((candidate) => {
-          if (declinedRideIds.has(candidate.id)) return false;
-          const ride = candidate.data();
-          const pickupLat = Number(ride.pickupLocation?.latitude);
-          const pickupLng = Number(ride.pickupLocation?.longitude);
-          if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) return false;
-          return distanceKm(currentPoint, { lat: pickupLat, lng: pickupLng }) <= 5;
+      directUnsub = onSnapshot(q, (snap) => {
+        directCandidates.clear();
+        snap.docs.forEach(candidate => {
+          directCandidates.set(candidate.id, { id:candidate.id, ride:candidate.data(), notificationId:null });
         });
-        if (!nextDoc) { setIncoming(null); return; }
-        const r = nextDoc.data();
-        setIncoming((current) => current?.id === nextDoc.id ? current : ({
-          id: nextDoc.id,
-          passenger: r.userName || "Passenger",
-          phone: r.userPhone || "",
-          from: r.pickupLocation?.address || "Pickup",
-          to: r.destination?.address || "Destination",
-          pickupLocation: r.pickupLocation || null,
-          destination: r.destination || null,
-          dist: r.distance ? `${r.distance} km` : "—",
-          dur: r.estimatedDuration ? `${r.estimatedDuration} min` : "—",
-          fare: "GH₵" + (r.fare?.total || "0"),
-          earn: "GH₵" + (r.fare?.driver ?? ((r.fare?.total || 0) * 0.25)).toFixed(2),
-          payMethod: r.payMethod || r.paymentMethod || "unknown",
-        }));
+        recomputeIncoming();
       }, (error) => {
-        console.error("Live ride request listener failed:", error);
-        toast$(`Live ride requests are unavailable (${error.code || "network/auth"}). No demo ride was created.`, "error");
+        console.error("Bounded ride backfill listener failed:", error);
+        toast$("Direct ride backfill is unavailable (" + (error.code || "network/auth") + "). Targeted dispatch may still be available.", "error");
       });
     } catch (error) {
-      console.error("Live ride request setup failed:", error);
-      toast$(error?.message || "Live ride requests could not be loaded.", "error");
+      console.error("Direct ride backfill setup failed:", error);
+      toast$(error?.message || "Direct ride backfill could not be loaded.", "error");
     }
-    return () => { if (unsub) unsub(); };
-  }, [online, incoming, activeRide, cashConfirm, driverVehicleType, gpsReady, declinedRideIds]);
+
+    try {
+      const driverUid = user.firebaseUid || user.id;
+      const targeted = query(
+        collection(db, "notifications"),
+        where("driverUid", "==", driverUid),
+        where("type", "==", "new_ride"),
+        where("read", "==", false),
+        orderBy("createdAt", "desc"),
+        limit(100)
+      );
+      fanoutUnsub = onSnapshot(targeted, (snap) => {
+        const currentNotificationIds = new Set();
+        snap.docs.forEach((notification) => {
+          const data = notification.data() || {};
+          const rideId = typeof data.rideId === "string" ? data.rideId : "";
+          if (!rideId || data.read !== false || data.type !== "new_ride") return;
+          currentNotificationIds.add(notification.id);
+
+          if (!notificationListeners.has(notification.id)) {
+            const listener = { rideId, ref:notification.ref, unsubscribe:null };
+            listener.unsubscribe = onSnapshot(doc(db, "rides", rideId), (rideSnap) => {
+              if (!rideSnap.exists()) {
+                fanoutCandidates.delete(rideId);
+                recomputeIncoming();
+                updateDoc(listener.ref, { read:true }).catch(error => {
+                  console.warn("Could not mark stale ride offer as read:", error);
+                });
+                return;
+              }
+              const ride = rideSnap.data() || {};
+              if (ride.status !== "requested" || ride.rideType !== driverVehicleType) {
+                fanoutCandidates.delete(rideId);
+                recomputeIncoming();
+                updateDoc(listener.ref, { read:true }).catch(error => {
+                  console.warn("Could not mark stale ride offer as read:", error);
+                });
+                return;
+              }
+              fanoutCandidates.set(rideId, {
+                id:rideId, ride, notificationId:notification.id,
+              });
+              recomputeIncoming();
+            }, (error) => {
+              console.error("Targeted ride status listener failed:", error);
+              fanoutCandidates.delete(rideId);
+              recomputeIncoming();
+            });
+            notificationListeners.set(notification.id, listener);
+          }
+        });
+
+        for (const [notificationId, listener] of notificationListeners) {
+          if (currentNotificationIds.has(notificationId)) continue;
+          if (listener.unsubscribe) listener.unsubscribe();
+          notificationListeners.delete(notificationId);
+          const candidate = fanoutCandidates.get(listener.rideId);
+          if (candidate?.notificationId === notificationId) fanoutCandidates.delete(listener.rideId);
+        }
+        recomputeIncoming();
+      }, (error) => {
+        console.error("Targeted driver dispatch listener failed:", error);
+        toast$("Targeted dispatch notifications are unavailable (" + (error.code || "network/auth") + "). The compatibility queue remains active.", "error");
+      });
+    } catch (error) {
+      console.error("Targeted driver dispatch setup failed:", error);
+      toast$(error?.message || "Targeted driver dispatch could not be loaded.", "error");
+    }
+
+    return () => {
+      if (directUnsub) directUnsub();
+      if (fanoutUnsub) fanoutUnsub();
+      for (const listener of notificationListeners.values()) {
+        if (listener.unsubscribe) listener.unsubscribe();
+      }
+    };
+  }, [online, activeRide, cashConfirm, driverVehicleType, gpsReady, declinedRideIds, user.firebaseUid, user.id]);
 
   // Real browser GPS only. Throttle backend writes to meaningful movement or
   // a 15-second heartbeat, while updating the map marker at most every 5 sec.
@@ -273,6 +387,10 @@ export function DriverApp({user,onLogout,dark,setDark}) {
         return next;
       });
     }
+    if (incoming?.notificationId) {
+      updateDoc(doc(db, "notifications", incoming.notificationId), { read:true })
+        .catch(error => console.warn("Could not mark declined offer as read:", error));
+    }
     setIncoming(null);
   };
 
@@ -283,6 +401,10 @@ export function DriverApp({user,onLogout,dark,setDark}) {
     }
     try {
       await api.acceptRide(incoming.id, user.id);
+      if (incoming.notificationId) {
+        updateDoc(doc(db, "notifications", incoming.notificationId), { read:true })
+          .catch(error => console.warn("Could not mark accepted offer as read:", error));
+      }
       setActiveRide({ ...incoming, status: "accepted" });
       setIncoming(null);
       toast$("Ride acceptance was recorded by the server.");

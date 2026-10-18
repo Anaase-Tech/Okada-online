@@ -856,7 +856,8 @@ app.post('/rides/request', requireAuth, async (req, res) => {
         const notificationId = crypto.createHash('sha256').update(created.rideId + ':' + d.id + ':new_ride').digest('hex');
         try {
           await db.collection('notifications').doc(notificationId).create({
-            driverId: d.id, type: 'new_ride', rideId: created.rideId,
+            driverId: d.id, driverUid: driverData.firebaseUid || d.id,
+            type: 'new_ride', rideId: created.rideId,
             message: 'New ride: ' + created.ride.pickupLocation.address + ' → ' + created.ride.destination.address + ' | ₵' + created.fare.total,
             read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
           });

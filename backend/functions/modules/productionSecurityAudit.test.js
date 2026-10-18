@@ -617,3 +617,27 @@ test('transit journey planner routes have distinct mounted paths and preserve bo
   const mounted = [...transit.routes, ...hub.routes].map(r => r.method + ' /transit' + r.path);
   assert.equal(new Set(mounted).size, mounted.length, 'no duplicate same-method mounted paths remain');
 });
+
+
+test('driver dispatch consumes backend fan-out notifications rather than relying only on the newest 25 rides', () => {
+  const driver = read('web-app/src/screens/DriverApp.jsx');
+  const backend = index;
+  const rules = read('backend/firestore.rules');
+  const source = read('backend/firestore.indexes.json');
+  assert.match(driver, /where\("driverUid", "==", driverUid\)/);
+  assert.match(driver, /where\("type", "==", "new_ride"\)/);
+  assert.match(driver, /limit\(100\)/);
+  assert.match(driver, /Targeted driver dispatch listener failed/);
+  assert.match(backend, /driverUid: driverData\.firebaseUid \|\| d\.id/);
+  assert.match(rules, /resource\.data\.driverUid == request\.auth\.uid/);
+  assert.match(source, /"fieldPath": "driverUid"/);
+  assert.match(driver, /limit\(25\)/, 'bounded compatibility/backfill queue remains');
+});
+
+test('ride fan-out notifications include the verified UID target while preserving the driver profile ID', () => {
+  const start = index.indexOf("app.post('/rides/request'");
+  const end = index.indexOf("app.post('/rides/", start + 20);
+  const route = index.slice(start, end);
+  assert.match(route, /driverUid: driverData\.firebaseUid \|\| d\.id/);
+  assert.match(route, /driverId: d\.id, driverUid:/);
+});
