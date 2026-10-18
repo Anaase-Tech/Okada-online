@@ -25,6 +25,7 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
+const { parseEventDepositPercent } = require('./modules/financialIntegrity');
 const {
   settleSuccessfulJourneyPayment,
   settleFailedJourneyPayment,
@@ -1852,22 +1853,21 @@ app.post('/dto/fuel-code/:code/redeem', requireAuth, async (req, res) => {
 
 app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
   try {
-    const { userId, amount } = req.body;
+    const { userId, amount } = req.body || {};
     const a = Number(amount);
-    if (!userId || !Number.isFinite(a) || a <= 0)
+    if (!userId || !Number.isFinite(a) || a <= 0) {
       return fail(res, 400, 'userId and a positive amount are required');
+    }
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-    await db.collection('savings_transactions').add({
-      userId: sanitize(userId), type: 'manual_deposit',
-      amount: a, status: 'completed',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    await u.ref.update({
-      'savings.balance':        admin.firestore.FieldValue.increment(a),
-      'savings.totalDeposited': admin.firestore.FieldValue.increment(a),
-    });
-    return ok(res, { deposited: a });
+
+    // Fail closed: this endpoint has no verified incoming-funds reference or
+    // authorized reconciliation record. Never treat a caller's request as money.
+    return fail(
+      res,
+      409,
+      'Savings deposits require verified funding or an authorized, auditable reconciliation. No savings balance was changed.'
+    );
   } catch (e) {
     return fail(res, 500, e.message);
   }
@@ -2275,103 +2275,28 @@ app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
   }
 });
 
-// Supports two calling patterns:
-//   { userId, payLaterTxId }  — repay one specific known record
-//   { userId, amount }        — no specific record known (this is how
-//     FintechHub actually calls it, since it only tracks a lump total
-//     owed); settles oldest pending/overdue records up to that amount.
+// Repayment intentionally fails closed until this API can link a verified
+// incoming payment or an authorized, auditable reconciliation to the debt.
 app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
   try {
-    const { userId, payLaterTxId, amount } = req.body;
+    const { userId, payLaterTxId, amount } = req.body || {};
+    if (!userId) return fail(res, 400, 'userId is required');
+    if (!payLaterTxId && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+      return fail(res, 400, 'A positive repayment amount is required');
+    }
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
 
-    if (payLaterTxId) {
-      const txRef = db.collection('pay_later').doc(sanitize(payLaterTxId));
-      const result = await db.runTransaction(async (trx) => {
-        const [txSnap, userSnap] = await Promise.all([trx.get(txRef), trx.get(u.ref)]);
-        if (!txSnap.exists) throw new Error('Record not found');
-        if (!userSnap.exists) throw new Error('User not found');
-
-        const record = txSnap.data();
-        if (record.userId !== u.ref.id) throw new Error('Pay Later record access denied');
-        if (String(record.status || '').toLowerCase() === 'paid') {
-          return { alreadyPaid: true, amount: 0 };
-        }
-
-        const outstanding = Number(record.amount);
-        if (!Number.isFinite(outstanding) || outstanding <= 0) throw new Error('Invalid Pay Later record');
-
-        const used = Number(userSnap.data()?.payLater?.used || 0);
-        if (!Number.isFinite(used) || used < outstanding) throw new Error('Pay Later balance is inconsistent');
-
-        trx.update(txRef, {
-          status: 'paid',
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        trx.update(u.ref, {
-          'payLater.used': admin.firestore.FieldValue.increment(-outstanding),
-          'payLater.suspended': false,
-        });
-        return { alreadyPaid: false, amount: outstanding };
-      });
-
-      if (result.alreadyPaid) return ok(res, { message: 'Already paid' });
-      return ok(res, { repaid: result.amount, status: 'paid' });
-    }
-
-    const repaymentAmount = Number(amount);
-    if (!Number.isFinite(repaymentAmount) || repaymentAmount <= 0) {
-      return fail(res, 400, 'A positive repayment amount is required');
-    }
-
-    const result = await db.runTransaction(async (trx) => {
-      const userSnap = await trx.get(u.ref);
-      if (!userSnap.exists) throw new Error('User not found');
-
-      const pending = await trx.get(
-        db.collection('pay_later')
-          .where('userId','==',u.ref.id)
-          .where('status','in',['deferred','overdue'])
-          .orderBy('createdAt','asc')
-      );
-
-      let remaining = repaymentAmount;
-      let totalRepaid = 0;
-
-      for (const doc of pending.docs) {
-        if (remaining <= 0) break;
-        const outstanding = Number(doc.data().amount);
-        if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
-        // Never settle more debt than the caller requested.
-        if (outstanding > remaining) continue;
-
-        trx.update(doc.ref, {
-          status: 'paid',
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        remaining -= outstanding;
-        totalRepaid += outstanding;
-      }
-
-      if (totalRepaid <= 0) throw new Error('No outstanding Pay Later balance matched the repayment amount');
-
-      const used = Number(userSnap.data()?.payLater?.used || 0);
-      if (!Number.isFinite(used) || used < totalRepaid) throw new Error('Pay Later balance is inconsistent');
-
-      trx.update(u.ref, {
-        'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
-        'payLater.suspended': false,
-      });
-
-      return +totalRepaid.toFixed(2);
-    });
-
-    return ok(res, { repaid: result, status: 'paid' });
+    // Fail closed: there is currently no linked, verified repayment payment
+    // or authorized reconciliation proof in this API contract. The amount in
+    // the request is not evidence that funds were received.
+    return fail(
+      res,
+      409,
+      'Pay Later repayment requires a verified incoming payment or authorized, auditable reconciliation. No debt or credit-limit balance was changed.'
+    );
   } catch (e) {
-    return fail(res, 400, e.message);
+    return fail(res, 500, e.message);
   }
 });
 
@@ -3209,30 +3134,73 @@ app.get('/maas/corporate/stats/:orgId', requireAuth, async (req,res) => {
 app.post('/maas/events/book', requireAuth, async (req,res) => {
   try {
     const { userId,eventName,eventDate,pickupAddress,destAddress,
-            vehicleType,passengers,notes,depositPercent } = req.body;
-    const pricing   = MAAS_PRICING.scheduled[sanitize(vehicleType)]||MAAS_PRICING.scheduled.car;
-    const estFare   = +(pricing.flag + 15*pricing.perKm).toFixed(2);
-    const deposit   = +(estFare*(depositPercent||0.30)).toFixed(2);
+            vehicleType,passengers,notes,depositPercent } = req.body || {};
+    const depositRatio = parseEventDepositPercent(depositPercent);
+    if (depositRatio === null) {
+      return fail(res, 400, 'depositPercent must be a finite decimal greater than 0 and at most 1 (for example, 0.30 for 30%)');
+    }
+
+    const pricing = MAAS_PRICING.scheduled[sanitize(vehicleType)] || MAAS_PRICING.scheduled.car;
+    const estFare = +(pricing.flag + 15 * pricing.perKm).toFixed(2);
+    if (!Number.isFinite(estFare) || estFare <= 0) {
+      return fail(res, 500, 'Event fare configuration is invalid');
+    }
+    const deposit = +(estFare * depositRatio).toFixed(2);
+    if (!Number.isFinite(deposit) || deposit <= 0 || deposit > estFare) {
+      return fail(res, 400, 'Calculated event deposit is invalid');
+    }
+
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
-    if((u.data?.wallet?.available||0) < deposit)
-      return fail(res,400,`Deposit required: GH₵${deposit}`);
-    const ref = await db.collection('event_rides').add({
-      userId:sanitize(userId), eventName:sanitize(eventName),
-      eventDate:sanitize(eventDate), pickupAddress:sanitize(pickupAddress),
-      destAddress:sanitize(destAddress), vehicleType:sanitize(vehicleType),
-      passengers:parseInt(passengers)||1, notes:sanitize(notes||''),
-      estimatedFare:estFare, deposit, balanceDue:+(estFare-deposit).toFixed(2),
-      status:'confirmed', driverId:null,
-      createdAt:admin.firestore.FieldValue.serverTimestamp(),
+
+    // The event booking and both wallet movements commit together. Read the
+    // authoritative wallet values inside the transaction, not from u.data.
+    const ref = db.collection('event_rides').doc();
+    const result = await db.runTransaction(async (trx) => {
+      const userSnap = await trx.get(u.ref);
+      if (!userSnap.exists) return { blocked: 'user-not-found' };
+
+      const userData = userSnap.data() || {};
+      const available = Number(userData.wallet?.available ?? 0);
+      const pending = Number(userData.wallet?.pending ?? 0);
+      if (!Number.isFinite(available) || available < 0 ||
+          !Number.isFinite(pending) || pending < 0) {
+        return { blocked: 'invalid-wallet' };
+      }
+      if (available < deposit) return { blocked: 'insufficient-funds', available };
+
+      trx.create(ref, {
+        userId: u.ref.id,
+        eventName: sanitize(eventName),
+        eventDate: sanitize(eventDate),
+        pickupAddress: sanitize(pickupAddress),
+        destAddress: sanitize(destAddress),
+        vehicleType: sanitize(vehicleType),
+        passengers: parseInt(passengers, 10) || 1,
+        notes: sanitize(notes || ''),
+        estimatedFare: estFare,
+        deposit,
+        balanceDue: +(estFare - deposit).toFixed(2),
+        status: 'confirmed',
+        driverId: null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      trx.update(u.ref, {
+        'wallet.available': admin.firestore.FieldValue.increment(-deposit),
+        'wallet.pending': admin.firestore.FieldValue.increment(deposit),
+      });
+      return { booked: true };
     });
-    await u.ref.update({
-      'wallet.available':admin.firestore.FieldValue.increment(-deposit),
-      'wallet.pending':  admin.firestore.FieldValue.increment(deposit),
-    });
+
+    if (result.blocked === 'user-not-found') return fail(res,404,'User not found');
+    if (result.blocked === 'invalid-wallet') return fail(res,409,'Wallet balance is invalid; event booking was not created');
+    if (result.blocked === 'insufficient-funds') {
+      return fail(res,400,'Deposit required: GH₵' + deposit + '. Available: GH₵' + result.available.toFixed(2));
+    }
+
     return ok(res, { eventRideId:ref.id, eventName, eventDate,
-      estimatedFare:estFare, deposit, balanceDue:estFare-deposit,
-      message:`Event ride confirmed for ${eventDate}. Driver assigned 24hrs before event.` });
+      estimatedFare:estFare, deposit, balanceDue:+(estFare-deposit).toFixed(2),
+      message:'Event ride confirmed for ' + sanitize(eventDate) + '. Driver assigned 24hrs before event.' });
   } catch(e) { return fail(res,500,e.message); }
 });
 

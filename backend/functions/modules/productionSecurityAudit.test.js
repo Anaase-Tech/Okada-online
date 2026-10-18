@@ -20,6 +20,7 @@ const paymentService = read('backend/functions/modules/legacyPaymentService.js')
 const api = read('web-app/src/api.js');
 const authScreen = read('web-app/src/screens/AuthScreen.jsx');
 const functionsPackage = JSON.parse(read('backend/functions/package.json'));
+const { parseEventDepositPercent } = require('./financialIntegrity');
 
 test('V4 entrypoint mounts Journey, Transit, and Trotro routers and preserves legacy app', () => {
   assert.match(v4Entry, /require\('\.\/index'\)/);
@@ -355,4 +356,49 @@ test('Journey multi-leg transaction reads trip, route, and booking state before 
   const firstWrite = Math.min(...writes);
   assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
+});
+
+
+test('P0-A: savings deposits fail closed without verified funding and cannot credit balances', () => {
+  const start = index.indexOf("app.post('/fintech/savings/deposit'");
+  const end = index.indexOf("app.post('/fintech/savings/withdraw'", start);
+  assert.ok(start >= 0 && end > start, 'savings deposit handler boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /verified funding or an authorized, auditable reconciliation/);
+  assert.match(route, /return fail\(\s*res,\s*409/);
+  assert.doesNotMatch(route, /savings_transactions|manual_deposit|savings\.balance.*increment|savings\.totalDeposited.*increment/);
+});
+
+test('P0-B: Pay Later repayments fail closed without payment verification', () => {
+  const start = index.indexOf("app.post('/fintech/pay-later/repay'");
+  const end = index.indexOf('// ════════════════════════════════════════════════════════════\n// J. WALLET', start);
+  assert.ok(start >= 0 && end > start, 'repayment handler boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /verified incoming payment or authorized, auditable reconciliation/);
+  assert.match(route, /return fail\(\s*res,\s*409/);
+  assert.doesNotMatch(route, /status:\s*'paid'|payLater\.used.*increment|trx\.update\(txRef/);
+});
+
+test('P0-C: event deposit percentage parser rejects invalid ratios', () => {
+  assert.equal(parseEventDepositPercent(undefined), 0.30);
+  assert.equal(parseEventDepositPercent(null), 0.30);
+  assert.equal(parseEventDepositPercent(0.30), 0.30);
+  assert.equal(parseEventDepositPercent('0.75'), 0.75);
+  for (const value of [-0.01, 0, 1.01, NaN, Infinity, -Infinity, '', ' ', 'not-a-number', true, false, [], {}]) {
+    assert.equal(parseEventDepositPercent(value), null, String(value));
+  }
+});
+
+test('P0-C: event booking validates deposit and atomically records booking with wallet movement', () => {
+  const start = index.indexOf("app.post('/maas/events/book'");
+  const end = index.indexOf('// ── G. DELIVERY', start);
+  assert.ok(start >= 0 && end > start, 'event booking handler boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /parseEventDepositPercent\(depositPercent\)/);
+  assert.match(route, /trx\.get\(u\.ref\)/);
+  assert.match(route, /trx\.create\(ref/);
+  assert.match(route, /trx\.update\(u\.ref/);
+  assert.match(route, /wallet\.available.*increment\(-deposit\)/s);
+  assert.match(route, /wallet\.pending.*increment\(deposit\)/s);
+  assert.doesNotMatch(route, /event_rides'\)\.add|await u\.ref\.update/);
 });
