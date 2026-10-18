@@ -21,44 +21,50 @@ export function ShareRide({user,dark,onBack}) {
   const [maxPass,setMaxPass]=useState(3);
   const [farePerPerson,setFarePerPerson]=useState("");
 
-  const DEMO=[
-    {id:"t1",creatorId:"u2",pickupAddress:"Akosombo",destAddress:"Koforidua",vehicleType:"car",departTime:"07:30",departDate:"Today",maxPassengers:4,farePerPerson:15,passengers:["u2","u3"],status:"open"},
-    {id:"t2",creatorId:"u4",pickupAddress:"Kpong",destAddress:"Odumase-Krobo",vehicleType:"car",departTime:"08:00",departDate:"Today",maxPassengers:3,farePerPerson:8,passengers:["u4"],status:"open"},
-    {id:"t3",creatorId:"u5",pickupAddress:"Atimpoku",destAddress:"Somanya",vehicleType:"tricycle",departTime:"09:30",departDate:"Today",maxPassengers:3,farePerPerson:6,passengers:["u5","u6","u7"],status:"full"},
-  ];
-
   useEffect(()=>{
-    try{
-      const q=query(collection(db,"shared_trips"),where("status","==","open"),limit(10));
-      const unsub=onSnapshot(q,(snap)=>{
-        if(!snap.empty) setTrips(snap.docs.map(d=>({id:d.id,...d.data()})));
-        else setTrips(DEMO);
-      },()=>setTrips(DEMO));
-      return()=>unsub();
-    }catch(err){console.warn(err);setTrips(DEMO);}
+    let unsubscribe = () => {};
+    try {
+      const q = query(collection(db,"shared_trips"),where("status","==","open"),limit(10));
+      unsubscribe = onSnapshot(q, (snap) => {
+        setTrips(snap.docs.map(d=>({id:d.id,...d.data()})));
+      }, (err) => {
+        console.warn("Shared trips listener failed:",err);
+        setTrips([]);
+        setToast({msg:"Could not load live shared trips. Please check your connection and retry.",type:"error"});
+      });
+    } catch(err) {
+      console.warn("Shared trips listener setup failed:",err);
+      setTrips([]);
+      setToast({msg:"Could not load live shared trips. Please check your connection and retry.",type:"error"});
+    }
+    return () => unsubscribe();
   },[]);
-
   const createTrip=async()=>{
     if(!pickup||!dest||!farePerPerson){toast$("Fill all fields","error");return;}
     setLoading(true);
     try{
       await api.createSharedTrip({creatorId:user.id,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,departDate,maxPassengers:maxPass,farePerPerson:parseFloat(farePerPerson)});
-      toast$("Shared trip created! Others can now join ✅");setView("browse");
+      toast$("Shared trip created! Others can now join ✅");
+      setView("browse");
     }catch(err){
       console.warn(err);
-      setTrips(prev=>[{id:"t"+Date.now(),creatorId:user.id,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,departDate,maxPassengers:maxPass,farePerPerson:parseFloat(farePerPerson),passengers:[user.id],status:"open"},...prev]);
-      toast$("Shared trip created! (demo)");setView("browse");
+      toast$("Could not create the shared trip ("+(err.message||"request failed")+"). No trip was confirmed.","error");
+    }finally{
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const joinTrip=async(trip)=>{
-    if(trip.passengers.includes(user.id)){toast$("Already joined","error");return;}
-    try{await api.joinSharedTrip(trip.id,user.id);}catch(err){console.warn(err);}
-    toast$("Joined! GH₵"+trip.farePerPerson+" per person 🤝");
-    setTrips(prev=>prev.map(t=>t.id===trip.id?{...t,passengers:[...t.passengers,user.id]}:t));
+    if((trip.passengers||[]).includes(user.id)){toast$("Already joined","error");return;}
+    try{
+      await api.joinSharedTrip(trip.id,user.id);
+      setTrips(prev=>prev.map(t=>t.id===trip.id?{...t,passengers:[...(t.passengers||[]),user.id]}:t));
+      toast$("Joined! GH₵"+trip.farePerPerson+" per person 🤝");
+    }catch(err){
+      console.warn(err);
+      toast$("Could not join this shared trip ("+(err.message||"request failed")+"). No seat was reserved.","error");
+    }
   };
-
   const vIcon={car:"🚗",okada:"🏍️",tricycle:"🛺",ev_car:"⚡🚗"};
 
   return (
