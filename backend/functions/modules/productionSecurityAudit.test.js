@@ -380,3 +380,18 @@ test('MaaS event booking validates deposit percentages and atomically applies ev
   assert.ok(readIndex >= 0 && firstWrite > readIndex, 'transaction reads balance before first write');
   assert.equal(guard.slice(firstWrite).includes('await tx.get('), false, 'no transaction reads occur after the first write');
 });
+
+
+test('MaaS event booking revalidates current profile ownership before any event or wallet write', () => {
+  const eventGuard = read('backend/functions/modules/eventBookingGuard.js');
+  const readIndex = eventGuard.indexOf('const userSnap = await tx.get(user.ref)');
+  const ownershipIndex = eventGuard.indexOf('freshProfile.firebaseUid !== req.uid', readIndex);
+  const eventWriteIndex = eventGuard.indexOf('tx.create(eventRef, eventRecord)', readIndex);
+  const walletWriteIndex = eventGuard.indexOf('tx.update(user.ref', readIndex);
+  assert.ok(readIndex >= 0, 'fresh profile snapshot is read inside transaction');
+  assert.ok(ownershipIndex > readIndex, 'ownership is checked against the transactional snapshot');
+  assert.ok(eventWriteIndex > ownershipIndex, 'event write follows ownership check');
+  assert.ok(walletWriteIndex > ownershipIndex, 'wallet write follows ownership check');
+  assert.ok(eventGuard.includes("result?.blocked === 'not-authorized'"));
+  assert.ok(eventGuard.includes("fail(res, 403, 'Profile ownership changed"));
+});

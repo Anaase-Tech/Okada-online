@@ -14,6 +14,8 @@ function createHarness({
   pending = 0,
   resolveProfile = true,
   profileExistsInTransaction = true,
+  resolvedFirebaseUid = 'uid-1',
+  transactionFirebaseUid = resolvedFirebaseUid,
 } = {}) {
   const stats = {
     resolveCalls: 0,
@@ -44,7 +46,10 @@ function createHarness({
           assert.equal(ref, userRef);
           return {
             exists: profileExistsInTransaction,
-            data: () => ({ wallet: { available, pending } }),
+            data: () => ({
+              firebaseUid: transactionFirebaseUid,
+              wallet: { available, pending },
+            }),
           };
         },
         create(ref, data) {
@@ -72,7 +77,7 @@ function createHarness({
     stats.resolvedUserId = userId;
     stats.resolvedUid = req.uid;
     return resolveProfile
-      ? { ref: userRef, data: { wallet: { available, pending } } }
+      ? { ref: userRef, data: { firebaseUid: resolvedFirebaseUid, wallet: { available, pending } } }
       : null;
   };
 
@@ -228,6 +233,42 @@ test('non-numeric pending wallet balance is rejected without replacing the store
   assert.equal(res.statusCode, 409);
   assert.match(res.body.error, /Wallet balance is invalid/);
   assert.equal(h.stats.transactionCalls, 1);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+
+test('deposit percentage that rounds to zero is rejected before profile lookup or writes', async () => {
+  const h = createHarness();
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: { ...validBody, depositPercent: 0.00001 } }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /Calculated event deposit is invalid/);
+  assert.equal(h.stats.resolveCalls, 0);
+  assert.equal(h.stats.transactionCalls, 0);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+test('ownership changed after profile lookup is rejected before financial writes', async () => {
+  const h = createHarness({
+    resolvedFirebaseUid: 'uid-1',
+    transactionFirebaseUid: 'uid-2',
+    available: 100,
+    pending: 0,
+  });
+  const res = h.makeResponse();
+  await h.handler({
+    uid: 'uid-1',
+    isAdmin: false,
+    body: { ...validBody, depositPercent: 0.5 },
+  }, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body.error, /Profile ownership changed/);
+  assert.equal(h.stats.transactionCalls, 1);
+  assert.equal(h.stats.transactionReads, 1);
   assert.equal(h.stats.created.length, 0);
   assert.equal(h.stats.updated.length, 0);
 });

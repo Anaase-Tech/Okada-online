@@ -124,7 +124,19 @@ function createEventBookingHandler({
         const userSnap = await tx.get(user.ref);
         if (!userSnap.exists) return { blocked: 'user-not-found' };
 
-        const wallet = userSnap.data()?.wallet || {};
+        // Profile ownership was resolved before the transaction to find the
+        // document. Recheck it against the fresh transactional snapshot so
+        // a reassignment between lookup and debit cannot authorize stale access.
+        const freshProfile = userSnap.data() || {};
+        if (
+          req.isAdmin !== true &&
+          freshProfile.firebaseUid !== req.uid &&
+          user.ref.id !== req.uid
+        ) {
+          return { blocked: 'not-authorized' };
+        }
+
+        const wallet = freshProfile.wallet || {};
         const rawAvailable = wallet.available;
         const rawPending = wallet.pending;
         const availableMissing = rawAvailable === undefined || rawAvailable === null;
@@ -160,6 +172,9 @@ function createEventBookingHandler({
 
       if (result?.blocked === 'user-not-found') {
         return fail(res, 404, 'User not found');
+      }
+      if (result?.blocked === 'not-authorized') {
+        return fail(res, 403, 'Profile ownership changed; event booking is not authorized');
       }
       if (result?.blocked === 'invalid-wallet-balance') {
         return fail(res, 409, 'Wallet balance is invalid; event booking cannot be processed');
