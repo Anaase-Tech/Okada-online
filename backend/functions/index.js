@@ -34,7 +34,7 @@ const {
   markRidePaymentFailed,
 } = require('./modules/legacyPaymentService');
 const { createPayLaterRepaymentHandler } = require('./modules/payLaterRepaymentGuard');
-const { createPayLaterOriginationSuspension } = require('./modules/payLaterOriginationGuard');
+const { isPayLaterOriginationSuspended, PAY_LATER_ORIGINATION_UNAVAILABLE_MESSAGE } = require('./modules/payLaterOriginationGuard');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -2146,7 +2146,7 @@ app.get('/insurance/policy/:userId', requireAuth, async (req, res) => {
 // I. FINTECH — PAY LATER
 // ════════════════════════════════════════════════════════════
 
-app.post('/fintech/pay-later/request', requireAuth, createPayLaterOriginationSuspension({ fail }), async (req, res) => {
+app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
   try {
     const userId = sanitize(req.body?.userId, 160);
     const rideId = sanitize(req.body?.rideId, 160);
@@ -2179,6 +2179,10 @@ app.post('/fintech/pay-later/request', requireAuth, createPayLaterOriginationSus
         return { accepted: true, idempotent: true, payLaterTxId: activeExisting.ref.id, amount: Number(activeExisting.data.amount), dueDate: activeExisting.data.dueDate || dueDate };
       }
       if (activeExisting) return { blocked: 'already-active' };
+
+      // Preserve idempotent retries of already-accepted deferred rides above,
+      // but suspend every new origination before any transaction write.
+      if (isPayLaterOriginationSuspended()) return { blocked: 'origination-suspended' };
 
       const paymentStatus = String(ride.paymentStatus || '').toUpperCase();
       const paymentMethod = String(ride.paymentMethod || '').toUpperCase();
@@ -2231,6 +2235,7 @@ app.post('/fintech/pay-later/request', requireAuth, createPayLaterOriginationSus
     if (result.blocked === 'user-not-found') return fail(res, 404, 'User not found');
     if (result.blocked === 'ride-not-found') return fail(res, 404, 'Ride not found');
     if (result.blocked === 'forbidden') return fail(res, 403, 'Ride does not belong to the authenticated user');
+    if (result.blocked === 'origination-suspended') return fail(res, 409, PAY_LATER_ORIGINATION_UNAVAILABLE_MESSAGE);
     if (result.blocked === 'ride-closed') return fail(res, 409, 'Pay Later cannot be selected for a closed ride');
     if (result.blocked === 'already-active') return fail(res, 409, 'Pay Later is already active for this ride');
     if (result.blocked === 'already-paid') return fail(res, 409, 'Ride already has a successful payment');
