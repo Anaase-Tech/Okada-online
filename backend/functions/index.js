@@ -26,6 +26,7 @@ const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
 const { createDeliveryTrackingCode, toPublicDeliveryTrackingDto } = require('./modules/deliveryPrivacy');
+const { validateDeliveryTransition } = require('./modules/deliveryState');
 const { parseEventDepositPercent } = require('./modules/financialIntegrity');
 const {
   settleSuccessfulJourneyPayment,
@@ -3262,55 +3263,109 @@ app.post('/delivery/request', requireAuth, async (req,res) => {
 
 app.put('/delivery/:id/status', requireAuth, async (req,res) => {
   try {
-    const { status, driverId, proofPhoto } = req.body;
+    const { status, driverId, proofPhoto } = req.body || {};
+    const nextStatus = typeof status === 'string' ? status.trim().toLowerCase() : '';
+    const isAdmin = req.isAdmin === true;
+    if (!['pending','assigned','picked_up','in_transit','delivered','failed'].includes(nextStatus)) {
+      return fail(res,400,'Unsupported delivery status');
+    }
+
     const deliveryRef = db.collection('deliveries').doc(sanitize(req.params.id));
-    const deliverySnap = await deliveryRef.get();
-    if (!deliverySnap.exists) return fail(res,404,'Delivery not found');
-    const delivery = deliverySnap.data();
+    const initialSnap = await deliveryRef.get();
+    if (!initialSnap.exists) return fail(res,404,'Delivery not found');
+    const initial = initialSnap.data() || {};
 
-    let authorized = req.isAdmin === true;
-    if (!authorized) {
-      const senderProfile = await resolveUserRef(delivery.senderId, req);
-      const assignedDriver = delivery.driverId
-        ? await db.collection('drivers').doc(sanitize(delivery.driverId)).get()
-        : null;
-      const driverOwnsDelivery = assignedDriver?.exists
-        && (assignedDriver.data()?.firebaseUid === req.uid || assignedDriver.id === req.uid);
-      authorized = !!senderProfile || driverOwnsDelivery;
+    // Only an admin can assign/reassign drivers. Senders may view tracking but
+    // cannot impersonate delivery operations by changing the status.
+    if (driverId && (!isAdmin || nextStatus !== 'assigned')) {
+      return fail(res,403,'Only an admin can assign a driver');
     }
-    if (!authorized) return fail(res,403,'Delivery update access denied');
-
-    if (driverId && !req.isAdmin) {
-      const requestedDriver = await db.collection('drivers').doc(sanitize(driverId)).get();
-      if (!requestedDriver.exists
-          || (requestedDriver.data()?.firebaseUid !== req.uid && requestedDriver.id !== req.uid)) {
-        return fail(res,403,'Driver identity does not match the authenticated user');
-      }
-      if (delivery.driverId && String(delivery.driverId) !== String(driverId)) {
-        return fail(res,403,'Only the assigned driver can update this delivery');
-      }
+    if (nextStatus === 'assigned' && !isAdmin) {
+      return fail(res,403,'Only an admin can assign a driver');
+    }
+    if (nextStatus === 'assigned' && !driverId) {
+      return fail(res,400,'A driver ID is required when assigning a delivery');
     }
 
-    const updates = { status:sanitize(status) };
-    if(driverId)   updates.driverId = sanitize(driverId);
-    if(proofPhoto) updates.proofOfDelivery = sanitize(proofPhoto);
-    if(status==='picked_up')  updates.pickedUpAt  = admin.firestore.FieldValue.serverTimestamp();
-    if(status==='delivered')  updates.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
-    await deliveryRef.update(updates);
-    const snap = await db.collection('deliveries').doc(req.params.id).get();
-    const d    = snap.data();
-    const msgs = {
-      assigned:`Driver assigned for ${d.trackingCode}`,
-      picked_up:`Package picked up — on the way to ${d.recipientName}`,
-      delivered:`Package delivered to ${d.recipientName} ✅`,
-      failed:`Delivery attempt failed — driver will retry`,
-    };
-    if(msgs[status]) await db.collection('notifications').add({
-      userId:d.senderId, type:'delivery_update',
-      message:msgs[status], deliveryId:req.params.id,
-      createdAt:admin.firestore.FieldValue.serverTimestamp(),
+    let authenticatedDriverId = null;
+    if (!isAdmin) {
+      const assignedId = sanitize(initial.driverId || '');
+      if (!assignedId) return fail(res,403,'Delivery update access denied');
+      const assignedDriverSnap = await db.collection('drivers').doc(assignedId).get();
+      if (!assignedDriverSnap.exists) return fail(res,403,'Delivery update access denied');
+      const assignedDriver = assignedDriverSnap.data() || {};
+      if (assignedDriver.firebaseUid !== req.uid && assignedDriverSnap.id !== req.uid) {
+        return fail(res,403,'Delivery update access denied');
+      }
+      authenticatedDriverId = assignedDriverSnap.id;
+    }
+
+    const proofReference = typeof proofPhoto === 'string' ? sanitize(proofPhoto) : '';
+    if (nextStatus === 'delivered' && !proofReference) {
+      return fail(res,400,'Proof of delivery is required before marking delivered');
+    }
+
+    const notificationRef = db.collection('notifications').doc();
+    const transitionResult = await db.runTransaction(async (trx) => {
+      const deliverySnap = await trx.get(deliveryRef);
+      if (!deliverySnap.exists) return { blocked: 'not-found' };
+      const current = deliverySnap.data() || {};
+
+      if (!isAdmin && current.driverId !== authenticatedDriverId) {
+        return { blocked: 'assignment-changed' };
+      }
+
+      const transitionError = validateDeliveryTransition(current.status, nextStatus);
+      if (transitionError) return { blocked: transitionError };
+
+      let targetDriver = null;
+      if (nextStatus === 'assigned') {
+        const targetRef = db.collection('drivers').doc(sanitize(driverId));
+        const targetSnap = await trx.get(targetRef);
+        if (!targetSnap.exists) return { blocked: 'driver-not-found' };
+        targetDriver = targetSnap.id;
+      }
+
+      const updates = {
+        status: nextStatus,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (targetDriver) updates.driverId = targetDriver;
+      if (nextStatus === 'picked_up') updates.pickedUpAt = admin.firestore.FieldValue.serverTimestamp();
+      if (nextStatus === 'delivered') {
+        updates.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
+        updates.proofOfDelivery = proofReference;
+      }
+
+      trx.update(deliveryRef, updates);
+
+      const messages = {
+        assigned: 'A driver was assigned to your delivery.',
+        picked_up: 'Your package has been picked up.',
+        in_transit: 'Your package is in transit.',
+        delivered: 'Your package is marked delivered.',
+        failed: 'The delivery attempt failed; an administrator may arrange a retry.',
+      };
+      const notificationMessage = messages[nextStatus];
+      if (notificationMessage) {
+        trx.create(notificationRef, {
+          userId: current.senderId,
+          type: 'delivery_update',
+          message: notificationMessage,
+          deliveryId: deliveryRef.id,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      return { status: nextStatus, driverId: targetDriver || current.driverId || null };
     });
-    return ok(res, { deliveryId:req.params.id, status });
+
+    if (transitionResult.blocked === 'not-found') return fail(res,404,'Delivery not found');
+    if (transitionResult.blocked === 'assignment-changed') return fail(res,409,'Delivery assignment changed; reload before retrying');
+    if (transitionResult.blocked === 'unsupported-status') return fail(res,400,'Unsupported delivery status');
+    if (transitionResult.blocked === 'invalid-transition') return fail(res,409,'Invalid delivery status transition');
+    if (transitionResult.blocked === 'driver-not-found') return fail(res,400,'Driver not found');
+    return ok(res, { deliveryId:req.params.id, status:transitionResult.status });
   } catch(e) { return fail(res,500,e.message); }
 });
 

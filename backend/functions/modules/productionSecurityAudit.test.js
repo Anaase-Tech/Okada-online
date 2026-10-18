@@ -436,3 +436,31 @@ test('delivery tracking references are random and public tracking returns an exp
   assert.match(trackRoute, /toPublicDeliveryTrackingDto\(snap\.docs\[0\]\.data\(\)\)/);
   assert.doesNotMatch(trackRoute, /\\.\\.\\.snap\\.docs\[0\]\.data\(\)|id:snap\.docs\[0\]\.id/);
 });
+
+
+test('delivery status updates authorize assigned driver/admin and enforce proof + transition validation', () => {
+  const start = index.indexOf("app.put('/delivery/:id/status'");
+  const end = index.indexOf("app.get('/delivery/track/:code'", start);
+  assert.ok(start >= 0 && end > start, 'delivery status route boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /if \(nextStatus === 'assigned' && !isAdmin\)/);
+  assert.match(route, /assignedDriver\.firebaseUid !== req\.uid/);
+  assert.match(route, /Proof of delivery is required before marking delivered/);
+  assert.match(route, /db\.runTransaction/);
+  assert.match(route, /validateDeliveryTransition\(current\.status, nextStatus\)/);
+  assert.doesNotMatch(route, /const senderProfile = await resolveUserRef\(delivery\.senderId/);
+});
+
+test('delivery state machine rejects unsupported, skipped, reversed and terminal-state changes', () => {
+  const { validateDeliveryTransition } = require('./deliveryState');
+  assert.equal(validateDeliveryTransition('pending','assigned'), null);
+  assert.equal(validateDeliveryTransition('assigned','picked_up'), null);
+  assert.equal(validateDeliveryTransition('picked_up','in_transit'), null);
+  assert.equal(validateDeliveryTransition('in_transit','delivered'), null);
+  assert.equal(validateDeliveryTransition('failed','assigned'), null);
+  assert.equal(validateDeliveryTransition('delivered','assigned'), 'invalid-transition');
+  assert.equal(validateDeliveryTransition('pending','delivered'), 'invalid-transition');
+  assert.equal(validateDeliveryTransition('assigned','in_transit'), 'invalid-transition');
+  assert.equal(validateDeliveryTransition('unknown','failed'), 'invalid-transition');
+  assert.equal(validateDeliveryTransition('picked_up','cancelled'), 'unsupported-status');
+});

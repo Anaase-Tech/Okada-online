@@ -816,3 +816,19 @@ At the base source, `POST /delivery/request` generated `DLV-` plus a base-36 tim
 
 ### Limits
 No authenticated end-to-end test or live delivery record was used. Delivery status-transition authorization remains a separate repair batch.
+
+
+## Repair batch — delivery status-transition controls (2026-10-18; CI pending)
+
+### Source evidence
+The previous `PUT /delivery/:id/status` accepted arbitrary `status` values and allowed a sender to set any state. Status writes occurred outside a transaction and delivery could be marked `delivered` without a proof reference.
+
+### Change
+- Supported statuses are limited to values already used in the existing backend/UI: pending, assigned, picked_up, in_transit, delivered and failed.
+- The transition graph preserves the existing “failed, driver will retry” behavior through an admin reassignment: pending → assigned/failed; assigned → picked_up/failed; picked_up → in_transit/failed; in_transit → delivered/failed; failed → assigned; delivered is terminal.
+- Only admins can assign/reassign drivers; non-admin state changes require the currently assigned driver identity bound to the Firebase UID. Sender identity alone does not authorize operational state changes.
+- Marking delivered requires a non-empty proof reference. The state update and notification are created in the same Firestore transaction to avoid a stale read-before-write transition.
+- Added transition helper unit tests and source-contract regression tests.
+
+### Policy boundary
+This graph uses states already present in source/client code, but still needs project-owner review because it formalizes previously unconstrained transitions. Proof is a non-empty stored reference, not validation of the underlying image's authenticity/content.
