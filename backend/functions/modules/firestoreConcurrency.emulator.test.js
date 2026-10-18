@@ -14,6 +14,7 @@ const emulatorTest = enabled ? test : test.skip;
 const { createTrotroRouter } = require('./trotroRoutesV2');
 const { createTransitBookingRouter } = require('./transitBookingRoutes');
 const { createJourneyBookingRouter } = require('./journeyBookingRoutes');
+const { createEventBookingHandler } = require('./eventBookingGuard');
 
 if (enabled) {
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -37,6 +38,18 @@ function testAuth(req, res, next) {
   req.isAdmin = false;
   return next();
 }
+async function resolveEventBookingUserRef(userId, req) {
+  for (const collectionName of ['users', 'drivers', 'owners']) {
+    const ref = db.collection(collectionName).doc(clean(userId));
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data();
+    if (req.isAdmin !== true && data?.firebaseUid !== req.uid && ref.id !== req.uid) return null;
+    return { ref, col: collectionName, data };
+  }
+  return null;
+}
+
 async function startApp() {
   const app = express();
   app.use(express.json());
@@ -44,6 +57,15 @@ async function startApp() {
   app.use('/trotro', createTrotroRouter(deps));
   app.use('/transit', createTransitBookingRouter(deps));
   app.use('/journeys', createJourneyBookingRouter(deps));
+  app.post('/events/book', testAuth, createEventBookingHandler({
+    resolveUserRef: resolveEventBookingUserRef,
+    db,
+    admin,
+    fail,
+    ok,
+    sanitize: clean,
+    scheduledPricing: { car: { flag: 3.50, perKm: 4.50 } },
+  }));
   const server = await new Promise((resolve, reject) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
     instance.once('error', reject);
@@ -189,3 +211,68 @@ emulatorTest('Firestore Emulator: Journey booking rejects a route explicitly mar
   const bookings = await db.collection('transitBookings').where('tripId', '==', tripId).get();
   assert.equal(bookings.size, 0);
 });
+
+emulatorTest('Firestore Emulator: invalid event deposit percent causes no event or wallet mutation', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_invalid');
+  const uid = unique('event_auth_invalid');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 100, pending: 0 } });
+
+  const response = await postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName: 'Invalid deposit test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+    depositPercent: -0.5,
+  });
+
+  assert.equal(response.status, 400, JSON.stringify(response));
+  assert.match(response.body.error || '', /depositPercent must be greater than 0/);
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  assert.equal(eventSnap.size, 0);
+  assert.equal(userSnap.data().wallet.available, 100);
+  assert.equal(userSnap.data().wallet.pending, 0);
+});
+
+emulatorTest('Firestore Emulator: concurrent event bookings cannot overdraw the wallet or split event/wallet state', { timeout: 60000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_concurrent');
+  const uid = unique('event_auth_concurrent');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 30, pending: 0 } });
+
+  const request = (eventName) => postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName,
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+  });
+  const results = await Promise.all([request('Concurrent event A'), request('Concurrent event B')]);
+
+  assert.equal(results.filter((result) => result.status === 200).length, 1, JSON.stringify(results));
+  assert.equal(results.filter((result) => result.status === 400).length, 1, JSON.stringify(results));
+
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  const wallet = userSnap.data().wallet;
+  assert.equal(eventSnap.size, 1);
+  assert.ok(Math.abs(wallet.available - 8.7) < 0.001, JSON.stringify(wallet));
+  assert.ok(Math.abs(wallet.pending - 21.3) < 0.001, JSON.stringify(wallet));
+  assert.ok(wallet.available >= 0, JSON.stringify(wallet));
+  assert.equal(eventSnap.docs[0].data().deposit, 21.3);
+});
+
