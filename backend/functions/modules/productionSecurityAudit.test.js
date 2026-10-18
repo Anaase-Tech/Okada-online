@@ -464,3 +464,26 @@ test('delivery state machine rejects unsupported, skipped, reversed and terminal
   assert.equal(validateDeliveryTransition('unknown','failed'), 'invalid-transition');
   assert.equal(validateDeliveryTransition('picked_up','cancelled'), 'unsupported-status');
 });
+
+
+test('rental booking creates service and debits the authoritative wallet inside one transaction helper', () => {
+  const start = index.indexOf("app.post('/maas/rental/book'");
+  const end = index.indexOf("app.post('/maas/rental/:id/log-km'", start);
+  assert.ok(start >= 0 && end > start, 'rental booking route boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /createWalletBackedBooking\(\{/);
+  assert.match(route, /serviceRef: ref/);
+  assert.match(route, /amount: totalPrice/);
+  assert.doesNotMatch(route, /db\.collection\('rentals'\)\.add|u\.data\?\.wallet\?\.available/);
+});
+
+test('subscription booking creates service, debits wallet, updates active pointer and notification atomically', () => {
+  const start = index.indexOf("app.post('/maas/subscription/create'");
+  const end = index.indexOf("app.get('/maas/subscription/status/:userId'", start);
+  assert.ok(start >= 0 && end > start, 'subscription route boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /createWalletBackedBooking\(\{/);
+  assert.match(route, /activeSubscriptionId:ref\.id/);
+  assert.match(route, /additionalWrites: notificationWrites/);
+  assert.doesNotMatch(route, /db\.collection\('subscriptions'\)\.add|u\.data\?\.wallet\?\.available|await u\.ref\.update/);
+});

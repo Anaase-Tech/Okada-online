@@ -393,3 +393,18 @@ The previous `PUT /delivery/:id/status` accepted arbitrary `status` values and a
 
 ### Policy boundary
 This graph uses states already present in source/client code, but still needs project-owner review because it formalizes previously unconstrained transitions. Proof is a non-empty stored reference, not validation of the underlying image's authenticity/content.
+
+
+## Repair batch — atomic wallet-backed rental and subscription creation (2026-10-18; CI pending)
+
+### Finding
+Rental and subscription creation previously read a stale wallet snapshot, created a service record, and then debited the wallet in a separate write. A failed second write could leave a free service; concurrent bookings could spend a stale balance.
+
+### Change
+- Added a shared `createWalletBackedBooking` transaction helper. It reads the current user wallet and target service document in the transaction, validates a finite non-negative available balance, checks sufficient funds, creates the service record, applies the wallet debit and any subscription pointer/notification writes atomically.
+- Routed rental and subscription creation through the shared helper. Invalid rental start dates/pricing are rejected before writes.
+- Added helper unit tests, static regression assertions and Firestore Emulator tests for concurrent spending, insufficient funds, and same-service-reference retries.
+- The event booking transaction from P0-C remains in place.
+
+### Limits
+The API still generates a fresh service ID for each new request; cross-request idempotency would require a request-key/client contract. Rental kilometre logging still has a separate wallet/service atomicity concern because out-of-wallet overage policy is not defined; it remains open for review.
