@@ -402,3 +402,20 @@ test('P0-C: event booking validates deposit and atomically records booking with 
   assert.match(route, /wallet\.pending.*increment\(deposit\)/s);
   assert.doesNotMatch(route, /event_rides'\)\.add|await u\.ref\.update/);
 });
+
+
+test('rental kilometre logging authorizes the rental owner before any mutation', () => {
+  const start = index.indexOf("app.post('/maas/rental/:id/log-km'");
+  const end = index.indexOf("app.get('/maas/rental/active/:userId'", start);
+  assert.ok(start >= 0 && end > start, 'rental km route boundaries exist');
+  const route = index.slice(start, end);
+  const authorize = route.indexOf('resolveUserRef(r.userId, req)');
+  const firstMutation = Math.min(
+    ...[route.indexOf('await ref.update('), route.indexOf("'wallet.available':admin.firestore.FieldValue.increment(")]
+      .filter(i => i >= 0)
+  );
+  assert.ok(authorize >= 0 && firstMutation > authorize, 'owner authorization must precede rental/wallet writes');
+  assert.match(route, /if \(!u && req\.isAdmin !== true\) return fail\(res,403,'Rental access denied'\)/);
+  assert.match(route, /Number\.isFinite\(kmDelta\) \|\| kmDelta <= 0/);
+  assert.match(route, /Rental kilometre or charge data is invalid/);
+});

@@ -786,3 +786,18 @@ No code changes, production deployment, live Firebase operation, or real-money t
 - Manual savings funding and Pay Later repayment are intentionally unavailable until a verified provider or authorized/auditable reconciliation path is specified.
 - Event booking retries are not yet assigned an idempotency contract.
 - P0-D and P1/P2 findings remain open pending further repair batches.
+
+
+## Repair batch — rental kilometre authorization ordering (2026-10-18; CI pending)
+
+### Finding and evidence
+The source at base commit 239c2700bbfa8a582ef7abbd47b5b9b81dd658d9 confirms `POST /maas/rental/:id/log-km` updated rental kilometre/charge fields before resolving the rental owner. An authenticated non-owner could therefore cause a mutation and then receive HTTP 403.
+
+### Change
+- Validate the requested kilometre delta as finite and positive.
+- Resolve/authorize the rental owner (or admin) before any rental or wallet mutation.
+- Reject corrupt stored kilometre/charge operands before writes.
+- Preserve the current pricing formula and wallet charging behavior; the separate atomic wallet/rental-write concern remains in the later atomic-wallet batch.
+
+### Regression coverage and limits
+A source-contract regression check asserts authorization is ordered before any rental/wallet mutation and invalid deltas are rejected. No live Firestore test or production operation was performed. CI is pending for this stacked review branch.
