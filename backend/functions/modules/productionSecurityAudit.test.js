@@ -419,3 +419,20 @@ test('rental kilometre logging authorizes the rental owner before any mutation',
   assert.match(route, /Number\.isFinite\(kmDelta\) \|\| kmDelta <= 0/);
   assert.match(route, /Rental kilometre or charge data is invalid/);
 });
+
+
+test('delivery tracking references are random and public tracking returns an explicit minimal DTO', () => {
+  const requestStart = index.indexOf("app.post('/delivery/request'");
+  const requestEnd = index.indexOf("app.put('/delivery/:id/status'", requestStart);
+  const requestRoute = index.slice(requestStart, requestEnd);
+  assert.ok(requestStart >= 0 && requestEnd > requestStart, 'delivery request route boundaries exist');
+  assert.match(requestRoute, /createDeliveryTrackingCode\(\)/);
+  assert.doesNotMatch(requestRoute, /Date\.now\(\)\.toString\(36\)/);
+
+  const trackStart = index.indexOf("app.get('/delivery/track/:code'");
+  const trackEnd = index.indexOf("app.get('/delivery/history/:userId'", trackStart);
+  const trackRoute = index.slice(trackStart, trackEnd);
+  assert.ok(trackStart >= 0 && trackEnd > trackStart, 'delivery tracking route boundaries exist');
+  assert.match(trackRoute, /toPublicDeliveryTrackingDto\(snap\.docs\[0\]\.data\(\)\)/);
+  assert.doesNotMatch(trackRoute, /\\.\\.\\.snap\\.docs\[0\]\.data\(\)|id:snap\.docs\[0\]\.id/);
+});
