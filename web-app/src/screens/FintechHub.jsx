@@ -470,7 +470,7 @@ export function FintechHub({user,role,dark}) {
                   Repayment temporarily unavailable
                 </p>
                 <p style={{marginTop:4,fontSize:12,color:dark?"#d6d3d1":"#78350f"}}>
-                  This app cannot yet verify a repayment or an authorized reconciliation. Your debt will not be cleared and your Pay Later limit will not be restored from this screen. Keep this balance outstanding until an approved repayment flow is available.
+                  Pay Later repayment is not currently supported in the app because no verified collection or authorized reconciliation flow is connected. Your outstanding balance remains due and your Pay Later limit will not be restored until an approved repayment process is implemented.
                 </p>
               </div>
             </div>

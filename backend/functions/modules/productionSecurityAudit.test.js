@@ -371,6 +371,8 @@ test('Pay Later repayment route delegates to a fail-closed handler with no finan
   assert.match(guard, /Pay Later repayment is temporarily unavailable/);
   assert.match(ui, /Repayment temporarily unavailable/);
   assert.doesNotMatch(ui, /Pay Later cleared ✅ Limit restored/);
+  assert.doesNotMatch(ui, /from this screen/);
+  assert.ok(ui.includes('Pay Later repayment is not currently supported in the app'));
   assert.doesNotMatch(ui, /Auto-charged to your MoMo on due date/);
 });
 test('Pay Later origination is blocked before any new debt writes while idempotent deferred retries remain supported', () => {
