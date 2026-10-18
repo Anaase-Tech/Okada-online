@@ -408,3 +408,17 @@ Rental and subscription creation previously read a stale wallet snapshot, create
 
 ### Limits
 The API still generates a fresh service ID for each new request; cross-request idempotency would require a request-key/client contract. Rental kilometre logging still has a separate wallet/service atomicity concern because out-of-wallet overage policy is not defined; it remains open for review.
+
+
+## Repair batch — shared-trip capacity concurrency (2026-10-18; CI pending)
+
+### Finding
+The legacy shared-trip join route read status/passengers/capacity before writing a replacement passenger array outside a transaction. Concurrent joins could each see one seat and overfill the trip; repeated calls were also only guarded by a stale read.
+
+### Change
+- Moved the authoritative trip read, capacity check, duplicate-passenger check and passenger/status update into a Firestore transaction.
+- Reject malformed capacity/passenger state rather than guessing capacity.
+- Added unit/source-contract checks and Firestore Emulator tests covering eight concurrent joins to a three-person trip and duplicate joins by the same user.
+
+### Limits
+This fixes the capacity race at the service/helper layer; end-to-end auth and route behavior is still verified by source-contract tests rather than an HTTP emulator test for the legacy monolith route.

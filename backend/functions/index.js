@@ -28,6 +28,7 @@ const crypto    = require('crypto');
 const { createDeliveryTrackingCode, toPublicDeliveryTrackingDto } = require('./modules/deliveryPrivacy');
 const { validateDeliveryTransition } = require('./modules/deliveryState');
 const { createWalletBackedBooking } = require('./modules/walletBookingTransactions');
+const { joinSharedTripTransaction } = require('./modules/sharedTripTransactions');
 const { parseEventDepositPercent } = require('./modules/financialIntegrity');
 const {
   settleSuccessfulJourneyPayment,
@@ -3129,20 +3130,19 @@ app.post('/maas/share/create', requireAuth, async (req,res) => {
 
 app.post('/maas/share/:shareId/join', requireAuth, async (req,res) => {
   try {
-    const ref  = db.collection('shared_trips').doc(req.params.shareId);
-    const snap = await ref.get();
-    if(!snap.exists) return fail(res,404,'Shared trip not found');
-    const t = snap.data();
-    if(t.status!=='open')              return fail(res,400,'Trip is no longer open');
+    const tripRef = db.collection('shared_trips').doc(sanitize(req.params.shareId));
     const joiner = await resolveAuthenticatedProfile(req);
     if (!joiner) return fail(res,403,'User profile not found');
-    const joinerId = joiner.ref.id;
-    if(t.passengers.includes(joinerId)) return fail(res,400,'Already joined');
-    if(t.passengers.length>=t.maxPassengers)   return fail(res,400,'Trip is full');
-    const newP   = [...t.passengers, joinerId];
-    const status = newP.length>=t.maxPassengers?'full':'open';
-    await ref.update({ passengers:newP, status });
-    return ok(res, { shareId:req.params.shareId, passengers:newP.length, status, farePerPerson:t.farePerPerson });
+
+    const result = await joinSharedTripTransaction({ db, tripRef, joinerId:joiner.ref.id });
+    if (result.blocked === 'not-found') return fail(res,404,'Shared trip not found');
+    if (result.blocked === 'invalid-trip-data') return fail(res,409,'Shared trip capacity data is invalid');
+    if (result.blocked === 'already-joined') return fail(res,400,'Already joined');
+    if (result.blocked === 'full') return fail(res,400,'Trip is full');
+    if (result.blocked === 'not-open') return fail(res,400,'Trip is no longer open');
+
+    return ok(res, { shareId:req.params.shareId, passengers:result.passengers,
+      status:result.status, farePerPerson:result.farePerPerson });
   } catch(e) { return fail(res,500,e.message); }
 });
 
