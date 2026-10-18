@@ -583,6 +583,12 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                 <span className={`font-semibold ${t.text}`}>Total</span>
                 <span style={{fontWeight:900,color:"#16a34a",fontSize:22}}>GH₵{fare.total}</span>
               </div>
+              {user.payLater?.eligible&&(
+                <div role="status" style={{background:dark?"#422006":"#fffbeb",borderRadius:12,padding:12,marginBottom:12,border:"1px solid #f59e0b"}}>
+                  <p style={{fontWeight:700,fontSize:13,color:dark?"#fcd34d":"#92400e",marginBottom:4}}>⏸️ New Pay Later bookings are temporarily paused</p>
+                  <p className={`text-xs ${t.sub}`}>Choose another available payment method. Existing deferred rides and outstanding balances are unchanged. This notice does not mean repayment is available.</p>
+                </div>
+              )}
               <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
                 {[
                   {id:"mtn",      label:"MTN Mobile Money",   icon:"📱",color:"#ffcc00",text:"#000"},
@@ -590,9 +596,9 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
                   {id:"airtel",   label:"AirtelTigo Money",    icon:"💳",color:"#ef4444",text:"#fff"},
                   {id:"card",     label:"Credit / Debit Card", icon:"🏦",color:"#2563eb",text:"#fff"},
                   {id:"cash",     label:"Pay with Cash",       icon:"💵",color:"#16a34a",text:"#fff"},
-                  ...(user.payLater?.eligible?[{id:"paylater",label:"Pay Later (7 days)",icon:"⏳",color:"#7c3aed",text:"#fff"}]:[]),
+                  ...(user.payLater?.eligible?[{id:"paylater",label:"Pay Later temporarily paused",icon:"⏸️",color:"#7c3aed",text:"#fff",disabled:true}]:[]),
                 ].map(m=>(
-                  <button key={m.id} onClick={()=>setPayMethod(m.id)}
+                  <button key={m.id} disabled={!!m.disabled} onClick={()=>{if(!m.disabled)setPayMethod(m.id);}} aria-disabled={m.disabled?"true":undefined}
                     style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:14,border:`2px solid ${payMethod===m.id?m.color:"#e5e7eb"}`,background:payMethod===m.id?m.color+"18":"transparent",textAlign:"left"}}>
                     <span style={{fontSize:22}}>{m.icon}</span>
                     <span className={`font-bold text-sm ${t.text}`}>{m.label}</span>
@@ -624,12 +630,13 @@ export function PassengerApp({user,onLogout,dark,setDark}) {
               )}
               {payMethod==="paylater"&&(
                 <div style={{background:dark?"#1e1b4b":"#eef2ff",borderRadius:12,padding:12,marginBottom:12}}>
-                  <p style={{fontWeight:700,fontSize:13,color:"#7c3aed",marginBottom:4}}>⏳ Pay Later · 7 day defer</p>
-                  <p className={`text-xs ${t.sub}`}>GH₵{fare.total} reserved against your Pay Later limit. Due in 7 days; automatic MoMo charging is not enabled by this flow.</p>
+                  <p style={{fontWeight:700,fontSize:13,color:"#7c3aed",marginBottom:4}}>⏸️ New Pay Later bookings are temporarily paused</p>
+                  <p className={`text-xs ${t.sub}`}>Choose another available payment method. Existing deferred rides and outstanding balances are unchanged. This does not mean repayment is available.</p>
                 </div>
               )}
-              <button disabled={!payMethod || !rideId || payStatus==="processing"} onClick={async()=>{
+              <button disabled={!payMethod || payMethod==="paylater" || !rideId || payStatus==="processing"} onClick={async()=>{
                 if(!payMethod) return;
+                if(payMethod==="paylater"){ toast$("New Pay Later requests are temporarily unavailable. Choose another payment method.", "error"); return; }
                 if(!rideId){toast$("No active server ride was found. Book the ride again before paying.","error");return;}
                 if(payMethod==="cash"){
                   setPayStatus("processing");
