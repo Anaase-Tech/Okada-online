@@ -29,7 +29,7 @@ function createTransitHubRouter({ express, db, admin, requireAuth, ok, fail, san
 
   router.get('/corridors', (_req, res) => ok(res, { corridors: CORRIDORS }));
 
-  router.post('/journeys/plan', requireAuth, async (req, res) => {
+  router.post('/hub/journeys/plan', requireAuth, async (req, res) => {
     try {
       const plan = buildJourneyPlan({
         origin: req.body?.origin,
