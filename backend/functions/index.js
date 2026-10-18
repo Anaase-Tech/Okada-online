@@ -25,6 +25,7 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
+const { validateRequestedPhoneAgainstClaim, normalizePhoneIdentity } = require('./modules/authPhoneIdentity');
 const { createDeliveryTrackingCode, toPublicDeliveryTrackingDto } = require('./modules/deliveryPrivacy');
 const { validateDeliveryTransition } = require('./modules/deliveryState');
 const { createWalletBackedBooking } = require('./modules/walletBookingTransactions');
@@ -132,6 +133,7 @@ async function requireAuth(req, res, next) {
   try {
     const decoded = await auth.verifyIdToken(token);
     req.uid = decoded.uid;
+    req.phoneNumber = typeof decoded.phone_number === 'string' ? decoded.phone_number : null;
     const adminSnap = await db.collection('admins').doc(req.uid).get();
     req.isAdmin = adminSnap.exists;
     next();
@@ -294,6 +296,16 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
     if (!phone || !role || !name)
       return fail(res, 400, 'phone, role, name required');
 
+    // The verified Firebase ID token is authoritative. Never use a caller-supplied
+    // UID or an unverified body phone to bind an account identity.
+    const phoneIdentity = validateRequestedPhoneAgainstClaim(phone, req.phoneNumber);
+    if (!phoneIdentity.ok) {
+      if (phoneIdentity.reason === 'invalid-request-phone') {
+        return fail(res,400,'phone must be a valid E.164 number');
+      }
+      return fail(res,403,'The phone number must match the verified Firebase Phone Auth identity');
+    }
+
     const validRoles = ['passenger','driver','owner','admin'];
     if (!validRoles.includes(sanitize(role)))
       return fail(res, 400, 'Invalid role');
@@ -319,17 +331,27 @@ app.post('/auth/create-profile', authLimit, requireAuth, async (req, res) => {
     const uidMatch = await db.collection(col)
       .where('firebaseUid', '==', req.uid).limit(1).get();
     if (!uidMatch.empty) {
-      return ok(res, { user: { id: uidMatch.docs[0].id, ...uidMatch.docs[0].data() }, isNew: false });
+      const existingProfile = uidMatch.docs[0].data() || {};
+      if (normalizePhoneIdentity(existingProfile.phone) !== phoneIdentity.phone) {
+        return fail(res,409,'This Firebase identity is already linked to a different phone number. Account recovery or a verified phone-change flow is required; no profile was changed.');
+      }
+      return ok(res, { user: { id: uidMatch.docs[0].id, ...existingProfile }, isNew: false });
     }
     const existing = await db.collection(col)
-      .where('phone', '==', sanitize(phone)).get();
+      .where('phone', '==', phoneIdentity.phone).limit(1).get();
     if (!existing.empty) {
-      return ok(res, { user: { id: existing.docs[0].id, ...existing.docs[0].data() }, isNew: false });
+      const existingProfile = existing.docs[0].data() || {};
+      // A matching phone is not sufficient authorization to take over a profile.
+      // Legacy records without UID binding require a controlled recovery/rebind.
+      if (existingProfile.firebaseUid !== req.uid) {
+        return fail(res,409,'A profile already uses this phone but is not bound to this Firebase identity. Account recovery is required; no profile was changed.');
+      }
+      return fail(res,409,'Existing profile identity metadata is inconsistent. Account recovery is required; no profile was changed.');
     }
 
     const base = {
       firebaseUid: req.uid,
-      phone:       sanitize(phone),
+      phone:       phoneIdentity.phone,
       name:        sanitize(name),
       role,
       rating:      5.0,
