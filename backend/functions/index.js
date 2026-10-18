@@ -27,6 +27,7 @@ const axios     = require('axios');
 const crypto    = require('crypto');
 const { createDeliveryTrackingCode, toPublicDeliveryTrackingDto } = require('./modules/deliveryPrivacy');
 const { validateDeliveryTransition } = require('./modules/deliveryState');
+const { createWalletBackedBooking } = require('./modules/walletBookingTransactions');
 const { parseEventDepositPercent } = require('./modules/financialIntegrity');
 const {
   settleSuccessfulJourneyPayment,
@@ -2927,31 +2928,50 @@ app.get('/maas/schedule/today/:userId', requireAuth, async (req,res) => {
 
 app.post('/maas/subscription/create', requireAuth, async (req,res) => {
   try {
-    const { userId, driverId, tier, autoRenew } = req.body;
+    const { userId, driverId, tier, autoRenew } = req.body || {};
     if(!userId||!tier||!MAAS_PRICING.subscription[tier])
       return fail(res,400,'Invalid tier');
-    const plan   = MAAS_PRICING.subscription[tier];
+    const plan = MAAS_PRICING.subscription[tier];
+    if (!Number.isFinite(Number(plan.monthly)) || Number(plan.monthly) <= 0) {
+      return fail(res,500,'Subscription pricing configuration is invalid');
+    }
     const expiry = new Date(); expiry.setMonth(expiry.getMonth()+1);
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
-    const wallet = u.data?.wallet?.available||0;
-    if(wallet < plan.monthly) return fail(res,400,`Insufficient balance. Need GH₵${plan.monthly}`);
-    const ref = await db.collection('subscriptions').add({
-      userId:sanitize(userId), driverId:sanitize(driverId||''),
-      tier, monthlyFee:plan.monthly, ridesIncluded:plan.ridesIncluded,
-      ridesUsed:0, pricePerExtra:plan.pricePerExtra,
-      status:'active', autoRenew:!!autoRenew,
-      startedAt:admin.firestore.FieldValue.serverTimestamp(), expiresAt:expiry, renewsAt:expiry,
+
+    const ref = db.collection('subscriptions').doc();
+    const notificationWrites = driverId ? [{
+      ref: db.collection('notifications').doc(),
+      data: {
+        userId:sanitize(driverId), type:'subscription_assigned',
+        message:`A passenger chose you as their personal driver (${tier} plan).`,
+        createdAt:admin.firestore.FieldValue.serverTimestamp(),
+      },
+    }] : [];
+    const result = await createWalletBackedBooking({
+      db,
+      fieldValue: admin.firestore.FieldValue,
+      userRef: u.ref,
+      serviceRef: ref,
+      amount: Number(plan.monthly),
+      serviceData: {
+        userId:sanitize(userId), driverId:sanitize(driverId||''),
+        tier, monthlyFee:plan.monthly, ridesIncluded:plan.ridesIncluded,
+        ridesUsed:0, pricePerExtra:plan.pricePerExtra,
+        status:'active', autoRenew:!!autoRenew,
+        startedAt:admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt:expiry, renewsAt:expiry,
+      },
+      userUpdates: { activeSubscriptionId:ref.id },
+      additionalWrites: notificationWrites,
     });
-    await u.ref.update({
-      'wallet.available':admin.firestore.FieldValue.increment(-plan.monthly),
-      activeSubscriptionId:ref.id,
-    });
-    if(driverId) await db.collection('notifications').add({
-      userId:sanitize(driverId), type:'subscription_assigned',
-      message:`A passenger chose you as their personal driver (${tier} plan).`,
-      createdAt:admin.firestore.FieldValue.serverTimestamp(),
-    });
+
+    if (result.blocked === 'user-not-found') return fail(res,404,'User not found');
+    if (result.blocked === 'invalid-amount') return fail(res,500,'Subscription charge amount is invalid');
+    if (result.blocked === 'invalid-wallet') return fail(res,409,'Wallet balance is invalid; subscription was not created');
+    if (result.blocked === 'insufficient-funds') return fail(res,400,`Insufficient balance. Need GH₵${plan.monthly}`);
+    if (result.blocked === 'already-exists') return fail(res,409,'Subscription record already exists; no additional charge was made');
+
     return ok(res, { subscriptionId:ref.id, tier, expiresAt:expiry, ridesIncluded:plan.ridesIncluded });
   } catch(e) { return fail(res,500,e.message); }
 });
@@ -2975,32 +2995,56 @@ app.get('/maas/rental/pricing', async (_req,res) => {
 
 app.post('/maas/rental/book', requireAuth, async (req,res) => {
   try {
-    const { userId, vehicleType, period, startDate, driverIncluded, pickupAddress } = req.body;
-    const plan = MAAS_PRICING.rental[sanitize(vehicleType)]?.[sanitize(period)];
+    const { userId, vehicleType, period, startDate, driverIncluded, pickupAddress } = req.body || {};
+    const vehicleTypeKey = sanitize(vehicleType);
+    const periodKey = sanitize(period);
+    const plan = MAAS_PRICING.rental[vehicleTypeKey]?.[periodKey];
     if(!plan) return fail(res,400,'Invalid vehicle type or rental period');
-    const driverFee  = driverIncluded ? Math.round(plan.price*0.20) : 0;
-    const totalPrice = plan.price + driverFee;
+    const durationDays = {daily:1,weekly:7,monthly:30,annual:365}[periodKey];
+    if (!Number.isFinite(Number(plan.price)) || Number(plan.price) <= 0 ||
+        !Number.isFinite(Number(plan.includedKm)) || Number(plan.includedKm) < 0 ||
+        !Number.isFinite(Number(plan.extraPerKm)) || Number(plan.extraPerKm) < 0 ||
+        !Number.isFinite(durationDays)) {
+      return fail(res,500,'Rental pricing configuration is invalid');
+    }
+
+    const driverFee = driverIncluded ? Math.round(plan.price*0.20) : 0;
+    const totalPrice = Number(plan.price) + driverFee;
+    if (!Number.isFinite(totalPrice) || totalPrice <= 0) return fail(res,500,'Rental charge is invalid');
+
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res,404,'User not found');
-    if((u.data?.wallet?.available||0) < totalPrice)
-      return fail(res,400,`Insufficient balance. Need GH₵${totalPrice}`);
     const start = new Date(startDate);
-    const end   = new Date(start);
-    end.setDate(end.getDate() + {daily:1,weekly:7,monthly:30,annual:365}[period]);
-    const ref = await db.collection('rentals').add({
-      userId:sanitize(userId), vehicleType:sanitize(vehicleType), period:sanitize(period),
-      basePrice:plan.price, driverFee, totalPrice,
-      includedKm:plan.includedKm, kmUsed:0, extraKmCharges:0, extraPerKm:plan.extraPerKm,
-      driverIncluded:!!driverIncluded, assignedDriverId:null, assignedVehicleId:null,
-      pickupAddress:sanitize(pickupAddress||''),
-      status:'pending', startDate:start, endDate:end,
-      brandNote:'New Kantanka / EV vehicle — luxury, comfort, safety',
-      createdAt:admin.firestore.FieldValue.serverTimestamp(),
+    if (!Number.isFinite(start.getTime())) return fail(res,400,'Invalid rental start date');
+    const end = new Date(start);
+    end.setDate(end.getDate() + durationDays);
+
+    const ref = db.collection('rentals').doc();
+    const result = await createWalletBackedBooking({
+      db,
+      fieldValue: admin.firestore.FieldValue,
+      userRef: u.ref,
+      serviceRef: ref,
+      amount: totalPrice,
+      serviceData: {
+        userId:u.ref.id, vehicleType:vehicleTypeKey, period:periodKey,
+        basePrice:plan.price, driverFee, totalPrice,
+        includedKm:plan.includedKm, kmUsed:0, extraKmCharges:0, extraPerKm:plan.extraPerKm,
+        driverIncluded:!!driverIncluded, assignedDriverId:null, assignedVehicleId:null,
+        pickupAddress:sanitize(pickupAddress||''),
+        status:'pending', startDate:start, endDate:end,
+        brandNote:'New Kantanka / EV vehicle — luxury, comfort, safety',
+        createdAt:admin.firestore.FieldValue.serverTimestamp(),
+      },
     });
-    await u.ref.update({
-      'wallet.available':admin.firestore.FieldValue.increment(-totalPrice),
-    });
-    return ok(res, { rentalId:ref.id, vehicleType, period, totalPrice,
+
+    if (result.blocked === 'user-not-found') return fail(res,404,'User not found');
+    if (result.blocked === 'invalid-amount') return fail(res,500,'Rental charge is invalid');
+    if (result.blocked === 'invalid-wallet') return fail(res,409,'Wallet balance is invalid; rental was not created');
+    if (result.blocked === 'insufficient-funds') return fail(res,400,`Insufficient balance. Need GH₵${totalPrice}`);
+    if (result.blocked === 'already-exists') return fail(res,409,'Rental record already exists; no additional charge was made');
+
+    return ok(res, { rentalId:ref.id, vehicleType:vehicleTypeKey, period:periodKey, totalPrice,
       includedKm:plan.includedKm, startDate:start, endDate:end, status:'pending',
       message:'Rental confirmed. Vehicle assigned within 2 hours.' });
   } catch(e) { return fail(res,500,e.message); }

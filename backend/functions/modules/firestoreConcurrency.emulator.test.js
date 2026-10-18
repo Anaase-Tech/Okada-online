@@ -14,6 +14,7 @@ const emulatorTest = enabled ? test : test.skip;
 const { createTrotroRouter } = require('./trotroRoutesV2');
 const { createTransitBookingRouter } = require('./transitBookingRoutes');
 const { createJourneyBookingRouter } = require('./journeyBookingRoutes');
+const { createWalletBackedBooking } = require('./walletBookingTransactions');
 
 if (enabled) {
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -188,4 +189,76 @@ emulatorTest('Firestore Emulator: Journey booking rejects a route explicitly mar
   assert.match(response.body.error || '', /route is inactive/i);
   const bookings = await db.collection('transitBookings').where('tripId', '==', tripId).get();
   assert.equal(bookings.size, 0);
+});
+
+
+emulatorTest('Firestore Emulator: concurrent wallet-backed bookings cannot overspend or orphan service records', { timeout: 60000 }, async (t) => {
+  const userRef = db.collection('users').doc(unique('wallet_user'));
+  await userRef.set({ wallet: { available: 100, pending: 0 } });
+  const serviceCollection = db.collection('emulatorWalletBookings');
+  const results = await Promise.all(Array.from({ length: 4 }, (_, index) => {
+    const serviceRef = serviceCollection.doc(unique('wallet_service_' + index));
+    return createWalletBackedBooking({
+      db,
+      fieldValue: admin.firestore.FieldValue,
+      userRef,
+      serviceRef,
+      serviceData: { userId: userRef.id, amount: 40, attempt: index },
+      amount: 40,
+    });
+  }));
+
+  const successful = results.filter(result => result.created);
+  const insufficient = results.filter(result => result.blocked === 'insufficient-funds');
+  const userSnap = await userRef.get();
+  const services = await serviceCollection.where('userId', '==', userRef.id).get();
+  const totalCharged = services.docs.reduce((sum, doc) => sum + Number(doc.data().amount || 0), 0);
+  assert.equal(successful.length, 2, JSON.stringify(results));
+  assert.equal(insufficient.length, 2, JSON.stringify(results));
+  assert.equal(Number(userSnap.data().wallet.available), 20);
+  assert.equal(services.size, 2);
+  assert.equal(totalCharged, 80);
+});
+
+emulatorTest('Firestore Emulator: insufficient funds leave wallet and service record unchanged', { timeout: 30000 }, async (t) => {
+  const userRef = db.collection('users').doc(unique('wallet_low'));
+  const serviceRef = db.collection('emulatorWalletBookings').doc(unique('wallet_low_service'));
+  await userRef.set({ wallet: { available: 5, pending: 0 } });
+
+  const result = await createWalletBackedBooking({
+    db,
+    fieldValue: admin.firestore.FieldValue,
+    userRef,
+    serviceRef,
+    serviceData: { userId: userRef.id, amount: 30 },
+    amount: 30,
+  });
+  const userSnap = await userRef.get();
+  const serviceSnap = await serviceRef.get();
+  assert.equal(result.blocked, 'insufficient-funds');
+  assert.equal(Number(userSnap.data().wallet.available), 5);
+  assert.equal(serviceSnap.exists, false);
+});
+
+emulatorTest('Firestore Emulator: repeated use of the same service reference charges only once', { timeout: 30000 }, async (t) => {
+  const userRef = db.collection('users').doc(unique('wallet_retry'));
+  const serviceRef = db.collection('emulatorWalletBookings').doc(unique('wallet_retry_service'));
+  await userRef.set({ wallet: { available: 100, pending: 0 } });
+  const input = {
+    db,
+    fieldValue: admin.firestore.FieldValue,
+    userRef,
+    serviceRef,
+    serviceData: { userId: userRef.id, amount: 30 },
+    amount: 30,
+  };
+
+  const first = await createWalletBackedBooking(input);
+  const second = await createWalletBackedBooking(input);
+  const userSnap = await userRef.get();
+  const serviceSnap = await serviceRef.get();
+  assert.equal(first.created, true);
+  assert.equal(second.blocked, 'already-exists');
+  assert.equal(Number(userSnap.data().wallet.available), 70);
+  assert.equal(serviceSnap.exists, true);
 });
