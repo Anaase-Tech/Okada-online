@@ -356,3 +356,45 @@ test('Journey multi-leg transaction reads trip, route, and booking state before 
   assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
 });
+
+ 
+test('MaaS event booking validates deposit percentages and atomically applies event and wallet writes', () => {
+  const start = index.indexOf("app.post('/maas/events/book'");
+  const end = index.indexOf("// ── G. DELIVERY", start);
+  assert.ok(start >= 0 && end > start, 'event booking route boundaries exist');
+
+  const route = index.slice(start, end);
+  const guard = read('backend/functions/modules/eventBookingGuard.js');
+  assert.match(route, /createEventBookingHandler\(/);
+  assert.doesNotMatch(route, /event_rides'\)\.add|u\.ref\.update/);
+  assert.match(guard, /parseEventDepositPercent\(depositPercent\)/);
+  assert.match(guard, /db\.runTransaction\(async \(tx\)/);
+  assert.match(guard, /const userSnap = await tx\.get\(user\.ref\)/);
+  assert.match(guard, /tx\.create\(eventRef, eventRecord\)/);
+  assert.match(guard, /tx\.update\(user\.ref/);
+  assert.match(guard, /FieldValue\.increment\(-deposit\)/);
+  assert.match(guard, /FieldValue\.increment\(deposit\)/);
+
+  const readIndex = guard.indexOf('const userSnap = await tx.get(user.ref)');
+  const firstWrite = Math.min(guard.indexOf('tx.create(eventRef'), guard.indexOf('tx.update(user.ref'));
+  assert.ok(readIndex >= 0 && firstWrite > readIndex, 'transaction reads balance before first write');
+  assert.equal(guard.slice(firstWrite).includes('await tx.get('), false, 'no transaction reads occur after the first write');
+});
+
+
+test('MaaS event booking revalidates current profile ownership before any event or wallet write', () => {
+  const eventGuard = read('backend/functions/modules/eventBookingGuard.js');
+  const readIndex = eventGuard.indexOf('const userSnap = await tx.get(user.ref)');
+  const ownershipIndex = eventGuard.indexOf('freshProfile.firebaseUid !== req.uid', readIndex);
+  const eventWriteIndex = eventGuard.indexOf('tx.create(eventRef, eventRecord)', readIndex);
+  const walletWriteIndex = eventGuard.indexOf('tx.update(user.ref', readIndex);
+  assert.ok(readIndex >= 0, 'fresh profile snapshot is read inside transaction');
+  assert.ok(ownershipIndex > readIndex, 'ownership is checked against the transactional snapshot');
+  assert.ok(eventWriteIndex > ownershipIndex, 'event write follows ownership check');
+  assert.ok(walletWriteIndex > ownershipIndex, 'wallet write follows ownership check');
+  assert.ok(eventGuard.includes("result?.blocked === 'not-authorized'"));
+  assert.ok(eventGuard.includes("fail(res, 403, 'Profile ownership changed"));
+  assert.ok(eventGuard.includes("Object.prototype.hasOwnProperty.call(walletBalances, 'pending')"));
+  assert.ok(eventGuard.includes("const pendingMissing = !hasPending;"));
+  assert.ok(eventGuard.includes("storedWallet === null || typeof storedWallet !== 'object'"));
+});

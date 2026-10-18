@@ -14,6 +14,7 @@ const emulatorTest = enabled ? test : test.skip;
 const { createTrotroRouter } = require('./trotroRoutesV2');
 const { createTransitBookingRouter } = require('./transitBookingRoutes');
 const { createJourneyBookingRouter } = require('./journeyBookingRoutes');
+const { createEventBookingHandler } = require('./eventBookingGuard');
 
 if (enabled) {
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -37,6 +38,18 @@ function testAuth(req, res, next) {
   req.isAdmin = false;
   return next();
 }
+async function resolveEventBookingUserRef(userId, req) {
+  for (const collectionName of ['users', 'drivers', 'owners']) {
+    const ref = db.collection(collectionName).doc(clean(userId));
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data();
+    if (req.isAdmin !== true && data?.firebaseUid !== req.uid && ref.id !== req.uid) return null;
+    return { ref, col: collectionName, data };
+  }
+  return null;
+}
+
 async function startApp() {
   const app = express();
   app.use(express.json());
@@ -44,6 +57,15 @@ async function startApp() {
   app.use('/trotro', createTrotroRouter(deps));
   app.use('/transit', createTransitBookingRouter(deps));
   app.use('/journeys', createJourneyBookingRouter(deps));
+  app.post('/events/book', testAuth, createEventBookingHandler({
+    resolveUserRef: resolveEventBookingUserRef,
+    db,
+    admin,
+    fail,
+    ok,
+    sanitize: clean,
+    scheduledPricing: { car: { flag: 3.50, perKm: 4.50 } },
+  }));
   const server = await new Promise((resolve, reject) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
     instance.once('error', reject);
@@ -188,4 +210,180 @@ emulatorTest('Firestore Emulator: Journey booking rejects a route explicitly mar
   assert.match(response.body.error || '', /route is inactive/i);
   const bookings = await db.collection('transitBookings').where('tripId', '==', tripId).get();
   assert.equal(bookings.size, 0);
+});
+
+emulatorTest('Firestore Emulator: invalid event deposit percent causes no event or wallet mutation', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_invalid');
+  const uid = unique('event_auth_invalid');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 100, pending: 0 } });
+
+  const response = await postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName: 'Invalid deposit test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+    depositPercent: -0.5,
+  });
+
+  assert.equal(response.status, 400, JSON.stringify(response));
+  assert.match(response.body.error || '', /depositPercent must be greater than 0/);
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  assert.equal(eventSnap.size, 0);
+  assert.equal(userSnap.data().wallet.available, 100);
+  assert.equal(userSnap.data().wallet.pending, 0);
+});
+
+emulatorTest('Firestore Emulator: concurrent event bookings cannot overdraw the wallet or split event/wallet state', { timeout: 60000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_concurrent');
+  const uid = unique('event_auth_concurrent');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 30, pending: 0 } });
+
+  const request = (eventName) => postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName,
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+  });
+  const results = await Promise.all([request('Concurrent event A'), request('Concurrent event B')]);
+
+  assert.equal(results.filter((result) => result.status === 200).length, 1, JSON.stringify(results));
+  assert.equal(results.filter((result) => result.status === 400).length, 1, JSON.stringify(results));
+
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  const wallet = userSnap.data().wallet;
+  assert.equal(eventSnap.size, 1);
+  assert.ok(Math.abs(wallet.available - 8.7) < 0.001, JSON.stringify(wallet));
+  assert.ok(Math.abs(wallet.pending - 21.3) < 0.001, JSON.stringify(wallet));
+  assert.ok(wallet.available >= 0, JSON.stringify(wallet));
+  assert.equal(eventSnap.docs[0].data().deposit, 21.3);
+});
+
+
+
+emulatorTest('Firestore Emulator: malformed wallet balance types are rejected without financial mutation', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const availableStringUserId = unique('event_user_string_available');
+  const pendingStringUserId = unique('event_user_string_pending');
+  const pendingNullUserId = unique('event_user_null_pending');
+  const walletNullUserId = unique('event_user_null_wallet');
+  const availableStringUid = unique('event_auth_string_available');
+  const pendingStringUid = unique('event_auth_string_pending');
+  const pendingNullUid = unique('event_auth_null_pending');
+  const walletNullUid = unique('event_auth_null_wallet');
+  const availableStringRef = db.collection('users').doc(availableStringUserId);
+  const pendingStringRef = db.collection('users').doc(pendingStringUserId);
+  const pendingNullRef = db.collection('users').doc(pendingNullUserId);
+  const walletNullRef = db.collection('users').doc(walletNullUserId);
+
+  await Promise.all([
+    availableStringRef.set({
+      firebaseUid: availableStringUid,
+      wallet: { available: '100', pending: 0 },
+    }),
+    pendingStringRef.set({
+      firebaseUid: pendingStringUid,
+      wallet: { available: 100, pending: '21.3' },
+    }),
+    pendingNullRef.set({
+      firebaseUid: pendingNullUid,
+      wallet: { available: 100, pending: null },
+    }),
+    walletNullRef.set({
+      firebaseUid: walletNullUid,
+      wallet: null,
+    }),
+  ]);
+
+  const body = {
+    eventName: 'Malformed wallet test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+    depositPercent: 0.5,
+  };
+  const responses = await Promise.all([
+    postJson(app.baseUrl, '/events/book', availableStringUid, {
+      ...body, userId: availableStringUserId,
+    }),
+    postJson(app.baseUrl, '/events/book', pendingStringUid, {
+      ...body, userId: pendingStringUserId,
+    }),
+    postJson(app.baseUrl, '/events/book', pendingNullUid, {
+      ...body, userId: pendingNullUserId,
+    }),
+    postJson(app.baseUrl, '/events/book', walletNullUid, {
+      ...body, userId: walletNullUserId,
+    }),
+  ]);
+
+  for (const response of responses) {
+    assert.equal(response.status, 409, JSON.stringify(response));
+    assert.match(response.body.error || '', /Wallet balance is invalid/);
+  }
+
+  const [availableStringSnap, pendingStringSnap, pendingNullSnap, walletNullSnap, events] = await Promise.all([
+    availableStringRef.get(),
+    pendingStringRef.get(),
+    pendingNullRef.get(),
+    walletNullRef.get(),
+    db.collection('event_rides').where('eventName', '==', 'Malformed wallet test').get(),
+  ]);
+  assert.equal(availableStringSnap.data().wallet.available, '100');
+  assert.equal(availableStringSnap.data().wallet.pending, 0);
+  assert.equal(pendingStringSnap.data().wallet.available, 100);
+  assert.equal(pendingStringSnap.data().wallet.pending, '21.3');
+  assert.equal(pendingNullSnap.data().wallet.available, 100);
+  assert.equal(pendingNullSnap.data().wallet.pending, null);
+  assert.equal(walletNullSnap.data().wallet, null);
+  assert.equal(events.size, 0);
+});
+
+emulatorTest('Firestore Emulator: absent pending wallet field initializes safely during atomic booking', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_missing_pending');
+  const uid = unique('event_auth_missing_pending');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 100 } });
+
+  const response = await postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName: 'Missing pending field test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+  });
+  assert.equal(response.status, 200, JSON.stringify(response));
+  assert.equal(response.body.deposit, 21.3);
+
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  assert.equal(userSnap.data().wallet.available, 78.7);
+  assert.ok(Math.abs(userSnap.data().wallet.pending - 21.3) < 0.001);
+  assert.equal(eventSnap.size, 1);
 });

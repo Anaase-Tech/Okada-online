@@ -713,7 +713,7 @@ This is a successful configured CI run, not a production-readiness certificate. 
 |---|---|---|---|
 | P0 | Savings deposit credits savings without verified incoming funds | Verified in backend/functions/index.js, POST /fintech/savings/deposit (around line 1853) | Arbitrary self-credit of ledger balance and inflated savings history |
 | P0 | Pay Later repayment marks debt paid without collecting funds | Verified in POST /fintech/pay-later/repay (around line 2283); no wallet/provider settlement in the route | Receivables can be erased while no money was collected |
-| P0 | Negative event deposit can credit wallet | Verified in POST /maas/events/book (around line 3209): caller depositPercent is not bounded and wallet update increments -deposit | A negative deposit can increase wallet.available while confirming an event |
+| P0 | Negative event deposit can credit wallet | Verified at base HEAD `bb2a558c41f77ea71c6d08dcd6242719c62c04d7`. Draft PR #17 adds finite fractional-deposit validation and atomically couples the event record with fresh wallet-balance validation and wallet.available/wallet.pending movements; see `docs/OKADA_V4_P0_C_EVENT_DEPOSIT_REPAIR.md`. | The base remains exposed until PR #17 is independently reviewed and merged. No Firebase production deployment or real-money test. |
 | P0 release blocker | Expo app appears not build-ready and operates as a simulation | Verified source/package mismatch; no Expo build is in CI. mobile-app/App.js uses web DOM/Tailwind and undeclared lucide-react, random location/fare, synthetic trips and local earnings | Native build may fail; even if packaged, displayed activity does not represent real dispatch, GPS or settlement |
 | P1 | Rental km endpoint mutates before checking owner | Verified in POST /maas/rental/:id/log-km (around line 3082) | Authenticated non-owner can alter another rental before the handler returns 403 |
 | P1 | Delivery status is not a server-enforced state machine | Verified in PUT /delivery/:id/status (around line 3271) | Sender can mark delivery delivered or submit unsupported transitions without driver proof |
@@ -750,3 +750,18 @@ The browser PWA driver path uses actual geolocation.watchPosition and writes coo
 **Gate 6 — Release evidence:** Add rules/auth emulator tests, MaaS wallet race tests, shared-seat concurrency tests, unauthorized delivery/rental mutation tests, duplicate/late payment settlement tests, Paystack sandbox/webhook replay tests, and authenticated browser/native smoke tests. Record exactly what ran, then require review and passing statuses on a protected branch.
 
 No code changes, production deployment, live Firebase operation, or real-money transaction was performed as part of this report update. Claude's Slack membership is not verified: the most recent channel member check showed only @africanaihq, and a workspace user search did not identify a Claude member.
+
+## P0-C event deposit follow-up — 2026-10-18
+
+PR #17's atomic event-deposit repair received an additional data-shape hardening commit `5851e58e499504253c4e4600b60b45d239c50b0b`. Firestore's increment transform overwrites a present non-numeric field with its operand; therefore, numeric-string balance coercion was unsafe even inside an otherwise atomic transaction. The booking handler now rejects present `wallet.available` or `wallet.pending` values that are non-numeric, non-finite, or negative with HTTP 409 before all writes.
+
+Verified by GitHub Actions run #130 ([39118164527](https://github.com/Anaase-Tech/Okada-online/actions/runs/39118164527)): backend **112 total / 105 passed / 0 failed / 7 skipped**, Firestore Emulator **7/7 passed**, and web production build compiled. The new emulator case proves malformed available and pending values remain unchanged and no event is created. This test job uses test authentication; it does not exercise deployed ID-token middleware, live settlement, or production Firebase. PR #17 remains a draft, unmerged, and undeployed. P0-D remains separate.
+
+
+## P0-C independent review closeout — 2026-10-18
+
+The latest P0-C code was independently inspected rather than accepted solely on green CI. Review discovered and fixed a transactional profile-ownership time-of-check/time-of-use gap, a positive percentage that rounds to a zero deposit, and explicit null wallet balances being treated as absent. The current guard rechecks the profile UID against the fresh transactional snapshot, rejects rounded-to-zero deposits before profile lookup, and rejects present null/non-numeric/non-finite/negative balance values. Only truly absent `wallet.pending` can be initialized.
+
+Run #133 ([ID 39120234899](https://github.com/Anaase-Tech/Okada-online/actions/runs/39120234899)) passed on code commit `a0a89329d79d875e0d1f8d6d8bcd7dcec9d5a6bd`: backend **121 total / 113 pass / 0 fail / 8 skipped**, Firestore Emulator **8/8 passed**, and the web production build compiled. The eight ordinary-job skips are emulator-only tests, all of which passed in the dedicated emulator job. This establishes the narrow P0-C repair, not production readiness.
+
+Residual: event booking still has no stable idempotency key/durable ledger, so repeated POST submissions can represent separate debited event bookings. Do not infer retry identity without a product/API contract. No Firebase production deployment, production database mutation, live provider call, secret modification, or real-money transaction occurred. PR #17 remains open/draft/unmerged; P0-D remains separate.

@@ -252,6 +252,8 @@ Slack #okada-v4-team was checked by the actual member list and had only @african
 
 3. **P0 — Negative event deposit can credit the caller's wallet.** POST /maas/events/book computes the deposit from caller-supplied depositPercent without enforcing a positive percentage or a maximum. The wallet check compares the available balance to that value; the subsequent wallet mutation increments available by the negative of the deposit. A negative percentage therefore passes the balance check and increases wallet.available while creating an event record. Validate the percentage server-side (and ideally accept a fixed enumerated plan) before any write, and execute the event/wallet ledger mutation atomically.
 
+**P0-C repair status (2026-10-18; draft PR #17, not merged):** The isolated branch `codex/okada-v4-p0-c-event-deposit-atomicity` adds server-side validation for the fractional percentage and moves the fresh balance check, event creation, and wallet movements into one Firestore transaction. The base branch still contains the original defect until PR #17 is reviewed and merged. See `docs/OKADA_V4_P0_C_EVENT_DEPOSIT_REPAIR.md` for the exact CI evidence and remaining limits.
+
 4. **P1 — Rental kilometre logging writes before checking access.** POST /maas/rental/:id/log-km reads a rental, calculates kmUsed/extraKmCharges, and calls ref.update before resolving/authorizing the rental owner. For a known rental ID, a different authenticated user can cause the rental data to be mutated and only then receive a 403. It also lacks robust finite/non-negative kilometre validation and a single transaction across kilometre state and fee debit. Authorize before mutation, validate input, and transactionally compute/update both the rental and its ledger effect.
 
 5. **P1 — Delivery tracking can disclose personal information.** GET /delivery/track/:code is unauthenticated and returns the complete delivery document, which contains recipient name/phone, route addresses, sender and driver identifiers, fare, and operational fields. The tracking code is created from Date.now converted to base 36 rather than an unpredictable secret, making enumeration more practical. Return a minimal tracking DTO only, use a cryptographically unpredictable code, rate-limit attempts, and avoid disclosing personal data before authenticated/authorized access.
@@ -311,3 +313,16 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## P0-C event deposit follow-up — 2026-10-18
+
+PR #17's atomic event-deposit repair received an additional data-shape hardening commit `5851e58e499504253c4e4600b60b45d239c50b0b`. Firestore's increment transform overwrites a present non-numeric field with its operand; therefore, numeric-string balance coercion was unsafe even inside an otherwise atomic transaction. The booking handler now rejects present `wallet.available` or `wallet.pending` values that are non-numeric, non-finite, or negative with HTTP 409 before all writes.
+
+Verified by GitHub Actions run #130 ([39118164527](https://github.com/Anaase-Tech/Okada-online/actions/runs/39118164527)): backend **112 total / 105 passed / 0 failed / 7 skipped**, Firestore Emulator **7/7 passed**, and web production build compiled. The new emulator case proves malformed available and pending values remain unchanged and no event is created. This test job uses test authentication; it does not exercise deployed ID-token middleware, live settlement, or production Firebase. PR #17 remains a draft, unmerged, and undeployed. P0-D remains separate.
+
+
+## P0-C independent review verdict — 2026-10-18
+
+Independent source review did not treat the green build alone as approval. It found and required three additional safeguards: recheck profile ownership using the fresh transaction snapshot, reject a positive fraction whose rounded deposit is zero, and distinguish absent wallet fields from explicit null/malformed stored values. The fixes are on the existing P0-C branch in commits `c7c282cc31d0c12c1fea77421355d744de81b164` and `a0a89329d79d875e0d1f8d6d8bcd7dcec9d5a6bd`.
+
+Run #133 ([39120234899](https://github.com/Anaase-Tech/Okada-online/actions/runs/39120234899)) passed backend tests (**121 total / 113 pass / 0 fail / 8 emulator-only skips**), Firestore Emulator (**8/8 pass**), and web production build. The emulator tests also prove truly absent `wallet.pending` can be initialized while explicit null and other malformed stored state are left unchanged with no event created. The scoped P0-C repair therefore passes independent source/test review; this is not production certification and does not resolve the separate missing request-idempotency/durable-ledger release risks. PR #17 remains a draft and unmerged. P0-D is separate.
