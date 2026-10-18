@@ -3006,18 +3006,41 @@ app.post('/maas/rental/book', requireAuth, async (req,res) => {
 
 app.post('/maas/rental/:id/log-km', requireAuth, async (req,res) => {
   try {
-    const ref   = db.collection('rentals').doc(req.params.id);
-    const snap  = await ref.get();
-    if(!snap.exists) return fail(res,404,'Rental not found');
-    const r         = snap.data();
-    const newKmUsed = (r.kmUsed||0) + parseFloat(req.body.km);
-    const extraKm   = Math.max(0, newKmUsed - r.includedKm);
-    const extraCharge = +(extraKm * r.extraPerKm).toFixed(2);
+    const kmDelta = Number(req.body?.km);
+    if (!Number.isFinite(kmDelta) || kmDelta <= 0) {
+      return fail(res,400,'km must be a finite positive number');
+    }
+
+    const ref = db.collection('rentals').doc(sanitize(req.params.id));
+    const snap = await ref.get();
+    if (!snap.exists) return fail(res,404,'Rental not found');
+    const r = snap.data();
+
+    // Authorization is deliberately completed before changing rental or wallet data.
+    const u = await resolveUserRef(r.userId, req);
+    if (!u && req.isAdmin !== true) return fail(res,403,'Rental access denied');
+
+    const currentKmUsed = Number(r.kmUsed ?? 0);
+    const includedKm = Number(r.includedKm);
+    const extraPerKm = Number(r.extraPerKm);
+    const previousCharge = Number(r.extraKmCharges ?? 0);
+    if (!Number.isFinite(currentKmUsed) || currentKmUsed < 0 ||
+        !Number.isFinite(includedKm) || includedKm < 0 ||
+        !Number.isFinite(extraPerKm) || extraPerKm < 0 ||
+        !Number.isFinite(previousCharge) || previousCharge < 0) {
+      return fail(res,409,'Rental kilometre or charge data is invalid; no changes were made');
+    }
+
+    const newKmUsed = currentKmUsed + kmDelta;
+    const extraKm = Math.max(0, newKmUsed - includedKm);
+    const extraCharge = +(extraKm * extraPerKm).toFixed(2);
+    if (!Number.isFinite(newKmUsed) || !Number.isFinite(extraCharge)) {
+      return fail(res,400,'Calculated rental kilometre charge is invalid');
+    }
+
     await ref.update({ kmUsed:newKmUsed, extraKmCharges:extraCharge });
-    if(extraCharge > (r.extraKmCharges||0)) {
-      const newCharge = extraCharge - (r.extraKmCharges||0);
-      const u = await resolveUserRef(r.userId, req);
-      if (!u && !req.isAdmin) return fail(res,403,'Rental access denied');
+    if (extraCharge > previousCharge) {
+      const newCharge = +(extraCharge - previousCharge).toFixed(2);
       if (u) await u.ref.update({
         'wallet.available':admin.firestore.FieldValue.increment(-newCharge),
       });
