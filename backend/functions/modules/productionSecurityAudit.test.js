@@ -641,3 +641,31 @@ test('ride fan-out notifications include the verified UID target while preservin
   assert.match(route, /driverUid: driverData\.firebaseUid \|\| d\.id/);
   assert.match(route, /driverId: d\.id, driverUid:/);
 });
+
+
+test('web AuthScreen never bypasses Firebase Phone Auth or manufactures a demo session', () => {
+  const source = read('web-app/src/screens/AuthScreen.jsx');
+  assert.match(source, /signInWithPhoneNumber\(auth,cleaned,window\.recaptchaVerifier\)/);
+  assert.match(source, /No active Firebase phone challenge exists/);
+  assert.match(source, /api\.token=fbToken/);
+  assert.doesNotMatch(source, /demo_token|Demo mode  real SMS failed/);
+  assert.doesNotMatch(source, /onLogin\(\{[\s\S]{0,200}demo_token/);
+});
+
+test('DriverPickups never substitutes invented passenger records or claims fake navigation/calls', () => {
+  const source = read('web-app/src/screens/DriverPickups.jsx');
+  assert.doesNotMatch(source, /const DEMO\s*=/);
+  assert.doesNotMatch(source, /setPickups\(DEMO\)/);
+  assert.match(source, /pickupsError/);
+  assert.match(source, /assignment status is not yet available/);
+  assert.match(source, /no route was started/);
+  assert.match(source, /no call was placed/);
+});
+
+test('DriveToOwn application failure does not activate a simulated financing plan in production', () => {
+  const source = read('web-app/src/screens/DriveToOwn.jsx');
+  assert.match(source, /No financing plan was activated/);
+  assert.match(source, /import\.meta\.env\.DEV && appStatus==='active'/);
+  assert.match(source, /appStatus==='applied'/);
+  assert.doesNotMatch(source, /catch\(e\)\{\s*setAppStatus\('active'\)/);
+});

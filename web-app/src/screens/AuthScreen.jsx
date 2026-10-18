@@ -25,121 +25,60 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
   const [otpAttempts,setOtpAttempts]=useState(0);
 
   const sendOtp=async()=>{
-    const cleaned = phone.replace(/\s/g,'');
-    if(!/^\+233[0-9]{9}$/.test(cleaned)){
-      toast$("Enter valid Ghana number: +233XXXXXXXXX","error");return;
-    }
+    const cleaned=phone.replace(/\s/g,'');
+    if(!/^\+233[0-9]{9}$/.test(cleaned)){toast$("Enter valid Ghana number: +233XXXXXXXXX","error");return;}
     if(role==="driver"&&!owner){toast$("Enter your owner's code","error");return;}
     if(otpCooldown>0){toast$("Wait "+otpCooldown+"s before retrying","error");return;}
     if(otpAttempts>=3){toast$("Too many attempts. Please wait 10 minutes.","error");return;}
-    setLoading(true);
-    setOtpAttempts(a=>a+1);
+    setLoading(true); setOtpAttempts(a=>a+1);
     try{
-      if(!window.recaptchaVerifier){
-        window.recaptchaVerifier=new RecaptchaVerifier(auth,"recaptcha-container",{size:"invisible"});
-      }
+      if(!window.recaptchaVerifier) window.recaptchaVerifier=new RecaptchaVerifier(auth,"recaptcha-container",{size:"invisible"});
       const conf=await signInWithPhoneNumber(auth,cleaned,window.recaptchaVerifier);
-      window._otpConfirm=conf;
-      setStep("otp");toast$("OTP sent! Check your SMS 📱");
-      let cd=60; setOtpCooldown(cd);
-      const iv=setInterval(()=>{cd--;setOtpCooldown(cd);if(cd<=0)clearInterval(iv);},1000);
+      window._otpConfirm=conf; setOtp(""); setStep("otp"); toast$("OTP sent! Check your SMS 📱");
+      let cd=60; setOtpCooldown(cd); const iv=setInterval(()=>{cd--;setOtpCooldown(cd);if(cd<=0)clearInterval(iv);},1000);
     }catch(e){
       console.error("OTP error:",e);
-      if(e.code==='auth/invalid-phone-number'){toast$("Invalid phone number","error");}
-      else if(e.code==='auth/too-many-requests'){toast$("Too many OTP requests. Try in 10 minutes.","error");}
-      else{
-        // Reset the reCAPTCHA widget so the next attempt gets a fresh one
-        // instead of retrying against one that already failed.
-        try{ window.recaptchaVerifier?.clear?.(); }catch(_){}
-        window.recaptchaVerifier=null;
-        setStep("otp");
-        toast$(`Demo mode  real SMS failed (${e.code||e.message||"unknown error"})`,"error");
-      }
-    }
-    setLoading(false);
+      try{window.recaptchaVerifier?.clear?.();}catch(_){}
+      window.recaptchaVerifier=null; window._otpConfirm=null;
+      const message=e.code==='auth/invalid-phone-number'?"Invalid phone number":
+        e.code==='auth/too-many-requests'?"Too many OTP requests. Try again later.":
+        "Could not send an OTP ("+(e.code||e.message||"unknown error")+"). Sign-in has not started.";
+      toast$(message,"error");
+    }finally{setLoading(false);}
   };
 
   const verifyOtp=async()=>{
-    if(otp.length<4){toast$("Enter OTP","error");return;}
+    if(otp.length!==6){toast$("Enter the 6-digit verification code","error");return;}
+    if(!window._otpConfirm){toast$("No active Firebase phone challenge exists. Request a new OTP first.","error");setStep("phone");return;}
     setLoading(true);
-
-    // Step 1: confirm the code with Firebase, if we have a real challenge.
     let fbToken=null;
-    if(window._otpConfirm){
-      try{
-        const result=await window._otpConfirm.confirm(otp);
-        fbToken=await result.user.getIdToken();
-        window._otpConfirm=null;
-      }catch(e){
-        console.error("OTP confirm failed:",e);
-        toast$(e.code==='auth/invalid-verification-code'?"Wrong code — try again":"Verification failed — try again","error");
-        setLoading(false);
-        return; // don't fall through to demo on a wrong/expired code
-      }
+    try{
+      const result=await window._otpConfirm.confirm(otp);
+      fbToken=await result.user.getIdToken(); window._otpConfirm=null;
+    }catch(e){
+      console.error("OTP confirm failed:",e);
+      toast$(e.code==='auth/invalid-verification-code'?"Wrong code — try again":"Verification failed — request a new OTP and try again","error");
+      setLoading(false);return;
     }
-
-    // Step 2: set the token BEFORE the authenticated backend call — this
-    // was the bug: the request used to fire with no Authorization header,
-    // the backend correctly rejected it with 401, and a real, successfully
-    // verified login was silently swapped for a fake demo one.
-    api.token = fbToken || "demo_token";
-
+    if(!fbToken){toast$("Firebase did not return a verified session. You are not signed in.","error");setLoading(false);return;}
+    api.token=fbToken;
     try{
       const res=await api.req("POST","/auth/create-profile",{phone,role,name:name||"User",ownerCode:role==="driver"?owner:undefined});
-
-      // Submit any KYC data collected during onboarding now that a real
-      // account and user id exist. KycVerify only ever collects this
-      // locally — it never had a real userId to submit against before
-      // this account was created, so this is the first point it can
-      // actually reach the backend.
+      if(!res?.user?.id) throw new Error("Profile service returned an incomplete user record");
       if(kycData){
         try{
-          if(kycData.type==="passport") await api.verifyPassport(res.user.id, role, kycData.docNumber);
-          else await api.verifyGhanaCard(res.user.id, role, kycData.docNumber);
+          if(kycData.type==="passport") await api.verifyPassport(res.user.id,role,kycData.docNumber);
+          else await api.verifyGhanaCard(res.user.id,role,kycData.docNumber);
         }catch(kycErr){
-          console.warn("KYC submission failed:", kycErr);
+          console.warn("KYC submission failed:",kycErr);
           toast$(`Signed in, but KYC submission failed (${kycErr.message}) — resubmit from your profile`,"error");
         }
       }
-
       onLogin(res.user,api.token,role);
-      setLoading(false);
-      return;
     }catch(err){
-      console.error("Profile error:",err);
-      if(fbToken){
-        // Real phone verification succeeded but the backend call failed —
-        // surface the real reason instead of quietly downgrading to demo.
-        toast$(`Verified, but couldn't reach the server (${err.message||"unknown error"})`,"error");
-        setLoading(false);
-        return;
-      }
-    }
-
-    // True demo mode is allowed only for non-admin roles. Admin access
-    // must always be backed by a real Firebase identity; never manufacture an
-    // admin session in the UI when Firebase authentication is unavailable.
-    if (role === "admin") {
-      toast$("Admin login requires successful Firebase phone verification.", "error");
-      setLoading(false);
-      return;
-    }
-
-    // True demo mode — reached only when there was never a real Firebase
-    // challenge to confirm in the first place (e.g. OTP send itself failed).
-    onLogin({
-      id:"demo_"+Date.now(),name:name||"Demo User",phone,role,rating:5.0,totalRides:0,
-      profilePhoto:role==="driver"?"👨🏿‍🦱":role==="owner"?"🏢":role==="passenger"?"👤":"⚙️",
-      ownerCode:role==="driver"?owner:role==="owner"?"OWN"+Math.random().toString(36).substr(2,6).toUpperCase():null,
-      isVerified:true,kycData,
-      ghanaCard:kycData?.type==="ghana"?kycData.docNumber:null,
-      passport:kycData?.type==="passport"?kycData:null,
-      isInternational:kycData?.type==="passport",
-      wallet:{available:0,pending:0},
-      savings:{balance:0},loan:null,insurance:null,
-      payLater:role==="passenger"?{limit:50,used:0,eligible:true}:null,
-    },"demo_token",role);
-    setLoading(false);
+      console.error("Profile error:",err); api.token=null;
+      toast$(`Phone verified, but profile sign-in failed (${err.message||"unknown error"}). No session was created in Okada Online.`,"error");
+    }finally{setLoading(false);}
   };
 
   if(step==="kyc"){
@@ -158,7 +97,7 @@ export function AuthScreen({onLogin,dark,apiStatus="checking"}) {
         <p style={{marginTop:6,color:"#bbf7d0",fontSize:14,fontWeight:600}}>Eastern Region Ghana · Complete Transport & Fintech Ecosystem 🇬🇭</p>
         <div style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:6,background:"rgba(0,0,0,0.2)",borderRadius:999,padding:"4px 12px"}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:apiStatus==="ok"?"#4ade80":apiStatus==="demo"?"#60a5fa":"#facc15"}}/>
-          <span style={{fontSize:11,fontWeight:700,color:"#fff"}}>{apiStatus==="ok"?"Connected ✅":apiStatus==="demo"?"Demo Mode":"Connecting…"}</span>
+          <span style={{fontSize:11,fontWeight:700,color:"#fff"}}>{apiStatus==="ok"?"Connected ✅":apiStatus==="demo"?"Backend unavailable":"Connecting…"}</span>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:8,marginTop:14}}>
           {["Owner 50%","Driver 25%","Fuel 5%","Maint. 5%","Savings 8%","Loans","Insurance","Pay Later","🌍 Intl"].map(f=>(
