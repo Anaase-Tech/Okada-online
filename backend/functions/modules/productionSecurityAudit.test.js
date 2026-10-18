@@ -214,7 +214,7 @@ test('Map distinguishes missing/stale GPS from fresh GPS and reports missing Goo
 test('driver live dispatch is vehicle-scoped, skips declined requests, and distance-filters pending rides', () => {
   const driver = read('web-app/src/screens/DriverApp.jsx');
   assert.ok(driver.includes('where("rideType", "==", driverVehicleType)'));
-  assert.ok(driver.includes('declinedRideIds.has(candidate.id)'));
+  assert.ok(driver.includes('declinedRideIds.has(id)'));
   assert.ok(driver.includes('distanceKm(currentPoint, { lat: pickupLat, lng: pickupLng }) <= 5'));
   assert.ok(driver.includes('(error) => {'));
   const statusRoute = index.slice(index.indexOf("app.put('/drivers/:id/status'"), index.indexOf("app.put('/drivers/:id/location'"));
