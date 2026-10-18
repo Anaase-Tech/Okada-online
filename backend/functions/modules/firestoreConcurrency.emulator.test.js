@@ -15,6 +15,7 @@ const { createTrotroRouter } = require('./trotroRoutesV2');
 const { createTransitBookingRouter } = require('./transitBookingRoutes');
 const { createJourneyBookingRouter } = require('./journeyBookingRoutes');
 const { createWalletBackedBooking } = require('./walletBookingTransactions');
+const { joinSharedTripTransaction } = require('./sharedTripTransactions');
 
 if (enabled) {
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -261,4 +262,40 @@ emulatorTest('Firestore Emulator: repeated use of the same service reference cha
   assert.equal(second.blocked, 'already-exists');
   assert.equal(Number(userSnap.data().wallet.available), 70);
   assert.equal(serviceSnap.exists, true);
+});
+
+
+emulatorTest('Firestore Emulator: concurrent shared-trip joins respect max passenger capacity', { timeout: 60000 }, async (t) => {
+  const tripRef = db.collection('shared_trips').doc(unique('shared_trip_concurrent'));
+  await tripRef.set({
+    creatorId:'creator-user',
+    passengers:['creator-user'],
+    maxPassengers:3,
+    status:'open',
+    farePerPerson:25,
+  });
+  const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+    joinSharedTripTransaction({ db, tripRef, joinerId:'shared-joiner-' + index })
+  ));
+  const joined = results.filter(result => result.joined);
+  const blocked = results.filter(result => result.blocked === 'full');
+  const finalSnap = await tripRef.get();
+  const finalTrip = finalSnap.data();
+  assert.equal(joined.length, 2, JSON.stringify(results));
+  assert.equal(blocked.length, 6, JSON.stringify(results));
+  assert.equal(finalTrip.passengers.length, 3);
+  assert.equal(new Set(finalTrip.passengers).size, 3);
+  assert.equal(finalTrip.status, 'full');
+});
+
+emulatorTest('Firestore Emulator: repeated shared-trip join by same user is not duplicated', { timeout: 30000 }, async (t) => {
+  const tripRef = db.collection('shared_trips').doc(unique('shared_trip_retry'));
+  await tripRef.set({ passengers:['creator-user'], maxPassengers:4, status:'open', farePerPerson:15 });
+  const first = await joinSharedTripTransaction({ db, tripRef, joinerId:'same-joiner' });
+  const second = await joinSharedTripTransaction({ db, tripRef, joinerId:'same-joiner' });
+  const finalSnap = await tripRef.get();
+  const passengers = finalSnap.data().passengers;
+  assert.equal(first.joined, true);
+  assert.equal(second.blocked, 'already-joined');
+  assert.equal(passengers.filter(id => id === 'same-joiner').length, 1);
 });

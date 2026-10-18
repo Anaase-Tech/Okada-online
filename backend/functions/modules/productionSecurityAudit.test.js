@@ -487,3 +487,13 @@ test('subscription booking creates service, debits wallet, updates active pointe
   assert.match(route, /additionalWrites: notificationWrites/);
   assert.doesNotMatch(route, /db\.collection\('subscriptions'\)\.add|u\.data\?\.wallet\?\.available|await u\.ref\.update/);
 });
+
+
+test('shared-trip join uses a transaction to enforce current capacity and reject duplicate passengers', () => {
+  const start = index.indexOf("app.post('/maas/share/:shareId/join'");
+  const end = index.indexOf('// ── E. CORPORATE', start);
+  assert.ok(start >= 0 && end > start, 'shared-trip join route boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /joinSharedTripTransaction\(\{ db, tripRef, joinerId:joiner\.ref\.id \}\)/);
+  assert.doesNotMatch(route, /const snap\s*=\s*await ref\.get\(\)|await ref\.update\(\{ passengers:newP/);
+});
