@@ -40,9 +40,11 @@ These were recorded by the 2026-10-18 production audit. They are **not resolved 
 | Branch protection is disabled | Open; branch protection is a repository administration decision and is not changed by this repair commit. |
 
 ## CI and execution record for Batch 1
-- Code edit and regression test: present on repair branch after commit creation.
-- Local `git status`, `npm test`, and emulator run: not executed in this environment (no repository checkout and outbound GitHub DNS access was unavailable).
-- GitHub Actions for the repair commit: pending until a reviewable draft PR/CI trigger is created.
+- Code edit and regression test: present in commit `5bb50e32f73421d8cd88640d82f4284c33ccae5e`.
+- GitHub Actions run #116 (`39109560121`; [run details](https://github.com/Anaase-Tech/Okada-online/actions/runs/39109560121)): backend job **success**. The exact command `npm test` ran in `backend/functions` and reported **87 tests, 83 passed, 0 failed, 4 skipped**. The new savings guard regression test passed as subtest 70.
+- In the same run, Functions package/runtime validation, Firebase deployment-structure JSON checks, the deprecated-config guard self-test, and the forbidden legacy payment/auth artifact check passed.
+- At the time of this update, the frontend production-build job and Firestore Emulator concurrency job were still running; outcomes are pending and are not reported as passes.
+- Local `git status` and local test commands were not executed because no repository checkout was available in this environment (the read-only GitHub clone attempt failed DNS resolution).
 - Firebase deployment, Paystack sandbox round-trip, production operations, and real-money transactions: not performed.
 - Claude independent review: availability is not established in this session; do not represent it as completed.
 
