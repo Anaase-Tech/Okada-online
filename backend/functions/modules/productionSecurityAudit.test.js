@@ -579,3 +579,41 @@ test('mobile app readiness audit guards known Expo-native incompatibilities from
   assert.match(source, /<div\b/);
   assert.match(source, /className=/);
 });
+
+
+test('transit journey planner routes have distinct mounted paths and preserve both response handlers', () => {
+  const express = {
+    Router() {
+      const routes = [];
+      const router = { routes };
+      for (const method of ['get','post','put','patch','delete']) {
+        router[method] = (path, ...handlers) => {
+          routes.push({ method: method.toUpperCase(), path, handlers });
+          return router;
+        };
+      }
+      return router;
+    },
+  };
+  const { createTransitRouter } = require('./transitRoutes');
+  const { createTransitHubRouter } = require('./transitHubRoutes');
+  const dependencies = {
+    express,
+    db: {},
+    admin: { firestore: { FieldValue: { serverTimestamp: () => 'server-timestamp' } } },
+    requireAuth: (_req,_res,next) => next && next(),
+    fail: () => {},
+    ok: () => {},
+    sanitize: (value) => String(value ?? '').trim(),
+  };
+  const transit = createTransitRouter(dependencies);
+  const hub = createTransitHubRouter(dependencies);
+  const transitPlannerRoutes = transit.routes.filter(r => r.method === 'POST' && r.path === '/journeys/plan');
+  const hubPlannerRoutes = hub.routes.filter(r => r.method === 'POST' && r.path === '/hub/journeys/plan');
+  assert.equal(transitPlannerRoutes.length, 1, 'canonical transit planner remains mounted once');
+  assert.equal(hubPlannerRoutes.length, 1, 'hub planner remains available on its own path');
+  assert.equal(hub.routes.filter(r => r.method === 'POST' && r.path === '/journeys/plan').length, 0,
+    'hub route must not shadow canonical planner');
+  const mounted = [...transit.routes, ...hub.routes].map(r => r.method + ' /transit' + r.path);
+  assert.equal(new Set(mounted).size, mounted.length, 'no duplicate same-method mounted paths remain');
+});

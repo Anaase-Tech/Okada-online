@@ -474,3 +474,18 @@ This batch changes UI failure behavior, not authentication or backend booking po
 
 ### Release decision
 **P0-D remains open; mobile app is not production-ready.** The safe, complete repair requires a native React Native UI migration, a valid Firebase Phone Auth client integration against the existing authentication contract, real location and dispatch integration, and removal/replacement of remaining synthetic rides/fare/history/admin behavior while preserving all screens and workflows. Doing that as a partial component/import swap would violate the no-broad-rewrite and no-silent-functionality-removal rules. Stop the mobile work here pending owner approval of a dedicated migration scope and the permitted Firebase Android app configuration. Official Expo SDK 54 compatibility reference: https://docs.expo.dev/versions/v54.0.0/.
+
+
+## Repair batch — distinct canonical transit journey-plan routes (2026-10-18; CI pending)
+
+### Finding and verification
+The base Express integration mounted `transitRoutes` before `transitHubRoutes` under `/transit`, and both registered `POST /journeys/plan`. The first handler returned a `journey` produced by `buildJourney`; the shadowed hub handler used `buildJourneyPlan` and returned the hub-aware `OKADA_TRANSIT_JOURNEY` structure.
+
+### Change
+- Kept `POST /transit/journeys/plan` as the canonical existing transit planner.
+- Exposed the distinct hub planner at `POST /transit/hub/journeys/plan`; it still calls the original `buildJourneyPlan` logic and returns the hub-aware plan, instead of silently deleting or replacing its behavior.
+- Added a route-registration regression test that builds both routers with a registration-only Express double and asserts no duplicate mounted method/path remains.
+- Source search found the current JourneyApp uses `/transit/search` and `/journeys/book`, not either plan endpoint, so no current UI caller needs a path update. Existing potential external consumers of the formerly shadowed hub endpoint should adopt the explicit hub path.
+
+### Limits
+This is a route-registration/contract test, not an authenticated HTTP end-to-end test. No live transit data or Firestore records were used.
