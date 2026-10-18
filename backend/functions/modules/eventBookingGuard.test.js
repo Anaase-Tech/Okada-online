@@ -12,11 +12,21 @@ const {
 function createHarness({
   available = 100,
   pending = 0,
+  availableMissing = false,
+  pendingMissing = false,
+  walletMalformed = false,
   resolveProfile = true,
   profileExistsInTransaction = true,
   resolvedFirebaseUid = 'uid-1',
   transactionFirebaseUid = resolvedFirebaseUid,
 } = {}) {
+  const makeWallet = () => {
+    if (walletMalformed) return null;
+    const wallet = {};
+    if (!availableMissing) wallet.available = available;
+    if (!pendingMissing) wallet.pending = pending;
+    return wallet;
+  };
   const stats = {
     resolveCalls: 0,
     transactionCalls: 0,
@@ -48,7 +58,7 @@ function createHarness({
             exists: profileExistsInTransaction,
             data: () => ({
               firebaseUid: transactionFirebaseUid,
-              wallet: { available, pending },
+              wallet: makeWallet(),
             }),
           };
         },
@@ -77,7 +87,7 @@ function createHarness({
     stats.resolvedUserId = userId;
     stats.resolvedUid = req.uid;
     return resolveProfile
-      ? { ref: userRef, data: { firebaseUid: resolvedFirebaseUid, wallet: { available, pending } } }
+      ? { ref: userRef, data: { firebaseUid: resolvedFirebaseUid, wallet: makeWallet() } }
       : null;
   };
 
@@ -269,6 +279,75 @@ test('ownership changed after profile lookup is rejected before financial writes
   assert.match(res.body.error, /Profile ownership changed/);
   assert.equal(h.stats.transactionCalls, 1);
   assert.equal(h.stats.transactionReads, 1);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+
+test('deposit percentage that rounds to zero is rejected before profile lookup or writes', async () => {
+  const h = createHarness();
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: { ...validBody, depositPercent: 0.00001 } }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /Calculated event deposit is invalid/);
+  assert.equal(h.stats.resolveCalls, 0);
+  assert.equal(h.stats.transactionCalls, 0);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+test('ownership changed after profile lookup is rejected before financial writes', async () => {
+  const h = createHarness({
+    resolvedFirebaseUid: 'uid-1',
+    transactionFirebaseUid: 'uid-2',
+    available: 100,
+    pending: 0,
+  });
+  const res = h.makeResponse();
+  await h.handler({
+    uid: 'uid-1',
+    isAdmin: false,
+    body: { ...validBody, depositPercent: 0.5 },
+  }, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body.error, /Profile ownership changed/);
+  assert.equal(h.stats.transactionCalls, 1);
+  assert.equal(h.stats.transactionReads, 1);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+test('present null pending balance is rejected and is not silently initialized', async () => {
+  const h = createHarness({ available: 100, pending: null });
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: { ...validBody, depositPercent: 0.5 } }, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /Wallet balance is invalid/);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+test('absent pending balance remains supported and is initialized by the atomic increment', async () => {
+  const h = createHarness({ available: 100, pendingMissing: true });
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: validBody }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(h.stats.created.length, 1);
+  assert.equal(h.stats.updated.length, 1);
+  assert.equal(h.stats.updated[0].data['wallet.pending'].incrementBy, 21.3);
+});
+
+test('malformed wallet container is rejected before financial writes', async () => {
+  const h = createHarness({ available: 100, walletMalformed: true });
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: validBody }, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /Wallet balance is invalid/);
   assert.equal(h.stats.created.length, 0);
   assert.equal(h.stats.updated.length, 0);
 });

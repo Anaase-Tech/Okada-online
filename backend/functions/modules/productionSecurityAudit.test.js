@@ -394,4 +394,7 @@ test('MaaS event booking revalidates current profile ownership before any event 
   assert.ok(walletWriteIndex > ownershipIndex, 'wallet write follows ownership check');
   assert.ok(eventGuard.includes("result?.blocked === 'not-authorized'"));
   assert.ok(eventGuard.includes("fail(res, 403, 'Profile ownership changed"));
+  assert.ok(eventGuard.includes("Object.prototype.hasOwnProperty.call(walletBalances, 'pending')"));
+  assert.ok(eventGuard.includes("const pendingMissing = !hasPending;"));
+  assert.ok(eventGuard.includes("storedWallet === null || typeof storedWallet !== 'object'"));
 });

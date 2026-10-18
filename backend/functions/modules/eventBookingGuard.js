@@ -136,16 +136,27 @@ function createEventBookingHandler({
           return { blocked: 'not-authorized' };
         }
 
-        const wallet = freshProfile.wallet || {};
-        const rawAvailable = wallet.available;
-        const rawPending = wallet.pending;
-        const availableMissing = rawAvailable === undefined || rawAvailable === null;
-        const pendingMissing = rawPending === undefined || rawPending === null;
+        const storedWallet = freshProfile.wallet;
+        if (
+          storedWallet !== undefined &&
+          (storedWallet === null || typeof storedWallet !== 'object' || Array.isArray(storedWallet))
+        ) {
+          return { blocked: 'invalid-wallet-balance' };
+        }
 
-        // Firestore FieldValue.increment() replaces a non-numeric field with
-        // the increment operand. Never coerce stored balances such as "100":
-        // doing so could turn an existing string balance into a negative
-        // numeric value during the atomic wallet movement.
+        const walletBalances = storedWallet || {};
+        const hasAvailable = Object.prototype.hasOwnProperty.call(walletBalances, 'available');
+        const hasPending = Object.prototype.hasOwnProperty.call(walletBalances, 'pending');
+        const rawAvailable = walletBalances.available;
+        const rawPending = walletBalances.pending;
+        // Absent fields may be initialized; present null/undefined/non-number
+        // values are malformed and must not be transformed into valid balances.
+        const availableMissing = !hasAvailable;
+        const pendingMissing = !hasPending;
+
+        // Firestore FieldValue.increment() replaces an existing non-numeric
+        // field with the operand. Never coerce present stored balances: reject
+        // malformed values and only initialize fields that are truly absent.
         if (
           (!availableMissing &&
             (typeof rawAvailable !== 'number' || !Number.isFinite(rawAvailable) || rawAvailable < 0)) ||

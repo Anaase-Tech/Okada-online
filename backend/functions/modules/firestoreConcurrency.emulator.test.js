@@ -284,10 +284,16 @@ emulatorTest('Firestore Emulator: malformed wallet balance types are rejected wi
 
   const availableStringUserId = unique('event_user_string_available');
   const pendingStringUserId = unique('event_user_string_pending');
+  const pendingNullUserId = unique('event_user_null_pending');
+  const walletNullUserId = unique('event_user_null_wallet');
   const availableStringUid = unique('event_auth_string_available');
   const pendingStringUid = unique('event_auth_string_pending');
+  const pendingNullUid = unique('event_auth_null_pending');
+  const walletNullUid = unique('event_auth_null_wallet');
   const availableStringRef = db.collection('users').doc(availableStringUserId);
   const pendingStringRef = db.collection('users').doc(pendingStringUserId);
+  const pendingNullRef = db.collection('users').doc(pendingNullUserId);
+  const walletNullRef = db.collection('users').doc(walletNullUserId);
 
   await Promise.all([
     availableStringRef.set({
@@ -297,6 +303,14 @@ emulatorTest('Firestore Emulator: malformed wallet balance types are rejected wi
     pendingStringRef.set({
       firebaseUid: pendingStringUid,
       wallet: { available: 100, pending: '21.3' },
+    }),
+    pendingNullRef.set({
+      firebaseUid: pendingNullUid,
+      wallet: { available: 100, pending: null },
+    }),
+    walletNullRef.set({
+      firebaseUid: walletNullUid,
+      wallet: null,
     }),
   ]);
 
@@ -308,28 +322,68 @@ emulatorTest('Firestore Emulator: malformed wallet balance types are rejected wi
     vehicleType: 'car',
     depositPercent: 0.5,
   };
-  const [availableStringResponse, pendingStringResponse] = await Promise.all([
+  const responses = await Promise.all([
     postJson(app.baseUrl, '/events/book', availableStringUid, {
       ...body, userId: availableStringUserId,
     }),
     postJson(app.baseUrl, '/events/book', pendingStringUid, {
       ...body, userId: pendingStringUserId,
     }),
+    postJson(app.baseUrl, '/events/book', pendingNullUid, {
+      ...body, userId: pendingNullUserId,
+    }),
+    postJson(app.baseUrl, '/events/book', walletNullUid, {
+      ...body, userId: walletNullUserId,
+    }),
   ]);
 
-  assert.equal(availableStringResponse.status, 409, JSON.stringify(availableStringResponse));
-  assert.equal(pendingStringResponse.status, 409, JSON.stringify(pendingStringResponse));
-  assert.match(availableStringResponse.body.error || '', /Wallet balance is invalid/);
-  assert.match(pendingStringResponse.body.error || '', /Wallet balance is invalid/);
+  for (const response of responses) {
+    assert.equal(response.status, 409, JSON.stringify(response));
+    assert.match(response.body.error || '', /Wallet balance is invalid/);
+  }
 
-  const [availableStringSnap, pendingStringSnap, events] = await Promise.all([
+  const [availableStringSnap, pendingStringSnap, pendingNullSnap, walletNullSnap, events] = await Promise.all([
     availableStringRef.get(),
     pendingStringRef.get(),
+    pendingNullRef.get(),
+    walletNullRef.get(),
     db.collection('event_rides').where('eventName', '==', 'Malformed wallet test').get(),
   ]);
   assert.equal(availableStringSnap.data().wallet.available, '100');
   assert.equal(availableStringSnap.data().wallet.pending, 0);
   assert.equal(pendingStringSnap.data().wallet.available, 100);
   assert.equal(pendingStringSnap.data().wallet.pending, '21.3');
+  assert.equal(pendingNullSnap.data().wallet.available, 100);
+  assert.equal(pendingNullSnap.data().wallet.pending, null);
+  assert.equal(walletNullSnap.data().wallet, null);
   assert.equal(events.size, 0);
+});
+
+emulatorTest('Firestore Emulator: absent pending wallet field initializes safely during atomic booking', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const userId = unique('event_user_missing_pending');
+  const uid = unique('event_auth_missing_pending');
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set({ firebaseUid: uid, wallet: { available: 100 } });
+
+  const response = await postJson(app.baseUrl, '/events/book', uid, {
+    userId,
+    eventName: 'Missing pending field test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+  });
+  assert.equal(response.status, 200, JSON.stringify(response));
+  assert.equal(response.body.deposit, 21.3);
+
+  const [userSnap, eventSnap] = await Promise.all([
+    userRef.get(),
+    db.collection('event_rides').where('userId', '==', userId).get(),
+  ]);
+  assert.equal(userSnap.data().wallet.available, 78.7);
+  assert.ok(Math.abs(userSnap.data().wallet.pending - 21.3) < 0.001);
+  assert.equal(eventSnap.size, 1);
 });
