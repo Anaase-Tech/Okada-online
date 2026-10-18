@@ -689,3 +689,64 @@ Source inspection confirms the map uses browser GPS, Firestore listeners, Google
 The latest frontend dependency install log reported 106 vulnerabilities (5 low, 23 moderate, 74 high, 4 critical); triage production dependency paths rather than blindly forcing upgrades. The main branch still declares web-app Node 20.x while v4-mobility-os uses Node 24.x. Backup packaging, broad signed-in reads of rides/drivers, duplicate /transit/journeys/plan route definitions, payment-channel selection contract, and bounded latest-25 driver dispatch query remain open.
 
 Slack #okada-v4-team was checked by the actual member list and had only @africanaihq; Claude/Anthropic membership is not verified. An hourly condition watch was configured to notify only when a Claude integration appears in the actual member list. No Firebase production deployment was performed.
+
+
+## Independent production-risk reassessment — 2026-10-18
+
+### Evidence snapshot
+
+The application-source snapshot reviewed was commit a3841461ed8925198b94637193685749cc937f6d, then current branch HEAD bd28f679c9fd526019a5290d0a277eae4c0d4c81 (the latter adds the new-chat handoff/emulator result documentation). The GitHub Actions run for HEAD, 39079118420 (https://github.com/Anaase-Tech/Okada-online/actions/runs/39079118420), was successful across all configured jobs:
+- Backend suite: 86 tests, 82 passed, 0 failed, 4 skipped.
+- Firestore Emulator concurrency suite: 4 passed, 0 failed, 0 skipped. It covers Trotro/Transit/Journey inventory contention and inactive-route rejection.
+- Web app: production build compiled successfully under Node 24.
+- Install logs report 62 backend dependency audit findings (3 low, 16 moderate, 40 high, 3 critical) and 106 frontend findings (5 low, 23 moderate, 74 high, 4 critical). Triage them against the production dependency graph; the counts alone do not establish exploitability.
+
+This is a successful configured CI run, not a production-readiness certificate. No live deployment or money movement was performed.
+
+### Production verdict
+
+**Status: NO-GO for real-money / general-public production use until the P0 financial-integrity and native-client blockers below are resolved. Do not deploy.**
+
+### Prioritized risk register
+
+| Priority | Finding | Evidence/status | Production impact |
+|---|---|---|---|
+| P0 | Savings deposit credits savings without verified incoming funds | Verified in backend/functions/index.js, POST /fintech/savings/deposit (around line 1853) | Arbitrary self-credit of ledger balance and inflated savings history |
+| P0 | Pay Later repayment marks debt paid without collecting funds | Verified in POST /fintech/pay-later/repay (around line 2283); no wallet/provider settlement in the route | Receivables can be erased while no money was collected |
+| P0 | Negative event deposit can credit wallet | Verified in POST /maas/events/book (around line 3209): caller depositPercent is not bounded and wallet update increments -deposit | A negative deposit can increase wallet.available while confirming an event |
+| P0 release blocker | Expo app appears not build-ready and operates as a simulation | Verified source/package mismatch; no Expo build is in CI. mobile-app/App.js uses web DOM/Tailwind and undeclared lucide-react, random location/fare, synthetic trips and local earnings | Native build may fail; even if packaged, displayed activity does not represent real dispatch, GPS or settlement |
+| P1 | Rental km endpoint mutates before checking owner | Verified in POST /maas/rental/:id/log-km (around line 3082) | Authenticated non-owner can alter another rental before the handler returns 403 |
+| P1 | Delivery status is not a server-enforced state machine | Verified in PUT /delivery/:id/status (around line 3271) | Sender can mark delivery delivered or submit unsupported transitions without driver proof |
+| P1 | Delivery tracking discloses a full record publicly | Verified in GET /delivery/track/:code (around line 3325); timestamp-derived tracking code | Recipient phone/name, addresses and operational IDs can be exposed through guessable references |
+| P1 | MaaS service purchase and wallet updates are not one transaction | Verified in subscription, rental and event booking handlers | Concurrency/partial failures can create inconsistent service and wallet ledgers |
+| P1 | Shared-ride join is non-transactional | Verified in POST /maas/share/:shareId/join | Concurrent joins can oversubscribe the passenger limit |
+| P1 | Phone number in profile is not bound to Firebase token claim | Verified by source inspection of requireAuth and POST /auth/create-profile | Authenticated users can put a different contact phone into profile data |
+| P1 | Insurance/loan/delivery integrations give production-looking states without settlement proof | Verified source: policy becomes active without observed premium/insurer call; claim only stores an evidence boolean; small loan can become active without observed disbursement; delivery request does not collect the fare | Users and operators may believe a real policy, loan, or paid service exists when the backend ledger has only a local record |
+| P1 | Production UI can lie about booking / live status after errors | Verified in ShareRide, DeliveryApp, ScheduledTrips, RentalHub, DriverPickups, AdminApp and DriveToOwn | False bookings, fabricated tracking, false admin metrics and simulated ownership progress |
+| P1 | Public USSD callback returns a fake booking success | Verified in POST /ussd/callback around line 2789; returns random fare and no ride write is visible | USSD users can be told a driver is coming when no booking was persisted; callback auth is missing in the route |
+| P1 | Transit journey planning path is duplicated | Verified: /transit/journeys/plan is defined in transitRoutes.js and transitHubRoutes.js; v4Entry mounts the first router first | One response contract can shadow the other and mislead journey planning consumers |
+| P1 | Firestore read access is broader than necessary | Verified rules allow any signed-in client to read driver, ride and shared-trip documents | Passenger contacts/locations and driver GPS/profile fields can be enumerated by signed-in users |
+| P1 | Price and route distance use different models | Verified: server fare/duration derive from Haversine distance; map road polyline uses Google DirectionsService | User sees one route but pays from straight-line distance and receives a rough non-road ETA |
+| P1 | Driver dispatch queue truncates before proximity filtering | Verified in DriverApp: newest 25 requested rides, then local 5 km filter | Valid nearby requests can be missed at higher traffic |
+| P2 | Native build, browser E2E, real Paystack and ride/payment races absent from CI | Verified workflow has only backend tests/structure, four booking emulator tests, and web build | Green CI cannot detect the listed cross-layer and real-time failures |
+| P2 | Branch lacks protection | GitHub branch metadata reported protected=false | No repository-level protection requiring independent review/status checks before merge |
+
+### Controls that are present and should be preserved
+
+The browser PWA driver path uses actual geolocation.watchPosition and writes coordinates to the backend; passenger tracking listens to Firestore; Maps shows Google DirectionsService road-route geometry but is not turn-by-turn navigation. Ride request creation supports idempotency keys; accept/start/cancel/complete enforce major ride states and identity checks transactionally. Paystack attempts are durably reserved, settlement validates provider amount and GHS currency in legacyPaymentService, and the signed webhook is verified. Journey payments also compare provider amount/currency and inventory contention has emulator coverage. These improvements must not be replaced by a broad refactor.
+
+### Required remediation gates before release
+
+**Gate 1 — Financial integrity:** Fix unfunded savings credits, uncollected Pay Later repayments, negative event deposits and atomic wallet/service writes. Establish the approved funding model for cash deposits/manual repayments. Every balance increase must trace to a verified payment, reconciled cash receipt, or auditable admin adjustment.
+
+**Gate 2 — Authorization and privacy:** Check ownership before every mutation; validate delivery transition/proof; return only a minimal tracking DTO and replace timestamp-derived codes; bind profile phone to verified Firebase identity; reduce broad Firestore reads through scoped APIs/rules.
+
+**Gate 3 — Truthful user experience:** Replace production-mode demo fallbacks with explicit unavailable/retry states. Demo workflows must be behind an intentional development switch and visually marked as demo. Treat pending/unknown provider status as unresolved; don't tell the passenger or driver that money/booking/ownership is complete without server evidence.
+
+**Gate 4 — Native client disposition:** Either rebuild mobile-app as a real React Native client (native primitives, declared dependencies, Firebase Phone Auth, device GPS, server-authoritative rides/earnings) and add Expo Android/web checks, or formally mark the prototype unsupported and keep it out of production distribution.
+
+**Gate 5 — Mobility OS semantics:** Define a single transit journey-plan contract; use road-distance-aware server-side pricing or display the fare/duration as estimates; avoid candidate loss from the top-25 dispatch query; distinguish configured town-centre pickup coordinates from current-location/pinned pickup. Map road geometry alone is not turn-by-turn navigation.
+
+**Gate 6 — Release evidence:** Add rules/auth emulator tests, MaaS wallet race tests, shared-seat concurrency tests, unauthorized delivery/rental mutation tests, duplicate/late payment settlement tests, Paystack sandbox/webhook replay tests, and authenticated browser/native smoke tests. Record exactly what ran, then require review and passing statuses on a protected branch.
+
+No code changes, production deployment, live Firebase operation, or real-money transaction was performed as part of this report update. Claude's Slack membership is not verified: the most recent channel member check showed only @africanaihq, and a workspace user search did not identify a Claude member.
