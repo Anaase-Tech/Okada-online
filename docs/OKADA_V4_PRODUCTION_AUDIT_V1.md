@@ -928,3 +928,18 @@ The base Express integration mounted `transitRoutes` before `transitHubRoutes` u
 
 ### Limits
 This is a route-registration/contract test, not an authenticated HTTP end-to-end test. No live transit data or Firestore records were used.
+
+
+## Repair batch — driver dispatch fan-out candidate queue (2026-10-18; CI pending)
+
+### Finding and source evidence
+The driver client listened only to the newest 25 requested rides for a vehicle type and filtered those 25 locally by 5 km proximity. Twenty-five newer remote requests could therefore hide an older nearby request even though the backend already fan-outs new-ride notifications to online, verified, fresh-GPS drivers in range.
+
+### Change
+- Added the verified Firebase UID as driverUid on server-created new_ride fan-out notifications while preserving the existing driverId profile identifier.
+- DriverApp now consumes a targeted notification query for its authenticated UID (new_ride, unread, most recent 100), subscribes to each referenced ride lifecycle, and merges these pre-targeted candidates with the bounded ride query retained as a compatibility/backfill path for requests already pending before the driver came online.
+- Stale/accepted offers are removed from local candidates and marked read. Decline/accept also attempts to mark that driver's targeted notification read.
+- Firestore rules allow the addressed Firebase UID to read these notifications and update only the read flag; sender read permissions remain unchanged. Added a matching composite index and source-contract regression tests.
+
+### Remaining limits
+The fan-out queue is bounded to 100 unread offers to avoid an unbounded client subscription; more than 100 pending offers for a single driver can still require pagination/overflow handling. The legacy 25-ride backfill is still bounded, so a driver who comes online after a large backlog may need a product-approved dispatch replay/expiry policy. We did not invent a request timeout/expiry contract. CI and review are pending. No deployment was performed.

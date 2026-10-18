@@ -90,13 +90,13 @@ service cloud.firestore {
     match /notifications/{notifId} {
       allow read:   if isSignedIn() &&
         (resource.data.userId == request.auth.uid ||
-         resource.data.driverId == request.auth.uid || isAdmin());
-      // The one deliberately narrow exception: a user marking their
-      // own notification read is genuinely low-risk (touches no
-      // money, no identity, no verification status) and this is the
-      // only field it's allowed to touch.
+         resource.data.driverId == request.auth.uid ||
+         resource.data.driverUid == request.auth.uid || isAdmin());
+      // The only client mutation remains the single low-risk read flag on
+      // a notification addressed to the authenticated user or driver.
       allow update: if isSignedIn() &&
-        resource.data.userId == request.auth.uid &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.driverUid == request.auth.uid) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
       allow create, delete: if false;
     }
