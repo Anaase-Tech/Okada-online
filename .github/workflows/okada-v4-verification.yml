@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - v4-mobility-os
+      - repair/**
   pull_request:
     branches:
       - v4-mobility-os
+      - repair/**
   workflow_dispatch:
 
 permissions:
@@ -67,7 +69,6 @@ jobs:
           fi
           node -e "const p=require('./package.json'); for (const d of [p.dependencies,p.devDependencies]) if (d && Object.prototype.hasOwnProperty.call(d,'twilio')) process.exit(1);"
           echo 'Forbidden/deprecated runtime/provider artifact check passed'
-
 
   firestore-emulator-stress:
     name: Firestore Emulator concurrency stress
