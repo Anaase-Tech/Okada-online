@@ -34,14 +34,14 @@ export function DriveToOwn({user,role,dark,onBack}) {
     if(!vehId){toast$('Select a vehicle','error');return;}
     setLoading(true);
     try{
-      await api.req('POST','/dto/apply',{userId:user.id,role,vehicleType:vehId,track});
+      const result=await api.req('POST','/dto/apply',{userId:user.id,role,vehicleType:vehId,track});
+      if(!result) throw new Error("Application service returned no confirmation");
       setAppStatus('applied');
-      toast$('Application submitted! Admin reviews within 48hrs');
+      toast$('Application submitted to the server. Review status has not yet been independently verified.');
     }catch(e){
-      setAppStatus('active');
-      toast$('Drive to Own demo activated!');
-    }
-    setLoading(false);
+      console.warn("Drive to Own application failed:",e);
+      toast$('Could not submit the application ('+(e.message||"request failed")+'). No financing plan was activated.','error');
+    }finally{setLoading(false);}
   };
 
   return (
@@ -56,6 +56,14 @@ export function DriveToOwn({user,role,dark,onBack}) {
       </div>
       <div style={{padding:16,display:'flex',flexDirection:'column',gap:14}}>
 
+        {appStatus==='applied'&&(
+          <div className={t.card+' rounded-2xl border '+t.bdr} style={{padding:24,textAlign:'center'}}>
+            <div style={{fontSize:48,marginBottom:12}}>📨</div>
+            <p style={{fontWeight:900,fontSize:20,color:dark?'#fff':'#111827',margin:'0 0 8px'}}>Application submitted</p>
+            <p style={{fontSize:13,color:dark?'#9ca3af':'#4b5563',margin:0}}>The endpoint accepted the request. This is not finance approval or a payment plan; those statuses must come from the backend.</p>
+          </div>
+        )}
+
         {appStatus==='done'&&(
           <div style={{background:'linear-gradient(135deg,#14532d,#16a34a)',borderRadius:20,padding:32,color:'#fff',textAlign:'center'}}>
             <div style={{fontSize:56,marginBottom:12}}>🎉</div>
@@ -64,7 +72,7 @@ export function DriveToOwn({user,role,dark,onBack}) {
           </div>
         )}
 
-        {appStatus==='active'&&selected&&(
+        {import.meta.env.DEV && appStatus==='active'&&selected&&(
           <>
             <div style={{background:'linear-gradient(135deg,#1e3a5f,#2563eb)',borderRadius:20,padding:20,color:'#fff',textAlign:'center'}}>
               <div style={{fontSize:40,marginBottom:8}}>{selected.icon}</div>

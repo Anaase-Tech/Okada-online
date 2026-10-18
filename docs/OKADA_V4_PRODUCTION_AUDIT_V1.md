@@ -943,3 +943,16 @@ The driver client listened only to the newest 25 requested rides for a vehicle t
 
 ### Remaining limits
 The fan-out queue is bounded to 100 unread offers to avoid an unbounded client subscription; more than 100 pending offers for a single driver can still require pagination/overflow handling. The legacy 25-ride backfill is still bounded, so a driver who comes online after a large backlog may need a product-approved dispatch replay/expiry policy. We did not invent a request timeout/expiry contract. CI and review are pending. No deployment was performed.
+
+
+## Repair batch — remaining web auth, pickup and Drive-to-Own false-success paths (2026-10-18; CI pending)
+
+### Changes
+- Web AuthScreen keeps Firebase Phone Auth but no longer advances after a failed OTP send or permits a fallback demo login. If the API profile step fails after verified SMS, it clears the local API token and creates no Okada session. The “Demo Mode” health label is now “Backend unavailable”.
+- DriverPickups removes hardcoded passengers and distinguishes load failure from empty results. It labels returned data as saved schedule records because the current client calls /maas/schedule/today/:uid; no dedicated assigned-pickup feed was found. Navigation/Call buttons no longer claim to launch navigation/place a call when they have no integration.
+- DriveToOwn no longer activates a fabricated financing plan after API failure. The random payment-progress simulator is available only in development preview, and a successful application call is labelled submitted—not finance approval.
+
+### Remaining limitations
+- DriverPickups still reads saved schedules rather than an assigned-driver queue; a correct queue needs an owner-approved backend assignment contract.
+- Drive to Own eligibility, installment/payment posting, ownership transfer and debt accounting require real backend contract/policy work; no financial record or rate was changed.
+- AdminApp’s hardcoded fixtures and placeholder actions remain an open false-success area and are intentionally addressed in a separate batch. CI is pending. No deployment or financial operation was performed.
