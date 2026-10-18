@@ -321,3 +321,10 @@ No Firebase production deployment was performed.
 **Regression coverage:** focused unit tests exercise the aggregate and specific-record payload paths, asserting HTTP 409, no success/repaid fields, and no user-reference writes; malformed aggregate amount and missing-profile behavior are also covered. A source-contract regression asserts the registered route/guard do not perform transaction or financial writes and that the UI does not claim repayment success. These tests must be reported only after CI has actually run them. They do not prove live payment collection, and no emulator or real-money operation is implied.
 
 **Batch limits:** P0-A stays in separate draft PR #15, which remains open and unmerged; its owner-recorded CI run #117 passed and Vercel created a Ready Preview (not a Firebase/production deployment). P0-C and P0-D are unchanged in this batch. No merge or deployment is authorized.
+
+
+## P0-B verification result — 2026-10-18
+
+GitHub Actions run #118 (`39111344551`) completed successfully on code commit `5f9e932666996484679ffa015a8bc627cb0a4579`: backend `npm test` reported 91 tests (87 passed, 0 failed, 4 skipped); the aggregate-amount and specific-record rejection tests passed, as did malformed-amount, missing-profile and route/UI source-contract tests. The Firestore Emulator concurrency suite passed 4/4 existing Trotro/Transit/Journey tests. The Node 24 web production build compiled successfully. Functions/runtime/deployment-structure and guard checks also passed.
+
+This is source/unit and existing-emulator evidence only. The Pay Later guard deliberately has no Firestore writer and rejects both repayment payload shapes with HTTP 409. No real incoming payment is verified, no reconciliation process exists in this batch, and no debt repayment was performed. Pay Later repayment remains unavailable until an approved, server-verifiable funding or authorized auditable reconciliation flow is implemented. No native build, live Paystack test, Firebase deployment, or real-money transaction was performed.
