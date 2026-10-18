@@ -34,6 +34,7 @@ const {
   markRidePaymentFailed,
 } = require('./modules/legacyPaymentService');
 const { createPayLaterRepaymentHandler } = require('./modules/payLaterRepaymentGuard');
+const { createPayLaterOriginationSuspension } = require('./modules/payLaterOriginationGuard');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -2145,7 +2146,7 @@ app.get('/insurance/policy/:userId', requireAuth, async (req, res) => {
 // I. FINTECH — PAY LATER
 // ════════════════════════════════════════════════════════════
 
-app.post('/fintech/pay-later/request', requireAuth, async (req, res) => {
+app.post('/fintech/pay-later/request', requireAuth, createPayLaterOriginationSuspension({ fail }), async (req, res) => {
   try {
     const userId = sanitize(req.body?.userId, 160);
     const rideId = sanitize(req.body?.rideId, 160);
