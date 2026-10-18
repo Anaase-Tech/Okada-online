@@ -18,6 +18,10 @@ export function DeliveryApp({user, dark, onBack}) {
   const [trackCode, setTrackCode] = useState("");
   const [tracking, setTracking]   = useState(null);
   const [history, setHistory]     = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyReload, setHistoryReload] = useState(0);
+  const [trackingLoading, setTrackingLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toast, setToast]     = useState(null);
   const toast$ = (msg, type="success") => setToast({msg, type});
@@ -39,27 +43,62 @@ export function DeliveryApp({user, dark, onBack}) {
     return fare.toFixed(2);
   };
 
+
   useEffect(()=>{
-    if(view==="history") api.getDeliveryHistory(user.id).then(r=>setHistory(r.deliveries||[])).catch(()=>setHistory([]));
-  },[view,user.id]);
+    if(view!=="history") return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(false);
+    api.getDeliveryHistory(user.id)
+      .then(r=>{
+        if(!cancelled) setHistory(r.deliveries||[]);
+      })
+      .catch(err=>{
+        console.warn("Delivery history load failed:",err);
+        if(cancelled) return;
+        setHistory([]);
+        setHistoryError(true);
+        setToast({msg:"Could not load delivery history. The displayed list is unavailable, not confirmed empty.",type:"error"});
+      })
+      .finally(()=>{
+        if(!cancelled) setHistoryLoading(false);
+      });
+    return ()=>{cancelled=true;};
+  },[view,user.id,historyReload]);
+
 
   const send = async () => {
     if(!pickup||!dest||!recipientName||!recipientPhone){toast$("Fill all required fields","error");return;}
     setLoading(true);
     try {
       const r = await api.requestDelivery({senderId:user.id,pickupAddress:pickup,deliveryAddress:dest,vehicleType:vType,packageDesc:desc,weightKg:parseFloat(weight)||1,recipientName,recipientPhone,urgent});
-      toast$(`Delivery booked! Tracking: ${r.trackingCode} 📦`);
+      if (!r || typeof r.trackingCode !== "string" || !r.trackingCode) throw new Error("Server did not return a delivery tracking reference");
+      toast$(`Delivery request accepted. Tracking: ${r.trackingCode} 📦`);
       setView("home");
-    } catch(err) { console.warn(err); toast$(`Delivery booked! Tracking: DLV-${Math.random().toString(36).substr(2,6).toUpperCase()}`); setView("home"); }
-    setLoading(false);
+    } catch(err) {
+      console.warn(err);
+      toast$(`Could not book the delivery (${err.message||"request failed"}). No tracking reference was issued.`,"error");
+    } finally {
+      setLoading(false);
+    }
   };
+
 
   const track = async () => {
     if(!trackCode){toast$("Enter tracking code","error");return;}
+    setTracking(null);
+    setTrackingLoading(true);
     try {
       const r = await api.trackDelivery(trackCode);
+      if (!r || !r.delivery) throw new Error("No live tracking record was returned");
       setTracking(r.delivery);
-    } catch(err) { console.warn(err); setTracking({trackingCode:trackCode,status:"in_transit",pickupAddress:"Akosombo",deliveryAddress:"Kpong",vehicleType:"motorcycle",recipientName:"Test"}); }
+    } catch(err) {
+      console.warn(err);
+      setTracking(null);
+      toast$(`Could not verify this tracking code (${err.message||"request failed"}). No live status is available.`,"error");
+    } finally {
+      setTrackingLoading(false);
+    }
   };
 
   const STATUS_STEPS = ["pending","assigned","picked_up","in_transit","delivered"];
@@ -155,7 +194,7 @@ export function DeliveryApp({user, dark, onBack}) {
             <div style={{display:"flex",gap:8}}>
               <input value={trackCode} onChange={e=>setTrackCode(e.target.value.toUpperCase())} placeholder="DLV-XXXXXXXX"
                 className={`w-full px-4 py-3 border rounded-xl text-sm font-mono focus:outline-none ${t.inp}`} style={{flex:1}}/>
-              <button onClick={track} style={{padding:"12px 16px",background:"#ea580c",color:"#fff",borderRadius:12,fontWeight:700,border:"none",cursor:"pointer"}}>Track</button>
+              <button onClick={track} disabled={trackingLoading} style={{padding:"12px 16px",background:"#ea580c",color:"#fff",borderRadius:12,fontWeight:700,border:"none",cursor:trackingLoading?"wait":"pointer",opacity:trackingLoading?0.7:1}}>{trackingLoading?"Checking…":"Track"}</button>
             </div>
           </div>
 
@@ -179,11 +218,19 @@ export function DeliveryApp({user, dark, onBack}) {
           )}
         </>)}
 
+
         {view==="history"&&(
-          history.length===0?(
+          historyLoading?(
+            <div style={{textAlign:"center",padding:"32px 0"}}><Loader className="w-5 h-5 animate-spin" style={{margin:"0 auto 10px"}}/><p className={"text-sm "+t.sub}>Loading delivery history…</p></div>
+          ):historyError?(
+            <div style={{textAlign:"center",padding:"36px 0"}}>
+              <p className={"font-bold "+t.text}>Delivery history unavailable</p>
+              <button onClick={()=>setHistoryReload(v=>v+1)} style={{marginTop:14,padding:"10px 20px",background:"#ea580c",color:"#fff",borderRadius:12,fontWeight:700}}>Retry</button>
+            </div>
+          ):history.length===0?(
             <div style={{textAlign:"center",padding:"40px 0"}}>
               <div style={{fontSize:48,marginBottom:12}}>📦</div>
-              <p className={`font-bold ${t.text}`}>No deliveries yet</p>
+              <p className={"font-bold "+t.text}>No deliveries yet</p>
             </div>
           ):history.map(d=>(
             <div key={d.id} className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>

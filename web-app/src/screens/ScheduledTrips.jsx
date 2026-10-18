@@ -10,6 +10,9 @@ export function ScheduledTrips({user, dark, onBack}) {
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast]     = useState(null);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
+  const [scheduleLoadError, setScheduleLoadError] = useState(false);
+  const [scheduleReload, setScheduleReload] = useState(0);
   const toast$ = (msg, type="success") => setToast({msg, type});
 
   // Form state
@@ -40,24 +43,42 @@ export function ScheduledTrips({user, dark, onBack}) {
     {id:"gym",label:"Gym",icon:"💪"},{id:"custom",label:"Custom",icon:"📍"},
   ];
 
+
   useEffect(() => {
+    let cancelled = false;
+    setScheduleLoading(true);
+    setScheduleLoadError(false);
     api.getTodaySchedules(user.id)
-      .then(r => setSchedules(r.trips || []))
-      .catch(() => setSchedules([
-        {id:"s1",name:"Work Commute",pickupAddress:"Akosombo",destAddress:"Kpong",departTime:"07:30",days:[1,2,3,4,5],category:"work",active:true,paused:false,vehicleType:"car"},
-        {id:"s2",name:"Church Run",pickupAddress:"Home",destAddress:"St. Peter's Church",departTime:"09:00",days:[0],category:"church",active:true,paused:false,vehicleType:"okada"},
-      ]));
-  }, [user.id]);
+      .then(r => {
+        if (!cancelled) setSchedules(r.trips || []);
+      })
+      .catch(err => {
+        console.warn("Schedule load failed:",err);
+        if (cancelled) return;
+        setSchedules([]);
+        setScheduleLoadError(true);
+        setToast({msg:"Could not load saved schedules. The displayed list is unavailable, not confirmed empty.",type:"error"});
+      })
+      .finally(() => {
+        if (!cancelled) setScheduleLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [user.id, scheduleReload]);
 
   const createSchedule = async () => {
     if(!pickup||!dest||!days.length){toast$("Fill all fields","error");return;}
     setLoading(true);
     try {
       await api.createSchedule({userId:user.id,name,pickupAddress:pickup,destAddress:dest,vehicleType:vehicle,departTime,returnTime,days,category,payFromSavings});
-      toast$("Schedule created ✅ Driver will be matched 30 min before departure");
+      toast$("Schedule created ✅ Driver matching will be attempted 30 min before departure");
       setView("list");
-    } catch(err) { console.warn(err); toast$("Schedule saved (demo mode)"); setView("list"); }
-    setLoading(false);
+      setScheduleReload(v=>v+1);
+    } catch(err) {
+      console.warn(err);
+      toast$("Could not create the schedule ("+(err.message||"request failed")+"). It was not confirmed.","error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const toggleDay = (d) => setDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev,d]);
@@ -119,11 +140,22 @@ export function ScheduledTrips({user, dark, onBack}) {
       <div style={{padding:16,display:"flex",flexDirection:"column",gap:14}}>
 
         {view==="list"&&(<>
-          {schedules.length===0&&(
+
+          {scheduleLoading&&(
+            <div style={{textAlign:"center",padding:"32px 0"}}><Loader className="w-5 h-5 animate-spin" style={{margin:"0 auto 10px"}}/><p className={"text-sm "+t.sub}>Loading saved schedules…</p></div>
+          )}
+          {!scheduleLoading&&scheduleLoadError&&(
+            <div style={{textAlign:"center",padding:"36px 0"}}>
+              <p className={"font-bold "+t.text}>Saved schedules unavailable</p>
+              <p className={"text-xs "+t.sub}>We could not verify your saved schedules.</p>
+              <button onClick={()=>setScheduleReload(v=>v+1)} style={{marginTop:14,padding:"10px 20px",background:"#1d4ed8",color:"#fff",borderRadius:12,fontWeight:700}}>Retry</button>
+            </div>
+          )}
+          {!scheduleLoading&&!scheduleLoadError&&schedules.length===0&&(
             <div style={{textAlign:"center",padding:"48px 0"}}>
               <div style={{fontSize:48,marginBottom:12}}>📅</div>
-              <p className={`font-bold ${t.text}`}>No schedules yet</p>
-              <p className={`text-xs ${t.sub} mt-1`}>Set up your daily commute, school run, or church route once — drivers come to you automatically.</p>
+              <p className={"font-bold "+t.text}>No schedules yet</p>
+              <p className={"text-xs "+t.sub+" mt-1"}>Set up your daily commute, school run, or church route once — drivers can be matched before departure.</p>
               <button onClick={()=>setView("create")} style={{marginTop:16,padding:"12px 24px",background:"#1d4ed8",color:"#fff",borderRadius:14,fontWeight:900}}>Create First Schedule</button>
             </div>
           )}
@@ -138,7 +170,16 @@ export function ScheduledTrips({user, dark, onBack}) {
                 <span style={{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:s.paused?"#f3f4f6":"#eff6ff",color:s.paused?"#6b7280":"#1d4ed8"}}>{s.paused?"Paused":"Active"}</span>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <button onClick={async()=>{try{await api.pauseSchedule(s.id);}catch(err){console.warn(err);}setSchedules(prev=>prev.map(x=>x.id===s.id?{...x,paused:!x.paused}:x));toast$(s.paused?"Resumed":"Paused");}}
+                <button onClick={async()=>{
+                  try{
+                    const result=await api.pauseSchedule(s.id);
+                    setSchedules(prev=>prev.map(x=>x.id===s.id?{...x,paused:!!result.paused}:x));
+                    toast$(result.paused?"Paused":"Resumed");
+                  }catch(err){
+                    console.warn(err);
+                    toast$("Could not update this schedule ("+(err.message||"request failed")+"). No change was confirmed.","error");
+                  }
+                }}
                   style={{padding:"9px",borderRadius:12,fontWeight:700,fontSize:12,background:s.paused?"#16a34a":"#fef2f2",color:s.paused?"#fff":"#ef4444",border:"none",cursor:"pointer"}}>
                   {s.paused?"▶ Resume":"⏸ Pause"}
                 </button>

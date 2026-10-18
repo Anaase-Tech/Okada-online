@@ -13,6 +13,9 @@ export function RentalHub({user, dark, onBack}) {
   const [loading, setLoading] = useState(false);
   const [toast, setToast]     = useState(null);
   const [activeRentals, setActiveRentals] = useState([]);
+  const [rentalsLoading, setRentalsLoading] = useState(true);
+  const [rentalsLoadError, setRentalsLoadError] = useState(false);
+  const [rentalsReload, setRentalsReload] = useState(0);
   const toast$ = (msg, type="success") => setToast({msg, type});
 
   const VEHICLES = [
@@ -34,9 +37,27 @@ export function RentalHub({user, dark, onBack}) {
     ev_motorcycle: {daily:{price:120,km:80},  weekly:{price:720,km:560},   monthly:{price:2500,km:2400},  annual:null},
   };
 
+
   useEffect(()=>{
-    api.getActiveRentals(user.id).then(r=>setActiveRentals(r.rentals||[])).catch(()=>{});
-  },[user.id]);
+    let cancelled = false;
+    setRentalsLoading(true);
+    setRentalsLoadError(false);
+    api.getActiveRentals(user.id)
+      .then(r=>{
+        if(!cancelled) setActiveRentals(r.rentals||[]);
+      })
+      .catch(err=>{
+        console.warn("Active rentals load failed:",err);
+        if(cancelled) return;
+        setActiveRentals([]);
+        setRentalsLoadError(true);
+        setToast({msg:"Could not load your rental records. The displayed list is unavailable, not confirmed empty.",type:"error"});
+      })
+      .finally(()=>{
+        if(!cancelled) setRentalsLoading(false);
+      });
+    return ()=>{cancelled=true;};
+  },[user.id,rentalsReload]);
 
   const selected  = VEHICLES.find(v=>v.id===vehicle);
   const planPrice = PRICING[vehicle]?.[period];
@@ -46,10 +67,15 @@ export function RentalHub({user, dark, onBack}) {
     setLoading(true);
     try {
       const r = await api.bookRental({userId:user.id,vehicleType:vehicle,period,startDate:new Date().toISOString(),driverIncluded:false});
-      toast$(`${selected.label} booked for ${period}! GH₵${r.totalPrice} 🚗`);
+      toast$(`${selected.label} booking request accepted for ${period}. Charged amount reported by server: GH₵${r.totalPrice} 🚗`);
       setTab("active");
-    } catch(err) { console.warn(err); toast$(`${selected.label} rental booked (demo)! GH₵${planPrice.price}`); }
-    setLoading(false);
+      setRentalsReload(v=>v+1);
+    } catch(err) {
+      console.warn(err);
+      toast$(`Could not book the ${selected.label} rental (${err.message||"request failed"}). No rental was confirmed.`,"error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -141,14 +167,26 @@ export function RentalHub({user, dark, onBack}) {
           </button>
         </>)}
 
+
         {tab==="active"&&(<>
-          {activeRentals.length===0?(
+          {rentalsLoading&&(
+            <div style={{textAlign:"center",padding:"32px 0"}}><Loader className="w-5 h-5 animate-spin" style={{margin:"0 auto 10px"}}/><p className={"text-sm "+t.sub}>Loading rental records…</p></div>
+          )}
+          {!rentalsLoading&&rentalsLoadError&&(
+            <div style={{textAlign:"center",padding:"36px 0"}}>
+              <p className={"font-bold "+t.text}>Rental records unavailable</p>
+              <p className={"text-xs "+t.sub}>We could not verify your rentals.</p>
+              <button onClick={()=>setRentalsReload(v=>v+1)} style={{marginTop:14,padding:"10px 20px",background:"#1d4ed8",color:"#fff",borderRadius:12,fontWeight:700}}>Retry</button>
+            </div>
+          )}
+          {!rentalsLoading&&!rentalsLoadError&&activeRentals.length===0&&(
             <div style={{textAlign:"center",padding:"40px 0"}}>
               <div style={{fontSize:48,marginBottom:12}}>🚗</div>
-              <p className={`font-bold ${t.text}`}>No active rentals</p>
+              <p className={"font-bold "+t.text}>No active rentals</p>
               <button onClick={()=>setTab("browse")} style={{marginTop:14,padding:"10px 24px",background:"#0f172a",color:"#fff",borderRadius:12,fontWeight:700}}>Browse Vehicles</button>
             </div>
-          ):activeRentals.map(r=>(
+          )}
+          {!rentalsLoading&&!rentalsLoadError&&activeRentals.map(r=>(
             <div key={r.id} className={`${t.card} rounded-2xl p-4 border-2 border-blue-500`}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
                 <p className={`font-black ${t.text}`}>{r.vehicleType.replace("_"," ").toUpperCase()}</p>
