@@ -553,3 +553,29 @@ test('DeliveryApp never fabricates a tracking reference or live tracking object'
   assert.match(source, /No live status is available/);
   assert.match(source, /historyError/);
 });
+
+
+test('mobile sign-in fails closed when the OTP API is unavailable and never fabricates a session', () => {
+  const source = read('mobile-app/App.js');
+  const sendStart = source.indexOf('const sendOtp = async');
+  const verifyStart = source.indexOf('const verifyOtp = async', sendStart);
+  const authEnd = source.indexOf('  return (', verifyStart);
+  assert.ok(sendStart >= 0 && verifyStart > sendStart && authEnd > verifyStart, 'mobile auth handler boundaries exist');
+  const auth = source.slice(sendStart, authEnd);
+  assert.match(auth, /Could not send an OTP/);
+  assert.match(auth, /OTP verification failed/);
+  assert.match(auth, /Authentication service returned an incomplete session/);
+  assert.doesNotMatch(auth, /demo_token|demoUser|Demo mode/);
+  assert.doesNotMatch(auth, /catch\s*\([^)]*\)\s*\{[\s\S]{0,180}setStep\("otp"\)/);
+  assert.doesNotMatch(source, /Demo: tap Get OTP/);
+});
+
+test('mobile app readiness audit guards known Expo-native incompatibilities from being mislabeled ready', () => {
+  const source = read('mobile-app/App.js');
+  const mobilePackage = JSON.parse(read('mobile-app/package.json'));
+  assert.match(source, /from "lucide-react"/);
+  assert.ok(mobilePackage.dependencies["lucide-react-native"], 'native icon dependency declared');
+  assert.equal(mobilePackage.dependencies["lucide-react"], undefined, 'web icon package absent');
+  assert.match(source, /<div\\b/);
+  assert.match(source, /className=/);
+});

@@ -107,34 +107,38 @@ const AuthScreen = ({ onLogin, dark }) => {
 
   const toastFn = (msg, type="success") => setToast({ msg, type });
 
+
   const sendOtp = async () => {
     if (phone.length < 12) { toastFn("Enter a valid Ghana number (+233...)", "error"); return; }
     setLoading(true);
     try {
       await api.sendOtp(phone, role);
       setStep("otp");
-      toastFn("OTP sent via SMS! 📱");
+      toastFn("OTP request accepted by the authentication service. 📱");
     } catch(e) {
-      // Demo mode — proceed anyway
-      setStep("otp");
-      toastFn("Demo mode — use any 6 digits");
+      console.warn("OTP request failed:",e);
+      toastFn("Could not send an OTP ("+(e.message||"request failed")+"). No sign-in was started.", "error");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const verifyOtp = async () => {
-    if (otp.length < 4) { toastFn("Enter OTP", "error"); return; }
+    if (otp.length !== 6) { toastFn("Enter the 6-digit verification code", "error"); return; }
     setLoading(true);
     try {
       const res = await api.verifyOtp(phone, otp, role, name);
+      if (!res || typeof res.token !== "string" || !res.token || !res.user || !res.user.id) {
+        throw new Error("Authentication service returned an incomplete session");
+      }
       api.token = res.token;
       onLogin(res.user, res.token, role);
-    } catch {
-      // Demo mode
-      const demoUser = { id:"demo_"+Date.now(), name: name||"Demo User", phone, role, rating:5.0, totalRides:0, totalSpent:0, profilePhoto: role==="driver"?"👨🏿‍🦱":"👤", isVerified: role==="driver" };
-      onLogin(demoUser, "demo_token", role);
+    } catch(e) {
+      console.warn("OTP verification failed:",e);
+      toastFn("OTP verification failed ("+(e.message||"request failed")+"). No session was created.", "error");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -176,7 +180,6 @@ const AuthScreen = ({ onLogin, dark }) => {
               className="w-full bg-green-600 hover:bg-green-700 text-white py-4 rounded-2xl font-bold text-base disabled:opacity-50 flex items-center justify-center gap-2">
               {loading && <Spin/>} {loading ? "Sending…":"Get OTP via SMS 📱"}
             </button>
-            <p className={`text-xs text-center ${t.sub}`}>Demo: tap Get OTP, then enter any digits</p>
           </div>
         ) : (
           <div className="space-y-3">
