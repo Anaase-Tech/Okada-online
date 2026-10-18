@@ -750,3 +750,22 @@ The browser PWA driver path uses actual geolocation.watchPosition and writes coo
 **Gate 6 — Release evidence:** Add rules/auth emulator tests, MaaS wallet race tests, shared-seat concurrency tests, unauthorized delivery/rental mutation tests, duplicate/late payment settlement tests, Paystack sandbox/webhook replay tests, and authenticated browser/native smoke tests. Record exactly what ran, then require review and passing statuses on a protected branch.
 
 No code changes, production deployment, live Firebase operation, or real-money transaction was performed as part of this report update. Claude's Slack membership is not verified: the most recent channel member check showed only @africanaihq, and a workspace user search did not identify a Claude member.
+
+## Repair workflow — P0-A savings funding guard (2026-10-18)
+
+Target source snapshot: `bb2a558c41f77ea71c6d08dcd6242719c62c04d7`. Repair branch: `codex/okada-v4-p0-a-savings-deposit-guard`.
+
+**Finding verified in source:** the legacy `POST /fintech/savings/deposit` handler previously accepted a caller-supplied positive amount, wrote a `manual_deposit` transaction as `completed`, and incremented `savings.balance` and `savings.totalDeposited` without checking any incoming payment or reconciliation record.
+
+**Batch 1 change:** the endpoint now validates the authenticated profile and amount, then returns HTTP 409 with an explicit explanation. It performs no Firestore writes, does not claim the deposit was received, and does not alter the savings ledger. This is a fail-closed interim safeguard, not a completed deposit-funding flow. Re-enabling deposits requires a server-verifiable Paystack/other-provider funding flow or a defined, authorized, auditable reconciliation process. The implementation does not invent that policy.
+
+**Regression coverage:** a source-contract test checks the handler's explicit 409 guard and asserts that it does not write a savings transaction or increment either savings balance field. GitHub Actions run `39109560121` executed it successfully as subtest 70. The backend job reported **87 tests, 83 passed, 0 failed, 4 skipped**; it is static regression coverage, not an emulator-backed route integration test. At the time of this documentation update, the frontend production-build job and Firestore Emulator concurrency job were still in progress, so their results are not claimed.
+
+**Scope discipline:** P0-B, P0-C, P0-D and all P1 findings are not changed in this batch. No deployment, real-money transaction, dependency upgrade, or secret operation was performed. Review this batch before proceeding.
+
+
+## P0-A guard verification update — 2026-10-18
+
+Owner review accepts the savings endpoint's HTTP 409/no-write behavior as an **interim guard only**. GitHub Actions run #117 (`39109644361`) completed successfully for commit `ae8273d564210a947813acd83546754dc8308a06`: backend `npm test` reported 87 tests (83 passed, 0 failed, 4 skipped), Firestore Emulator suite reported 4 passed (0 failed, 0 skipped), and the web production build compiled successfully. The savings regression is static source-contract coverage, not endpoint/emulator integration; these results do not verify a real savings funding flow, live payment settlement, or native-app build.
+
+Vercel's bot reported a **Ready Preview deployment** for the PR branch. This was an automatic preview only; it is not a Vercel Production deployment, a Firebase deployment, or production E2E verification. No Firebase deploy or real-money operation occurred. Keep PR #15 open and unmerged for independent review.

@@ -356,3 +356,16 @@ test('Journey multi-leg transaction reads trip, route, and booking state before 
   assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
 });
+
+test('savings deposits fail closed without verified funding or authorized reconciliation', () => {
+  const start = index.indexOf("app.post('/fintech/savings/deposit'");
+  const end = index.indexOf("app.post('/fintech/savings/withdraw'", start);
+  assert.ok(start >= 0 && end > start, 'savings deposit handler boundaries exist');
+  const route = index.slice(start, end);
+  assert.match(route, /verified incoming payment or an explicitly authorized reconciliation/i);
+  assert.match(route, /return fail\(\s*res,\s*409,/);
+  assert.match(route, /resolveUserRef\(userId, req\)/);
+  assert.doesNotMatch(route, /savings_transactions.*\.add\(/s);
+  assert.doesNotMatch(route, /['"]savings\.balance['"]\s*:\s*admin\.firestore\.FieldValue\.increment/);
+  assert.doesNotMatch(route, /['"]savings\.totalDeposited['"]\s*:\s*admin\.firestore\.FieldValue\.increment/);
+});

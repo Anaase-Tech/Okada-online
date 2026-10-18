@@ -1856,18 +1856,20 @@ app.post('/fintech/savings/deposit', requireAuth, async (req, res) => {
     const a = Number(amount);
     if (!userId || !Number.isFinite(a) || a <= 0)
       return fail(res, 400, 'userId and a positive amount are required');
+
     const u = await resolveUserRef(userId, req);
     if (!u) return fail(res, 404, 'User not found');
-    await db.collection('savings_transactions').add({
-      userId: sanitize(userId), type: 'manual_deposit',
-      amount: a, status: 'completed',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    await u.ref.update({
-      'savings.balance':        admin.firestore.FieldValue.increment(a),
-      'savings.totalDeposited': admin.firestore.FieldValue.increment(a),
-    });
-    return ok(res, { deposited: a });
+
+    // Fail closed: this legacy endpoint has no verified incoming-funds source
+    // and no authorized reconciliation workflow. A caller-supplied amount is
+    // not evidence that money was received. Never create a completed ledger
+    // entry or increment savings until one of those server-verifiable paths
+    // has been implemented and linked to this request.
+    return fail(
+      res,
+      409,
+      'Savings deposit not recorded: a verified incoming payment or an explicitly authorized reconciliation is required. No balances were changed.'
+    );
   } catch (e) {
     return fail(res, 500, e.message);
   }
