@@ -124,11 +124,27 @@ function createEventBookingHandler({
         const userSnap = await tx.get(user.ref);
         if (!userSnap.exists) return { blocked: 'user-not-found' };
 
-        const rawAvailable = userSnap.data()?.wallet?.available;
-        const available = rawAvailable === undefined || rawAvailable === null
-          ? 0
-          : Number(rawAvailable);
-        if (!Number.isFinite(available) || available < deposit) {
+        const wallet = userSnap.data()?.wallet || {};
+        const rawAvailable = wallet.available;
+        const rawPending = wallet.pending;
+        const availableMissing = rawAvailable === undefined || rawAvailable === null;
+        const pendingMissing = rawPending === undefined || rawPending === null;
+
+        // Firestore FieldValue.increment() replaces a non-numeric field with
+        // the increment operand. Never coerce stored balances such as "100":
+        // doing so could turn an existing string balance into a negative
+        // numeric value during the atomic wallet movement.
+        if (
+          (!availableMissing &&
+            (typeof rawAvailable !== 'number' || !Number.isFinite(rawAvailable) || rawAvailable < 0)) ||
+          (!pendingMissing &&
+            (typeof rawPending !== 'number' || !Number.isFinite(rawPending) || rawPending < 0))
+        ) {
+          return { blocked: 'invalid-wallet-balance' };
+        }
+
+        const available = availableMissing ? 0 : rawAvailable;
+        if (available < deposit) {
           return { blocked: 'insufficient-balance' };
         }
 
@@ -144,6 +160,9 @@ function createEventBookingHandler({
 
       if (result?.blocked === 'user-not-found') {
         return fail(res, 404, 'User not found');
+      }
+      if (result?.blocked === 'invalid-wallet-balance') {
+        return fail(res, 409, 'Wallet balance is invalid; event booking cannot be processed');
       }
       if (result?.blocked === 'insufficient-balance') {
         return fail(res, 400, `Deposit required: GH₵${deposit}`);

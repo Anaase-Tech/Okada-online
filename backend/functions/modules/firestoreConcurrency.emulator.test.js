@@ -276,3 +276,60 @@ emulatorTest('Firestore Emulator: concurrent event bookings cannot overdraw the 
   assert.equal(eventSnap.docs[0].data().deposit, 21.3);
 });
 
+
+
+emulatorTest('Firestore Emulator: malformed wallet balance types are rejected without financial mutation', { timeout: 30000 }, async (t) => {
+  const app = await startApp();
+  t.after(() => app.close());
+
+  const availableStringUserId = unique('event_user_string_available');
+  const pendingStringUserId = unique('event_user_string_pending');
+  const availableStringUid = unique('event_auth_string_available');
+  const pendingStringUid = unique('event_auth_string_pending');
+  const availableStringRef = db.collection('users').doc(availableStringUserId);
+  const pendingStringRef = db.collection('users').doc(pendingStringUserId);
+
+  await Promise.all([
+    availableStringRef.set({
+      firebaseUid: availableStringUid,
+      wallet: { available: '100', pending: 0 },
+    }),
+    pendingStringRef.set({
+      firebaseUid: pendingStringUid,
+      wallet: { available: 100, pending: '21.3' },
+    }),
+  ]);
+
+  const body = {
+    eventName: 'Malformed wallet test',
+    eventDate: '2026-11-15',
+    pickupAddress: 'Akosombo',
+    destAddress: 'Atimpoku',
+    vehicleType: 'car',
+    depositPercent: 0.5,
+  };
+  const [availableStringResponse, pendingStringResponse] = await Promise.all([
+    postJson(app.baseUrl, '/events/book', availableStringUid, {
+      ...body, userId: availableStringUserId,
+    }),
+    postJson(app.baseUrl, '/events/book', pendingStringUid, {
+      ...body, userId: pendingStringUserId,
+    }),
+  ]);
+
+  assert.equal(availableStringResponse.status, 409, JSON.stringify(availableStringResponse));
+  assert.equal(pendingStringResponse.status, 409, JSON.stringify(pendingStringResponse));
+  assert.match(availableStringResponse.body.error || '', /Wallet balance is invalid/);
+  assert.match(pendingStringResponse.body.error || '', /Wallet balance is invalid/);
+
+  const [availableStringSnap, pendingStringSnap, events] = await Promise.all([
+    availableStringRef.get(),
+    pendingStringRef.get(),
+    db.collection('event_rides').where('eventName', '==', 'Malformed wallet test').get(),
+  ]);
+  assert.equal(availableStringSnap.data().wallet.available, '100');
+  assert.equal(availableStringSnap.data().wallet.pending, 0);
+  assert.equal(pendingStringSnap.data().wallet.available, 100);
+  assert.equal(pendingStringSnap.data().wallet.pending, '21.3');
+  assert.equal(events.size, 0);
+});

@@ -11,6 +11,7 @@ const {
 
 function createHarness({
   available = 100,
+  pending = 0,
   resolveProfile = true,
   profileExistsInTransaction = true,
 } = {}) {
@@ -43,7 +44,7 @@ function createHarness({
           assert.equal(ref, userRef);
           return {
             exists: profileExistsInTransaction,
-            data: () => ({ wallet: { available } }),
+            data: () => ({ wallet: { available, pending } }),
           };
         },
         create(ref, data) {
@@ -71,7 +72,7 @@ function createHarness({
     stats.resolvedUserId = userId;
     stats.resolvedUid = req.uid;
     return resolveProfile
-      ? { ref: userRef, data: { wallet: { available } } }
+      ? { ref: userRef, data: { wallet: { available, pending } } }
       : null;
   };
 
@@ -202,6 +203,31 @@ test('a missing authenticated profile is rejected before starting a transaction'
   await h.handler({ uid: 'uid-1', body: validBody }, res);
   assert.equal(res.statusCode, 404);
   assert.equal(h.stats.transactionCalls, 0);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+
+test('numeric-string available wallet balance is rejected without replacing the stored value', async () => {
+  const h = createHarness({ available: '100', pending: 0 });
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: { ...validBody, depositPercent: 0.5 } }, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /Wallet balance is invalid/);
+  assert.equal(h.stats.transactionCalls, 1);
+  assert.equal(h.stats.created.length, 0);
+  assert.equal(h.stats.updated.length, 0);
+});
+
+test('non-numeric pending wallet balance is rejected without replacing the stored value', async () => {
+  const h = createHarness({ available: 100, pending: '21.3' });
+  const res = h.makeResponse();
+  await h.handler({ uid: 'uid-1', body: { ...validBody, depositPercent: 0.5 } }, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /Wallet balance is invalid/);
+  assert.equal(h.stats.transactionCalls, 1);
   assert.equal(h.stats.created.length, 0);
   assert.equal(h.stats.updated.length, 0);
 });
