@@ -33,6 +33,7 @@ const {
   settleRidePayment,
   markRidePaymentFailed,
 } = require('./modules/legacyPaymentService');
+const { createEventBookingHandler } = require('./modules/eventBookingGuard');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -3206,35 +3207,15 @@ app.get('/maas/corporate/stats/:orgId', requireAuth, async (req,res) => {
 
 // ── F. EVENTS ────────────────────────────────────────────────
 
-app.post('/maas/events/book', requireAuth, async (req,res) => {
-  try {
-    const { userId,eventName,eventDate,pickupAddress,destAddress,
-            vehicleType,passengers,notes,depositPercent } = req.body;
-    const pricing   = MAAS_PRICING.scheduled[sanitize(vehicleType)]||MAAS_PRICING.scheduled.car;
-    const estFare   = +(pricing.flag + 15*pricing.perKm).toFixed(2);
-    const deposit   = +(estFare*(depositPercent||0.30)).toFixed(2);
-    const u = await resolveUserRef(userId, req);
-    if (!u) return fail(res,404,'User not found');
-    if((u.data?.wallet?.available||0) < deposit)
-      return fail(res,400,`Deposit required: GH₵${deposit}`);
-    const ref = await db.collection('event_rides').add({
-      userId:sanitize(userId), eventName:sanitize(eventName),
-      eventDate:sanitize(eventDate), pickupAddress:sanitize(pickupAddress),
-      destAddress:sanitize(destAddress), vehicleType:sanitize(vehicleType),
-      passengers:parseInt(passengers)||1, notes:sanitize(notes||''),
-      estimatedFare:estFare, deposit, balanceDue:+(estFare-deposit).toFixed(2),
-      status:'confirmed', driverId:null,
-      createdAt:admin.firestore.FieldValue.serverTimestamp(),
-    });
-    await u.ref.update({
-      'wallet.available':admin.firestore.FieldValue.increment(-deposit),
-      'wallet.pending':  admin.firestore.FieldValue.increment(deposit),
-    });
-    return ok(res, { eventRideId:ref.id, eventName, eventDate,
-      estimatedFare:estFare, deposit, balanceDue:estFare-deposit,
-      message:`Event ride confirmed for ${eventDate}. Driver assigned 24hrs before event.` });
-  } catch(e) { return fail(res,500,e.message); }
-});
+app.post('/maas/events/book', requireAuth, createEventBookingHandler({
+  resolveUserRef,
+  db,
+  admin,
+  ok,
+  fail,
+  sanitize,
+  scheduledPricing: MAAS_PRICING.scheduled,
+}));
 
 // ── G. DELIVERY ──────────────────────────────────────────────
 
