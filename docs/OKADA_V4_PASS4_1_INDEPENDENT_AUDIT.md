@@ -311,3 +311,15 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## Repair workflow — P0-A savings funding guard (2026-10-18)
+
+Target source snapshot: `bb2a558c41f77ea71c6d08dcd6242719c62c04d7`. Repair branch: `codex/okada-v4-p0-a-savings-deposit-guard`.
+
+**Finding verified in source:** the legacy `POST /fintech/savings/deposit` handler previously accepted a caller-supplied positive amount, wrote a `manual_deposit` transaction as `completed`, and incremented `savings.balance` and `savings.totalDeposited` without checking any incoming payment or reconciliation record.
+
+**Batch 1 change:** the endpoint now validates the authenticated profile and amount, then returns HTTP 409 with an explicit explanation. It performs no Firestore writes, does not claim the deposit was received, and does not alter the savings ledger. This is a fail-closed interim safeguard, not a completed deposit-funding flow. Re-enabling deposits requires a server-verifiable Paystack/other-provider funding flow or a defined, authorized, auditable reconciliation process. The implementation does not invent that policy.
+
+**Regression coverage:** a source-contract test checks the handler's explicit 409 guard and asserts that it does not write a savings transaction or increment either savings balance field. The test has been added but must not be described as passing until CI executes it. It is static regression coverage, not an emulator-backed route integration test.
+
+**Scope discipline:** P0-B, P0-C, P0-D and all P1 findings are not changed in this batch. No deployment, real-money transaction, dependency upgrade, or secret operation was performed. Review this batch before proceeding.
