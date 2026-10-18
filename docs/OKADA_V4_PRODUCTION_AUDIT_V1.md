@@ -877,3 +877,23 @@ At the audited base, `requireAuth` validated the Firebase ID token and retained 
 
 ### Migration/recovery limitation
 Existing records with missing Firebase UID or phone formatting that does not normalize to E.164 may now require manual, audited account recovery. We deliberately do not rebind these records automatically. No existing user record was changed by this patch.
+
+
+## Repair batch — web UI false-success and fabricated-data fallbacks (2026-10-18; CI pending)
+
+### Source evidence
+The audited source contained UI fallbacks that presented local examples as live data or announced successful create/join/book/pause operations after API failure:
+- ShareRide populated empty/error snapshots with sample trips; failed create inserted a client-only trip; failed join still reported success.
+- ScheduledTrips substituted example schedules and reported a demo save after failure; Pause/Resume toggled local state even if the request failed.
+- RentalHub reported a rental booked in demo mode after API failure and silently treated active-rental fetch failure as an empty list.
+- DeliveryApp invented a tracking reference after booking failure, fabricated an in-transit record after lookup failure, and treated history fetch failure as empty.
+
+### Change
+- Removed these fake-success/sample fallbacks from the four screens.
+- Failed mutations now report errors and do not locally create/complete the operation. Pause/Resume changes local state only after a successful server response.
+- Load failures render explicit unavailable states, with Retry actions, distinct from confirmed empty results.
+- Delivery tracking requires an actual returned server reference/record; no synthetic tracking data is displayed.
+- Added source-contract regression tests for the affected fallback patterns.
+
+### Limits
+This batch changes UI failure behavior, not authentication or backend booking policy. Displayed estimates in RentalHub/DeliveryApp are not reconciled to server pricing in this batch; that remains the separate fare/distance-consistency finding. CI must pass before owner review.

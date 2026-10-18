@@ -519,3 +519,37 @@ test('create-profile does not trust a caller-supplied Firebase UID', () => {
   assert.match(route, /firebaseUid:\s*req\.uid/);
   assert.doesNotMatch(route, /firebaseUid:\s*sanitize\(firebaseUid\)/);
 });
+
+
+test('ShareRide never substitutes sample trips or reports failed create/join operations as success', () => {
+  const source = read('web-app/src/screens/ShareRide.jsx');
+  assert.doesNotMatch(source, /const DEMO\s*=/);
+  assert.doesNotMatch(source, /setTrips\(DEMO\)/);
+  assert.doesNotMatch(source, /Shared trip created! \(demo\)/);
+  assert.match(source, /No trip was confirmed/);
+  assert.match(source, /No seat was reserved/);
+});
+
+test('ScheduledTrips shows unavailable state instead of sample data or demo success after errors', () => {
+  const source = read('web-app/src/screens/ScheduledTrips.jsx');
+  assert.doesNotMatch(source, /Schedule saved \(demo mode\)|Work Commute|Church Run/);
+  assert.match(source, /scheduleLoadError/);
+  assert.match(source, /No change was confirmed/);
+  assert.match(source, /Could not create the schedule/);
+});
+
+test('RentalHub does not claim a booking succeeded after API failure or hide fetch failures as empty', () => {
+  const source = read('web-app/src/screens/RentalHub.jsx');
+  assert.doesNotMatch(source, /rental booked \(demo\)/);
+  assert.match(source, /rentalsLoadError/);
+  assert.match(source, /No rental was confirmed/);
+});
+
+test('DeliveryApp never fabricates a tracking reference or live tracking object', () => {
+  const source = read('web-app/src/screens/DeliveryApp.jsx');
+  assert.doesNotMatch(source, /Math\.random\(\)\.toString\(36\).*tracking/i);
+  assert.doesNotMatch(source, /status:\s*"in_transit",pickupAddress:"Akosombo"/);
+  assert.match(source, /No tracking reference was issued/);
+  assert.match(source, /No live status is available/);
+  assert.match(source, /historyError/);
+});
