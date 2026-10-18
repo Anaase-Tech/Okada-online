@@ -356,3 +356,48 @@ test('Journey multi-leg transaction reads trip, route, and booking state before 
   assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
 });
+
+test('Pay Later repayment route delegates to a fail-closed handler with no financial writes', () => {
+  const marker = index.indexOf("createPayLaterRepaymentHandler({ resolveUserRef, fail })");
+  const start = index.lastIndexOf("app.post(", marker);
+  const end = index.indexOf("// J. WALLET", marker);
+  assert.ok(marker >= 0 && start >= 0 && end > marker, 'Pay Later repayment route boundaries exist');
+  const route = index.slice(start, end);
+  const guard = read('backend/functions/modules/payLaterRepaymentGuard.js');
+  const ui = read('web-app/src/screens/FintechHub.jsx');
+  assert.match(route, /createPayLaterRepaymentHandler\(\{ resolveUserRef, fail \}\)/);
+  assert.doesNotMatch(route, /runTransaction|trx\.update|FieldValue\.increment|status:\s*['"]paid/);
+  assert.doesNotMatch(guard, /runTransaction|trx\.update|FieldValue\.increment|db\.collection/);
+  assert.match(guard, /Pay Later repayment is temporarily unavailable/);
+  assert.match(ui, /Repayment temporarily unavailable/);
+  assert.doesNotMatch(ui, /Pay Later cleared ✅ Limit restored/);
+  assert.doesNotMatch(ui, /from this screen/);
+  assert.ok(ui.includes('Pay Later repayment is not currently supported in the app'));
+  assert.doesNotMatch(ui, /Auto-charged to your MoMo on due date/);
+});
+test('Pay Later origination is blocked before any new debt writes while idempotent deferred retries remain supported', () => {
+  const start = index.indexOf("app.post('/fintech/pay-later/request'");
+  const end = index.indexOf("app.get('/fintech/pay-later/history/", start);
+  assert.ok(start >= 0 && end > start, 'single bounded Pay Later route exists');
+  assert.equal(index.split("app.post('/fintech/pay-later/request'").length - 1, 1, 'no duplicate shadow route');
+  const route = index.slice(start, end);
+  const idempotent = route.indexOf('return { accepted: true, idempotent: true');
+  const suspended = route.indexOf("if (isPayLaterOriginationSuspended()) return { blocked: 'origination-suspended' }");
+  const firstDebtWrite = route.indexOf('trx.set(payLaterRef');
+  const firstUsedWrite = route.indexOf("'payLater.used': admin.firestore.FieldValue.increment(amount)");
+  const deferredWrite = route.indexOf("paymentStatus: 'DEFERRED'");
+  assert.ok(idempotent >= 0 && suspended > idempotent, 'existing deferred idempotent retry is checked first');
+  assert.ok(firstDebtWrite > suspended && firstUsedWrite > suspended && deferredWrite > suspended, 'suspension precedes every origination write');
+  assert.ok(route.includes("result.blocked === 'origination-suspended') return fail(res, 409, PAY_LATER_ORIGINATION_UNAVAILABLE_MESSAGE"));
+  const guard = read('backend/functions/modules/payLaterOriginationGuard.js');
+  const passenger = read('web-app/src/screens/PassengerApp.jsx');
+  assert.ok(guard.includes('return true;'));
+  assert.ok(passenger.includes('Pay Later temporarily paused'));
+  assert.ok(passenger.includes('disabled:true')) ;
+  assert.ok(passenger.includes('payMethod==="paylater"'));
+  const completionStart = index.indexOf("app.post('/rides/:rideId/complete'");
+  const completionEnd = index.indexOf("app.post('/rides/:rideId/cancel'", completionStart);
+  const completion = index.slice(completionStart, completionEnd);
+  assert.ok(completion.includes("const payLaterCreditRequired = paymentMethod === 'PAY_LATER' && paymentStatus === 'DEFERRED';"));
+  assert.ok(completion.includes('payLaterCreditAuthorized = true'));
+});

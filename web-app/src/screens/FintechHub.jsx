@@ -93,7 +93,6 @@ export function FintechHub({user,role,dark}) {
   const [plLimit,setPlLimit]=useState(50);
   const [plUsed,setPlUsed]=useState(0);
   const [plHistory,setPlHistory]=useState([]);
-  const [plBusy,setPlBusy]=useState(false);
   const plAvail=plLimit-plUsed;
 
   const refreshPayLater = async () => {
@@ -467,23 +466,18 @@ export function FintechHub({user,role,dark}) {
               <AlertCircle style={{width:16,height:16,color:"#ca8a04",flexShrink:0,marginTop:1}}/>
               <div>
                 <p style={{fontWeight:700,fontSize:13,color:"#92400e"}}>Payment Due: GH₵{plUsed.toFixed(2)}</p>
-                <button disabled={plBusy} onClick={async()=>{
-                  setPlBusy(true);
-                  try{
-                    await api.repayLater(user.id,plUsed);
-                    await refreshPayLater();
-                    toast$("Pay Later cleared ✅ Limit restored!");
-                  }catch(err){ toast$(`Failed: ${err.message}`,"error"); }
-                  setPlBusy(false);
-                }} style={{marginTop:8,padding:"8px 16px",background:"#ca8a04",color:"#fff",borderRadius:10,fontWeight:700,fontSize:12,opacity:plBusy?0.6:1}}>
-                  {plBusy?"Processing…":`Repay Now — GH₵${plUsed.toFixed(2)}`}
-                </button>
+                <p role="status" style={{marginTop:8,fontWeight:700,fontSize:12,color:"#92400e"}}>
+                  Repayment temporarily unavailable
+                </p>
+                <p style={{marginTop:4,fontSize:12,color:dark?"#d6d3d1":"#78350f"}}>
+                  Pay Later repayment is not currently supported in the app because no verified collection or authorized reconciliation flow is connected. Your outstanding balance remains due and your Pay Later limit will not be restored until an approved repayment process is implemented.
+                </p>
               </div>
             </div>
           )}
           <div className={`${t.card} rounded-2xl p-4 border ${t.bdr}`}>
             <p className={`font-black text-sm mb-3 ${t.text}`}>📋 How Pay Later Works</p>
-            {[["✅","Book ride → choose Pay Later at checkout"],["✅","Ride now — payment deferred up to 7 days"],["✅","Auto-charged to your MoMo on due date"],["⚠️","Missed payment permanently removes access"]].map(([icon,text])=>(
+            {[["✅","Book ride → choose Pay Later at checkout"],["✅","Ride now — payment deferred up to 7 days"],["⚠️","Repayment is unavailable until verified payment or authorized reconciliation is connected"],["⚠️","Missed payment permanently removes access"]].map(([icon,text])=>(
               <p key={text} style={{fontSize:12,marginBottom:5,color:icon==="⚠️"?"#ef4444":dark?"#d1d5db":"#374151"}}>{icon} {text}</p>
             ))}
           </div>
