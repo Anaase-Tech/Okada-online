@@ -356,3 +356,20 @@ test('Journey multi-leg transaction reads trip, route, and booking state before 
   assert.equal(route.slice(firstWrite).includes('await tx.get('), false);
   assert.ok(route.slice(0, firstWrite).includes('const bookingSnaps = await Promise.all('));
 });
+
+test('Pay Later repayment route delegates to a fail-closed handler with no financial writes', () => {
+  const marker = index.indexOf("createPayLaterRepaymentHandler({ resolveUserRef, fail })");
+  const start = index.lastIndexOf("app.post(", marker);
+  const end = index.indexOf("// J. WALLET", marker);
+  assert.ok(marker >= 0 && start >= 0 && end > marker, 'Pay Later repayment route boundaries exist');
+  const route = index.slice(start, end);
+  const guard = read('backend/functions/modules/payLaterRepaymentGuard.js');
+  const ui = read('web-app/src/screens/FintechHub.jsx');
+  assert.match(route, /createPayLaterRepaymentHandler\(\{ resolveUserRef, fail \}\)/);
+  assert.doesNotMatch(route, /runTransaction|trx\.update|FieldValue\.increment|status:\s*['"]paid/);
+  assert.doesNotMatch(guard, /runTransaction|trx\.update|FieldValue\.increment|db\.collection/);
+  assert.match(guard, /Pay Later repayment is temporarily unavailable/);
+  assert.match(ui, /Repayment temporarily unavailable/);
+  assert.doesNotMatch(ui, /Pay Later cleared ✅ Limit restored/);
+  assert.doesNotMatch(ui, /Auto-charged to your MoMo on due date/);
+});

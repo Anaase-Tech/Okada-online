@@ -59,11 +59,10 @@ class Api {
   // The webhook remains authoritative for asynchronous charge.success events.
   verifyPayment(ref)                             { return this.req("GET", `/payments/verify/${ref}`); }
   payLaterRequest(rideId, userId, amount)        { return this.req("POST", "/fintech/pay-later/request", { userId, rideId, amount }); }
-  // FintechHub only ever has a lump "amount owed", not a specific
-  // transaction id, so this repays by userId+amount; the backend finds
-  // and settles the matching pending record(s) itself. Pass a specific
-  // payLaterTxId instead when you actually have one (e.g. from a fetched
-  // list of pending records).
+  // Temporary fail-closed contract: both supported request shapes
+  // (userId+amount or userId+payLaterTxId) are rejected with HTTP 409
+  // until the server can verify incoming funds or an approved audit trail.
+  // Callers must not clear debt or restore limit based on a client request.
   repayLater(userId, amountOrTxId)               {
     const isTxId = typeof amountOrTxId === "string";
     return this.req("POST", "/fintech/pay-later/repay",

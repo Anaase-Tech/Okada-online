@@ -33,6 +33,7 @@ const {
   settleRidePayment,
   markRidePaymentFailed,
 } = require('./modules/legacyPaymentService');
+const { createPayLaterRepaymentHandler } = require('./modules/payLaterRepaymentGuard');
 
 admin.initializeApp();
 const db   = admin.firestore();
@@ -2280,100 +2281,11 @@ app.get('/fintech/pay-later/history/:userId', requireAuth, async (req, res) => {
 //   { userId, amount }        — no specific record known (this is how
 //     FintechHub actually calls it, since it only tracks a lump total
 //     owed); settles oldest pending/overdue records up to that amount.
-app.post('/fintech/pay-later/repay', requireAuth, async (req, res) => {
-  try {
-    const { userId, payLaterTxId, amount } = req.body;
-    const u = await resolveUserRef(userId, req);
-    if (!u) return fail(res, 404, 'User not found');
-
-    if (payLaterTxId) {
-      const txRef = db.collection('pay_later').doc(sanitize(payLaterTxId));
-      const result = await db.runTransaction(async (trx) => {
-        const [txSnap, userSnap] = await Promise.all([trx.get(txRef), trx.get(u.ref)]);
-        if (!txSnap.exists) throw new Error('Record not found');
-        if (!userSnap.exists) throw new Error('User not found');
-
-        const record = txSnap.data();
-        if (record.userId !== u.ref.id) throw new Error('Pay Later record access denied');
-        if (String(record.status || '').toLowerCase() === 'paid') {
-          return { alreadyPaid: true, amount: 0 };
-        }
-
-        const outstanding = Number(record.amount);
-        if (!Number.isFinite(outstanding) || outstanding <= 0) throw new Error('Invalid Pay Later record');
-
-        const used = Number(userSnap.data()?.payLater?.used || 0);
-        if (!Number.isFinite(used) || used < outstanding) throw new Error('Pay Later balance is inconsistent');
-
-        trx.update(txRef, {
-          status: 'paid',
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        trx.update(u.ref, {
-          'payLater.used': admin.firestore.FieldValue.increment(-outstanding),
-          'payLater.suspended': false,
-        });
-        return { alreadyPaid: false, amount: outstanding };
-      });
-
-      if (result.alreadyPaid) return ok(res, { message: 'Already paid' });
-      return ok(res, { repaid: result.amount, status: 'paid' });
-    }
-
-    const repaymentAmount = Number(amount);
-    if (!Number.isFinite(repaymentAmount) || repaymentAmount <= 0) {
-      return fail(res, 400, 'A positive repayment amount is required');
-    }
-
-    const result = await db.runTransaction(async (trx) => {
-      const userSnap = await trx.get(u.ref);
-      if (!userSnap.exists) throw new Error('User not found');
-
-      const pending = await trx.get(
-        db.collection('pay_later')
-          .where('userId','==',u.ref.id)
-          .where('status','in',['deferred','overdue'])
-          .orderBy('createdAt','asc')
-      );
-
-      let remaining = repaymentAmount;
-      let totalRepaid = 0;
-
-      for (const doc of pending.docs) {
-        if (remaining <= 0) break;
-        const outstanding = Number(doc.data().amount);
-        if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
-        // Never settle more debt than the caller requested.
-        if (outstanding > remaining) continue;
-
-        trx.update(doc.ref, {
-          status: 'paid',
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        remaining -= outstanding;
-        totalRepaid += outstanding;
-      }
-
-      if (totalRepaid <= 0) throw new Error('No outstanding Pay Later balance matched the repayment amount');
-
-      const used = Number(userSnap.data()?.payLater?.used || 0);
-      if (!Number.isFinite(used) || used < totalRepaid) throw new Error('Pay Later balance is inconsistent');
-
-      trx.update(u.ref, {
-        'payLater.used': admin.firestore.FieldValue.increment(-totalRepaid),
-        'payLater.suspended': false,
-      });
-
-      return +totalRepaid.toFixed(2);
-    });
-
-    return ok(res, { repaid: result, status: 'paid' });
-  } catch (e) {
-    return fail(res, 400, e.message);
-  }
-});
+app.post(
+  '/fintech/pay-later/repay',
+  requireAuth,
+  createPayLaterRepaymentHandler({ resolveUserRef, fail })
+);
 
 // ════════════════════════════════════════════════════════════
 // J. WALLET

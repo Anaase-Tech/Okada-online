@@ -311,3 +311,13 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## Repair workflow — P0-B Pay Later repayment guard (2026-10-18)
+
+**Finding verified at base HEAD** `bb2a558c41f77ea71c6d08dcd6242719c62c04d7`: the `POST /fintech/pay-later/repay` handler supported two paths—`{ userId, payLaterTxId }` and `{ userId, amount }`. Both changed one or more `pay_later` records to `paid` and decremented `payLater.used` without verifying incoming funds or requiring an authorized reconciliation record. The only discovered UI caller (`web-app/src/screens/FintechHub.jsx`) sent the aggregate amount and then displayed “Pay Later cleared / Limit restored” on an HTTP success; it also claimed automatic MoMo charging despite no verified collection path in this endpoint. The API helper exposes both payload shapes. The native app contains no Pay Later repayment caller.
+
+**Batch 2 change:** both repayment payload shapes now delegate to a fail-closed guard. It validates the authenticated profile and preserves aggregate positive-amount validation, then returns HTTP 409; the guard is intentionally not given Firestore write/transaction access. No debt document or `payLater.used` update occurs and no success-shaped repayment response is returned. The web UI explicitly states repayment is temporarily unavailable, leaves the debt outstanding, does not offer a misleading success button, and removes the unsupported automatic-MoMo-charge claim. This visible restriction remains until the project owner approves and the team implements server-verifiable collection or an authorized, auditable reconciliation flow. No provider, cash-receipt policy, or reconciliation rule was invented.
+
+**Regression coverage:** focused unit tests exercise the aggregate and specific-record payload paths, asserting HTTP 409, no success/repaid fields, and no user-reference writes; malformed aggregate amount and missing-profile behavior are also covered. A source-contract regression asserts the registered route/guard do not perform transaction or financial writes and that the UI does not claim repayment success. These tests must be reported only after CI has actually run them. They do not prove live payment collection, and no emulator or real-money operation is implied.
+
+**Batch limits:** P0-A stays in separate draft PR #15, which remains open and unmerged; its owner-recorded CI run #117 passed and Vercel created a Ready Preview (not a Firebase/production deployment). P0-C and P0-D are unchanged in this batch. No merge or deployment is authorized.
