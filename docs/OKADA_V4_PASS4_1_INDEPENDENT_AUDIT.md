@@ -311,3 +311,30 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## Repair branch verification — 2026-10-18 (CI pending)
+
+### Starting point and working-tree limitation
+- Repair branch: repair/p0-financial-integrity-2026-10-18
+- Base ref: v4-mobility-os at bb2a558c41f77ea71c6d08dcd6242719c62c04d7 (remote branch commit observed through GitHub).
+- The GitHub connector exposes committed repository state but not a local checkout, so a local git status / uncommitted working-tree state could not be inspected. No local changes are inferred.
+- No Firebase deploy, production service call, or real-money transaction was performed.
+
+### P0 verification matrix (source inspected at base HEAD)
+| Finding | Source evidence at base HEAD | Initial validity verdict | Repair state |
+|---|---|---|---|
+| P0-A Savings deposits | backend/functions/index.js, POST /fintech/savings/deposit: caller-supplied positive amount was written as manual_deposit/completed and incremented savings balance without a funding reference | Valid | Changed to fail closed with HTTP 409 until verified funding or an authorized, auditable reconciliation workflow exists; no savings balance/ledger is changed by this endpoint |
+| P0-B Pay Later repayment | POST /fintech/pay-later/repay: request amount or record ID caused debt status to become paid and used credit limit to decrement without a verified receipt/payment record | Valid | Changed to fail closed with HTTP 409; no debt record or credit limit is changed by this endpoint. An actual verified repayment collection workflow remains required |
+| P0-C Event deposit | POST /maas/events/book: depositPercent was not range-checked and service write/wallet movements were separate operations | Valid | Added percentage validation (fractional ratio contract, e.g. 0.30 = 30%) and a single Firestore transaction for authoritative wallet reads, event record creation, available debit and pending credit |
+| P0-D Native Expo app | mobile-app/App.js imports web lucide-react, uses DOM/Tailwind elements, simulated authentication/location/fare/earnings; package declares lucide-react-native and Node entry points at index.js | Valid | Not repaired in this batch. A genuine native port is larger than a dependency tweak; prototype remains unsupported for production until native architecture and real backend/device integration are implemented and a build succeeds |
+
+### Regression tests added (not yet executed here)
+- backend/functions/modules/financialIntegrity.test.js: event deposit percentage range/default tests.
+- productionSecurityAudit.test.js: source-contract tests for fail-closed savings/Pay Later routes and event transaction atomicity.
+- The GitHub connector cannot run a local shell/test process. Workflow results must be checked before marking tests passed.
+
+### Remaining risks after this batch
+- Existing historical savings transactions and Pay Later records are not migrated or retroactively reclassified; doing so may alter financial records and requires a separate reconciliation review.
+- Manual savings funding and Pay Later repayment are intentionally unavailable until a verified provider or authorized/auditable reconciliation path is specified.
+- Event booking retries are not yet assigned an idempotency contract.
+- P0-D and P1/P2 findings remain open pending further repair batches.
