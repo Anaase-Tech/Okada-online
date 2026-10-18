@@ -311,3 +311,9 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## P0-C/P0-D independent review update — 2026-10-18
+
+PR #17's live head is af9bc8f9625398ac5a66c5262e987d711d6b49ca (not the previously reported 654f64d021e643803c1224ed877915b2212b5c06); base is v4-mobility-os at bb2a558c41f77ea71c6d08dcd6242719c62c04d7. The independent scoped review found the current P0-C event-deposit guard correct and its latest-head Actions run #134 passed all three configured jobs. Formal approval could not be recorded because GitHub rejects approval by the PR author; a scoped review comment was posted. See docs/OKADA_V4_P0_D_NATIVE_APP_REPAIR.md for the review details, test counts, residual idempotency risk, and P0-D audit.
+
+P0-D was re-audited at the base. The Expo 54/React Native version mismatch, web-only imports/elements, demo authentication, fabricated ride/payment/GPS/earnings states, missing native app identifiers/config, and absence of mobile CI remain. Native implementation is blocked pending the owner's supported target and native Firebase Phone Auth app configuration. No native source repair or production deployment is claimed.

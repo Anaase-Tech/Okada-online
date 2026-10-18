@@ -750,3 +750,9 @@ The browser PWA driver path uses actual geolocation.watchPosition and writes coo
 **Gate 6 — Release evidence:** Add rules/auth emulator tests, MaaS wallet race tests, shared-seat concurrency tests, unauthorized delivery/rental mutation tests, duplicate/late payment settlement tests, Paystack sandbox/webhook replay tests, and authenticated browser/native smoke tests. Record exactly what ran, then require review and passing statuses on a protected branch.
 
 No code changes, production deployment, live Firebase operation, or real-money transaction was performed as part of this report update. Claude's Slack membership is not verified: the most recent channel member check showed only @africanaihq, and a workspace user search did not identify a Claude member.
+
+## P0-C/P0-D independent review update — 2026-10-18
+
+P0-C PR #17 was independently reviewed at live head af9bc8f9625398ac5a66c5262e987d711d6b49ca; its scoped financial-integrity change passes code review and run #134 passed all configured jobs. GitHub did not permit a formal approval because the reviewer is the PR author; a scoped review comment was posted. The branch remains separate and unmerged. Repeated event-booking requests remain non-idempotent, as documented for separate product/API decision.
+
+P0-D source audit confirms the native prototype remains a release blocker. The current Expo 54 app pins React Native 0.75 instead of SDK 54's target 0.81, imports web-only UI and undeclared lucide-react, uses HTML/Tailwind markup, falls through to demo auth and fake operations, and has no native app IDs/configuration or mobile CI. Implementation is blocked pending owner selection of supported platform(s), Firebase native Phone Auth registration/config, and the intended driver-discovery contract. See docs/OKADA_V4_P0_D_NATIVE_APP_REPAIR.md for evidence and check results. No native repair or production deployment is claimed.
