@@ -25,6 +25,7 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const crypto    = require('crypto');
+const { createDeliveryTrackingCode, toPublicDeliveryTrackingDto } = require('./modules/deliveryPrivacy');
 const { parseEventDepositPercent } = require('./modules/financialIntegrity');
 const {
   settleSuccessfulJourneyPayment,
@@ -3244,7 +3245,7 @@ app.post('/delivery/request', requireAuth, async (req,res) => {
     else if(weight>5)  fare += pricing.weightSurcharge.over5kg;
     if(urgent) fare = fare*1.5;
     fare = +fare.toFixed(2);
-    const trackingCode = 'DLV-'+Date.now().toString(36).toUpperCase();
+    const trackingCode = createDeliveryTrackingCode();
     const ref = await db.collection('deliveries').add({
       senderId:senderProfile.ref.id, pickupAddress:sanitize(pickupAddress),
       deliveryAddress:sanitize(deliveryAddress), vehicleType:sanitize(vehicleType),
@@ -3318,7 +3319,7 @@ app.get('/delivery/track/:code', async (req,res) => {
     const snap = await db.collection('deliveries')
       .where('trackingCode','==',sanitize(req.params.code)).limit(1).get();
     if(snap.empty) return fail(res,404,'Tracking code not found');
-    return ok(res, { delivery:{id:snap.docs[0].id,...snap.docs[0].data()} });
+    return ok(res, { delivery:toPublicDeliveryTrackingDto(snap.docs[0].data()) });
   } catch(e) { return fail(res,500,e.message); }
 });
 

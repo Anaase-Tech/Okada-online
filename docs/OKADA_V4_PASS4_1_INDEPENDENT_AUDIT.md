@@ -362,3 +362,18 @@ The source at base commit 239c2700bbfa8a582ef7abbd47b5b9b81dd658d9 confirms `POS
 
 ### Regression coverage and limits
 A source-contract regression check asserts authorization is ordered before any rental/wallet mutation and invalid deltas are rejected. No live Firestore test or production operation was performed. CI is pending for this stacked review branch.
+
+
+## Repair batch — delivery tracking privacy (2026-10-18; CI pending)
+
+### Finding and source verification
+At the base source, `POST /delivery/request` generated `DLV-` plus a base-36 timestamp, making tracking references guessable, and public `GET /delivery/track/:code` returned the entire delivery document including sender/recipient data, driver ID, proof and fare/payment metadata. The finding remains valid at the audited base.
+
+### Change
+- Tracking codes now use a 128-bit cryptographically random reference.
+- Public tracking now returns an explicit allowlist DTO with the tracking code, status, pickup/delivery labels, vehicle type and pickup/delivery timestamps; internal IDs, sender/recipient identifiers/contact fields, proof, fares, package metadata and payment fields are excluded.
+- Added unit tests for the code format and DTO allowlist, plus route-contract regression checks.
+- The existing UI-required pickup/delivery strings remain present. The tracking code is a bearer capability; do not share it in public logs/posts.
+
+### Limits
+No authenticated end-to-end test or live delivery record was used. Delivery status-transition authorization remains a separate repair batch.
