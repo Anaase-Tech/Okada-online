@@ -313,3 +313,9 @@ No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-a
 7. Protect v4-mobility-os with required reviews/status checks before risky changes.
 
 No Firebase production deployment was performed.
+
+## P0-C event deposit follow-up — 2026-10-18
+
+PR #17's atomic event-deposit repair received an additional data-shape hardening commit `5851e58e499504253c4e4600b60b45d239c50b0b`. Firestore's increment transform overwrites a present non-numeric field with its operand; therefore, numeric-string balance coercion was unsafe even inside an otherwise atomic transaction. The booking handler now rejects present `wallet.available` or `wallet.pending` values that are non-numeric, non-finite, or negative with HTTP 409 before all writes.
+
+Verified by GitHub Actions run #130 ([39118164527](https://github.com/Anaase-Tech/Okada-online/actions/runs/39118164527)): backend **112 total / 105 passed / 0 failed / 7 skipped**, Firestore Emulator **7/7 passed**, and web production build compiled. The new emulator case proves malformed available and pending values remain unchanged and no event is created. This test job uses test authentication; it does not exercise deployed ID-token middleware, live settlement, or production Firebase. PR #17 remains a draft, unmerged, and undeployed. P0-D remains separate.

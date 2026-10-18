@@ -54,3 +54,17 @@ The existing `POST /maas/events/book` path used caller-controlled `depositPercen
 - Emulator coverage tests the production handler factory with test authentication and the Firestore Emulator; it does not validate deployed Cloud Function routing, Firebase ID-token verification, or live financial settlement.
 - The scope does not add a durable financial ledger, request idempotency key, or end-to-end payment collection. Broader MaaS audit findings remain separate. P0-D is untouched.
 - Do not merge or deploy this draft until independent review and the release gate are satisfied.
+
+
+## Independent-review follow-up — stored wallet type integrity (2026-10-18)
+
+A follow-up review identified an edge case inside the new atomic booking: Cloud Firestore `FieldValue.increment()` sets an existing non-numeric field to the increment operand instead of performing arithmetic ([Firebase reference](https://firebase.google.com/docs/reference/node/firebase.firestore.FieldValue)). Coercing a stored value such as `wallet.available: "100"` to a number for the balance check could therefore pass validation and then overwrite the string field with a negative debit. A malformed `wallet.pending` value could similarly be overwritten.
+
+Commit `5851e58e499504253c4e4600b60b45d239c50b0b` now checks the fresh transactional `wallet.available` and `wallet.pending` values without coercion. Present values must be finite, non-negative JavaScript numbers; malformed values fail with HTTP 409 before the event or wallet is written. Missing/null `available` retains its zero-balance behavior, and missing/null `pending` is treated as absent. Regression tests cover numeric-string available/pending fields.
+
+GitHub Actions run #130 ([run ID 39118164527](https://github.com/Anaase-Tech/Okada-online/actions/runs/39118164527)) passed all three jobs on commit `5851e58e499504253c4e4600b60b45d239c50b0b`:
+- Backend `npm test`: **112 total, 105 passed, 0 failed, 7 skipped** (the emulator-only tests skip in the ordinary test job).
+- Firestore Emulator concurrency suite: **7 passed, 0 failed, 0 skipped**, including the new malformed-wallet-types test, which verifies both stored values and event collection remain unchanged.
+- Web production build: **compiled successfully**.
+
+The emulator suite exercises the handler factory with test authentication; it does not validate deployed Cloud Function routing, live payment collection, a durable ledger, or real-money settlement. PR #17 remains open/draft/unmerged. No Firebase production deployment or real-money operation occurred.
