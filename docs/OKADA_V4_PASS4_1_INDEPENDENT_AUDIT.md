@@ -229,3 +229,85 @@ Source inspection confirms the map uses browser GPS, Firestore listeners, Google
 The latest frontend dependency install log reported 106 vulnerabilities (5 low, 23 moderate, 74 high, 4 critical); triage production dependency paths rather than blindly forcing upgrades. The main branch still declares web-app Node 20.x while v4-mobility-os uses Node 24.x. Backup packaging, broad signed-in reads of rides/drivers, duplicate /transit/journeys/plan route definitions, payment-channel selection contract, and bounded latest-25 driver dispatch query remain open.
 
 Slack #okada-v4-team was checked by the actual member list and had only @africanaihq; Claude/Anthropic membership is not verified. An hourly condition watch was configured to notify only when a Claude integration appears in the actual member list. No Firebase production deployment was performed.
+
+
+## Independent cross-layer source audit addendum — 2026-10-18
+
+### Snapshot and verification evidence
+
+- Repository/branch: Anaase-Tech/Okada-online, v4-mobility-os.
+- Current HEAD observed before this documentation update: bd28f679c9fd526019a5290d0a277eae4c0d4c81. The preceding application-source commit is a3841461ed8925198b94637193685749cc937f6d; the audited HEAD adds documentation over that application snapshot.
+- Latest successful GitHub Actions run for that HEAD: run 39079118420, https://github.com/Anaase-Tech/Okada-online/actions/runs/39079118420. All three configured jobs concluded success.
+- Backend test job: 86 tests, 82 passed, 0 failed, 4 skipped, Node 22.23.3. The package/structure checks passed.
+- Firestore Emulator job: 4 passed, 0 failed, 0 skipped on Firestore Emulator 1.22.0. Coverage is Trotro contention, standalone Transit contention, two-leg Journey contention, and inactive-route rejection.
+- Frontend job: web-app production build compiled successfully under Node 24; the output was approximately 234.39 kB JavaScript and 2.93 kB CSS.
+- Dependency audit warnings from the install logs: backend functions dependency tree reported 62 findings (3 low, 16 moderate, 40 high, 3 critical); web-app reported 106 (5 low, 23 moderate, 74 high, 4 critical). These totals require dependency-path triage; they are not, by themselves, proof that every finding is exploitable in production.
+- The workflow does not build the Expo mobile-app, run browser end-to-end tests, or exercise the real Paystack sandbox/live provider. No Firebase production deployment, production database test, production GPS test, or real-money payment test was performed.
+
+### Confirmed source findings — highest priority
+
+1. **P0 — Savings deposits can create account value without funding.** In backend/functions/index.js, POST /fintech/savings/deposit writes a savings_transactions entry with status completed and increments the caller's savings.balance and savings.totalDeposited. The path does not debit a wallet, verify an external payment, or require an admin/agent reconciliation. The profile-ownership helper restricts whose profile is credited, but it does not establish that money was received. This can falsify balances, saving history, and any decisions based on deposited amounts. Require verified funding or keep deposits pending until reconciled; do not treat a client-call as proof of cash received.
+
+2. **P0 — Pay Later repayment settles the receivable without collecting money.** POST /fintech/pay-later/repay transactionally marks a chosen or matching deferred record as paid and decrements payLater.used, but the inspected path does not debit a wallet, create/verify a payment, or check external settlement. An authenticated borrower can therefore remove debt from the ledger without paying. Keep debt open until a verified payment or an authorized, audited manual reconciliation settles it.
+
+3. **P0 — Negative event deposit can credit the caller's wallet.** POST /maas/events/book computes the deposit from caller-supplied depositPercent without enforcing a positive percentage or a maximum. The wallet check compares the available balance to that value; the subsequent wallet mutation increments available by the negative of the deposit. A negative percentage therefore passes the balance check and increases wallet.available while creating an event record. Validate the percentage server-side (and ideally accept a fixed enumerated plan) before any write, and execute the event/wallet ledger mutation atomically.
+
+4. **P1 — Rental kilometre logging writes before checking access.** POST /maas/rental/:id/log-km reads a rental, calculates kmUsed/extraKmCharges, and calls ref.update before resolving/authorizing the rental owner. For a known rental ID, a different authenticated user can cause the rental data to be mutated and only then receive a 403. It also lacks robust finite/non-negative kilometre validation and a single transaction across kilometre state and fee debit. Authorize before mutation, validate input, and transactionally compute/update both the rental and its ledger effect.
+
+5. **P1 — Delivery tracking can disclose personal information.** GET /delivery/track/:code is unauthenticated and returns the complete delivery document, which contains recipient name/phone, route addresses, sender and driver identifiers, fare, and operational fields. The tracking code is created from Date.now converted to base 36 rather than an unpredictable secret, making enumeration more practical. Return a minimal tracking DTO only, use a cryptographically unpredictable code, rate-limit attempts, and avoid disclosing personal data before authenticated/authorized access.
+
+6. **P1 — Delivery state transitions are not enforced.** PUT /delivery/:id/status authorizes the sender for updates but does not enforce a transition matrix. As written, a sender can submit a status such as delivered without a verified driver hand-off or proof workflow. Restrict each actor to permitted transitions, require an assigned-driver/admin action for operational transitions, validate proof references, and write the transition plus timestamps/notifications atomically.
+
+7. **P1 — Several money-backed MaaS flows have non-atomic balance checks and writes.** Subscription creation, rental booking, and event booking read a wallet balance, create the service document, then mutate wallet values separately. Concurrent requests may both pass the same balance check; partial failure may leave a service record without its corresponding debit or a debit without a consistent service record. Use a Firestore transaction and an immutable financial ledger/idempotency key for each logical purchase.
+
+8. **P1 — Shared-ride seats can be oversubscribed under concurrent joins.** POST /maas/share/:shareId/join performs read/check/update of passengers and status outside a transaction. Simultaneous joiners can both observe free capacity and both write their arrays. Move capacity validation and passenger addition into one transaction against the shared trip document; add concurrent emulator tests.
+
+9. **P1 — Account phone is not bound to the authenticated Firebase phone claim.** POST /auth/create-profile accepts the request-body phone value and stores it in the profile; the active auth middleware verifies the ID token and records UID, but the inspected path does not compare the body phone against the phone_number claim in the decoded token. This enables a user authenticated with one Firebase identity to put a different phone into their profile/contact data. Derive it from the verified token or explicitly compare it, with a carefully controlled change-phone verification flow.
+
+10. **P1 — Delivery, insurance, loans, and wallet-facing services are not yet verified as real-money products.** Delivery request stores a fare and requested payMethod but does not collect/debit the fare in that path. Insurance purchase immediately creates an active policy with provider label “Hollard Ghana” without an observed premium debit or insurer API/certificate exchange; claim evidence is reduced to a boolean rather than persisted evidence/reference. Loan requests of up to GH₵500 become active, but the inspected handler does not disburse funds. These are operational/product blockers unless explicitly labelled as prototypes and backed by a real audited settlement/partner workflow.
+
+11. **P1 — The USSD callback reports a booking that it does not create.** POST /ussd/callback is public; the booking branch returns “Okada booked!” with a Math.random fare, but the inspected handler does not write a ride or dispatch record. No callback signature/authentication is visible. Authenticate the gateway and make booking a durable idempotent operation, or return a clearly non-production/not-supported response.
+
+### Frontend / mobile production-contract findings
+
+12. **P1 — User-visible demo fallbacks can claim that failed operations succeeded.** Verified examples in active web-app source:
+   - ShareRide.jsx displays hardcoded sample trips on an empty/error snapshot; a failed create can insert a local demo trip, and a failed join still displays “Joined”.
+   - DeliveryApp.jsx tells the user a delivery was booked with a random tracking code after API failure; tracking failure fabricates an in-transit delivery from Akosombo to Kpong with recipient “Test”.
+   - ScheduledTrips.jsx substitutes sample schedules on fetch failure, reports “Schedule saved (demo mode)” after create failure, and toggles pause/resume locally even if the API call fails.
+   - RentalHub.jsx reports a rental booked in demo mode after the server call fails.
+   - DriverPickups.jsx renders hardcoded assignments on empty/error API results.
+   - AdminApp.jsx begins with hardcoded ride/driver/revenue counts and catches stats failure without clearing or labelling those numbers. DriveToOwn.jsx can activate a demo and locally simulate payment/ownership progress after API failure.
+   These behaviours conflict with the project's no-invented-live-data rule. Production mode should show an empty, unavailable, or retry state; demo data must be isolated behind an explicit development/demo flag and labelled on-screen.
+
+13. **P0 release blocker for native app — Expo source/package mismatch plus simulation.** mobile-app/package.json defines an Expo/React Native app but declares lucide-react-native, while mobile-app/App.js imports lucide-react (not declared in that package) and uses DOM elements and web Tailwind/className styling instead of React Native components. No Expo build runs in CI, so the native build result is not verified; the dependency/component mismatch is a likely build/runtime blocker. The same App.js uses random fare/distance/ETA, fabricates an incoming rider, broadcasts random Accra-area coordinates rather than device GPS, and lets acceptance/completion update local state/earnings after swallowing backend errors. Its AuthScreen uses /auth/send-otp and /auth/verify-otp and explicitly falls through to a demo user on failures; those routes were not found in the active Express backend route inventory. Do not distribute this as a production native client until it is rebuilt/verified against Firebase Phone Auth and real device GPS/API responses.
+
+14. **P1 — The PWA fare model and road route can diverge.** /rides/request calculates distance with Haversine between submitted coordinates, and estimatedDuration as distance × 3. The map overlay uses Google DirectionsService road routing. The server fare is therefore based on straight-line distance, not the road route the user sees; rural/river/indirect routes in Eastern Region may diverge materially. Confirm the product fare rule, then use an authoritative road-distance provider server-side or label the fare/duration as a straight-line estimate. Do not trust a browser-calculated fare for settlement.
+
+15. **P1 — Driver dispatch can miss valid nearby rides at scale.** DriverApp.jsx watches only the newest 25 requested rides for the driver's vehicle type, then filters those 25 by local 5 km distance. Older, still-requested nearby rides disappear from the candidate set when more than 25 newer requests exist, even when those newer requests are far away. Replace this with server-side spatial dispatch/fan-out or a query design that does not discard candidates before proximity filtering.
+
+16. **P1 — A duplicate transit planning endpoint is mounted twice.** POST /transit/journeys/plan exists in both transitRoutes.js and transitHubRoutes.js, and v4Entry.js mounts transitRoutes before transitHubRoutes under the same /transit prefix. The first matching handler can shadow the second, leaving ambiguous response shape/logic. Select one canonical contract and test the returned payload used by JourneyApp.
+
+17. **P1 privacy — Firestore permits broad signed-in reads of driver, ride, and shared-trip records.** backend/firestore.rules allows any signed-in client to read each driver document, ride document, and shared trip. These documents include driver GPS/profile/contact data and passenger phone/address/coordinate fields. The rule comments explain this was chosen to support realtime listeners, but it exposes more than the client needs. Move dispatch and tracking reads through scoped server queries or use ownership/role-aware rules with suitable query predicates; do not simply tighten rules without adapting listeners and testing their contracts.
+
+### Strengths verified in source, and scope limits
+
+- The PWA driver GPS path uses navigator.geolocation.watchPosition and sends actual device coordinates; passenger ride/driver views use Firestore snapshots. Map.jsx uses Google Maps markers and DirectionsService for a road-route overlay. This is not turn-by-turn/voice navigation, and a live production API key/billing/referrer configuration was not tested.
+- Ride-request creation has a requestId/fingerprint transaction for idempotent clients; driver acceptance validates ride state, authenticated driver identity, verified/online status, vehicle type, recent GPS timestamp and 5 km proximity in a transaction. Start, cancellation, and completion include server-side state/identity checks.
+- Paystack initialization reserves a persisted attempt before provider contact; the ride payment settlement helper checks provider amount/currency, applies settlement transactionally, and routes late-success conflicts after cancellation/cash/Pay Later into refund review. The webhook checks the Paystack HMAC signature. These are useful controls; they do not offset the unverified money-movement paths above.
+- The PWA location picker currently submits configured coordinates for named preset locations, not a fresh passenger device position or manually pinned doorstep point. Clarify this in the user experience or provide precise pickup-pin/current-location capture.
+
+### Not tested / remaining gates
+
+No live Paystack sandbox/webhook replay, authenticated browser E2E, real-phone-auth flow, mobile Expo build, rules emulator abuse tests, ride-accept concurrency test, ride-completion/paystack race stress test, unknown-payment network-drop test, delivery state-machine test, MaaS wallet race test, privacy enumeration test, device background/resume GPS test, or production Google Maps check ran in this audit. The latest CI green status means only that its configured backend tests, four booking-emulator tests, structural checks, and web-app build passed. It does not mean production is safe.
+
+### Recommended repair order (no code changes or deployment made by this audit addendum)
+
+1. Block the three direct financial-integrity issues above (unfunded savings credits, uncollected Pay Later repayment, negative event-deposit wallet credit), with regression tests proving balances cannot be created/cleared without verified settlement.
+2. Repair authorization-before-write for rental kilometre logging, enforce delivery transitions, protect tracking personal data, and validate/authorize every financial and logistics state change.
+3. Remove false-success demo fallbacks from production-mode web screens; put demo data behind a deliberate development-only switch.
+4. Decide whether mobile-app is supported production scope. If yes, implement real React Native components, Firebase Phone Auth, device GPS and API integration, then add a native build job; if no, prominently retire/label the prototype rather than representing it as a live app.
+5. Fix duplicated journey-plan routing, fare/distance truth, and dispatch candidate truncation; design least-privilege Firestore reads without breaking realtime flows.
+6. Add transaction/race tests and Paystack contract/sandbox tests; triage the 168 combined npm install audit findings by production dependency path, not a blind force-upgrade.
+7. Protect v4-mobility-os with required reviews/status checks before risky changes.
+
+No Firebase production deployment was performed.
