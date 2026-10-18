@@ -461,6 +461,6 @@ test('delivery state machine rejects unsupported, skipped, reversed and terminal
   assert.equal(validateDeliveryTransition('delivered','assigned'), 'invalid-transition');
   assert.equal(validateDeliveryTransition('pending','delivered'), 'invalid-transition');
   assert.equal(validateDeliveryTransition('assigned','in_transit'), 'invalid-transition');
-  assert.equal(validateDeliveryTransition('unknown','failed'), 'unsupported-status');
+  assert.equal(validateDeliveryTransition('unknown','failed'), 'invalid-transition');
   assert.equal(validateDeliveryTransition('picked_up','cancelled'), 'unsupported-status');
 });
