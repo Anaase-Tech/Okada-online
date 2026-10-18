@@ -576,6 +576,6 @@ test('mobile app readiness audit guards known Expo-native incompatibilities from
   assert.match(source, /from "lucide-react"/);
   assert.ok(mobilePackage.dependencies["lucide-react-native"], 'native icon dependency declared');
   assert.equal(mobilePackage.dependencies["lucide-react"], undefined, 'web icon package absent');
-  assert.match(source, /<div\\b/);
+  assert.match(source, /<div\b/);
   assert.match(source, /className=/);
 });
