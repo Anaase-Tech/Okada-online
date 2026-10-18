@@ -384,7 +384,7 @@ test('P0-C: event deposit percentage parser rejects invalid ratios', () => {
   assert.equal(parseEventDepositPercent(null), 0.30);
   assert.equal(parseEventDepositPercent(0.30), 0.30);
   assert.equal(parseEventDepositPercent('0.75'), 0.75);
-  for (const value of [-0.01, 0, 1.01, NaN, Infinity, -Infinity, '', 'not-a-number']) {
+  for (const value of [-0.01, 0, 1.01, NaN, Infinity, -Infinity, '', ' ', 'not-a-number', true, false, [], {}]) {
     assert.equal(parseEventDepositPercent(value), null, String(value));
   }
 });
