@@ -128,3 +128,50 @@ jobs:
         env:
           CI: "false"
         run: npm run build
+
+
+  mobile-expo-android-build:
+    name: Expo Android build diagnostic (P0-D)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install mobile app dependencies (project currently has no lockfile)
+        working-directory: mobile-app
+        run: npm install --legacy-peer-deps
+      - name: Check Expo compatibility, bundle Android, prebuild and compile debug APK
+        working-directory: mobile-app
+        shell: bash
+        run: |
+          set +e
+          npx expo install --check
+          compatibility_status=$?
+          npx expo export --platform android
+          export_status=$?
+          npx expo prebuild --platform android --no-install
+          prebuild_status=$?
+          native_status=125
+          if [ "$prebuild_status" -eq 0 ] && [ -f android/gradlew ]; then
+            chmod +x android/gradlew
+            (cd android && ./gradlew assembleDebug)
+            native_status=$?
+          else
+            echo "Android Gradle compilation could not run because Expo prebuild did not produce android/gradlew."
+          fi
+          echo "EXPO_COMPATIBILITY_STATUS=$compatibility_status"
+          echo "ANDROID_BUNDLE_STATUS=$export_status"
+          echo "EXPO_PREBUILD_STATUS=$prebuild_status"
+          echo "ANDROID_DEBUG_BUILD_STATUS=$native_status"
+          if [ "$compatibility_status" -ne 0 ] || [ "$export_status" -ne 0 ] || [ "$prebuild_status" -ne 0 ] || [ "$native_status" -ne 0 ]; then
+            exit 1
+          fi

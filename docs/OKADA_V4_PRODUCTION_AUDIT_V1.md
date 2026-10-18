@@ -897,3 +897,19 @@ The audited source contained UI fallbacks that presented local examples as live 
 
 ### Limits
 This batch changes UI failure behavior, not authentication or backend booking policy. Displayed estimates in RentalHub/DeliveryApp are not reconciled to server pricing in this batch; that remains the separate fare/distance-consistency finding. CI must pass before owner review.
+
+
+## P0-D native application gate — 2026-10-18 (native build diagnostic pending)
+
+### Source-level findings
+- `mobile-app/package.json` declares Expo SDK 54, React Native 0.75.0 and React 19.0.0. Expo's official SDK 54 compatibility table specifies React Native 0.81 and React 19.1.0; the dependency tuple is incompatible and must not be blindly upgraded without an actual migration/build check.
+- `mobile-app/App.js` is approximately 955 lines and uses hundreds of browser DOM elements (`div`, `button`, `input`, etc.) with web Tailwind `className` values, but imports no `react-native` components. It imports web `lucide-react` although only `lucide-react-native` is declared.
+- The mobile directory has no package lock and no checked-in `android/` or `ios/` native project, so dependency resolution is not reproducible and no known native build artifact is available.
+- Its API client calls `/auth/send-otp` and `/auth/verify-otp`; those handlers are absent from the current backend route table. Previously a failed call displayed a demo OTP prompt and logged the user in with a fabricated `demo_token`. The app also contains other simulated production behavior (random route distance, a fake driver match, random GPS points, mocked ride history/incoming driver requests and hardcoded admin figures).
+
+### Immediate safe change
+- The mobile OTP flow now fails closed when the API call fails or the returned session is incomplete. It no longer advances to OTP after a failed send, fabricates a demo user/token, or displays an invitation to use arbitrary digits.
+- Added source-contract tests and a CI diagnostic that attempts Expo compatibility check, Android JS bundle export, Expo prebuild and Gradle debug compilation. This diagnostic does not deploy or call Firebase/Paystack.
+
+### Release decision
+**P0-D remains open; mobile app is not production-ready.** The safe, complete repair requires a native React Native UI migration, a valid Firebase Phone Auth client integration against the existing authentication contract, real location and dispatch integration, and removal/replacement of remaining synthetic rides/fare/history/admin behavior while preserving all screens and workflows. Doing that as a partial component/import swap would violate the no-broad-rewrite and no-silent-functionality-removal rules. Stop the mobile work here pending owner approval of a dedicated migration scope and the permitted Firebase Android app configuration. Official Expo SDK 54 compatibility reference: https://docs.expo.dev/versions/v54.0.0/.
